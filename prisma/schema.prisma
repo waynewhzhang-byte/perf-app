@@ -1,0 +1,314 @@
+// 企业员工绩效申报系统 - 数据模型
+// Prisma + PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========== 通知渠道（系统级单例配置） ==========
+enum NotifyChannel {
+  SMS        // 阿里云短信
+  EMAIL      // SMTP 邮件
+}
+
+model NotifyConfig {
+  id            Int           @id @default(1)            // 单例：永远 id=1
+  channel       NotifyChannel
+  // 加密后的 JSON（AES-256-GCM）。
+  // SMS: { accessKeyId, accessKeySecret, signName, templateCode }
+  // EMAIL: { host, port, secure, user, pass, from }
+  configCipher  String        @db.Text
+  updatedAt     DateTime      @updatedAt
+  updatedBy     String?
+}
+
+// ========== 认证策略（系统级单例） ==========
+model AuthConfig {
+  id                           Int      @id @default(1)
+  registerRequiresVerification Boolean  @default(true)   // 注册是否需短信/邮件验证码
+  loginRequiresVerification    Boolean  @default(false)  // 登录是否需二次验证码（关闭则仅密码）
+  resetRequiresVerification    Boolean  @default(true)   // 找回密码是否需验证码
+  enforceStrongPassword        Boolean  @default(true)   // 启用强密码（8位+大小写+特殊符号）
+  updatedAt                    DateTime @updatedAt
+  updatedBy                    String?
+}
+
+// ========== 验证码 ==========
+enum CodePurpose {
+  REGISTER
+  RESET_PASSWORD
+  LOGIN
+}
+
+model VerifyCode {
+  id        String       @id @default(cuid())
+  target    String                                  // 手机号或邮箱
+  code      String
+  purpose   CodePurpose
+  consumed  Boolean      @default(false)
+  expiresAt DateTime
+  createdAt DateTime     @default(now())
+
+  @@index([target, purpose, createdAt])
+}
+
+// ========== 用户与角色 ==========
+model User {
+  id              String   @id @default(cuid())
+  contact         String   @unique                  // 手机号或邮箱（取决于系统主联系方式）
+  passwordHash    String
+  fullName        String
+  employeeNo      String?  @unique
+  branchId        String?
+  departmentId    String?
+  positionId      String?
+  jobTypeId       String?
+  employeeLevelId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch         Branch?         @relation(fields: [branchId], references: [id])
+  department     Department?     @relation(fields: [departmentId], references: [id])
+  position       Position?       @relation(fields: [positionId], references: [id])
+  jobType        JobType?        @relation(fields: [jobTypeId], references: [id])
+  employeeLevel  EmployeeLevel?  @relation(fields: [employeeLevelId], references: [id])
+
+  roles       UserRole[]
+  submissions Submission[]
+  records     PerformanceRecord[]
+}
+
+enum AppRole {
+  EMPLOYEE
+  REVIEWER_L1   // 分公司一级审核员
+  REVIEWER_L2   // 总公司二级审核员
+  ADMIN
+}
+
+model UserRole {
+  id            String   @id @default(cuid())
+  userId        String
+  role          AppRole
+  scopeBranchId String?                              // 仅 REVIEWER_L1 使用，限定分公司
+  createdAt     DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch? @relation(fields: [scopeBranchId], references: [id])
+
+  @@unique([userId, role, scopeBranchId])
+  @@index([userId])
+}
+
+// ========== 组织架构 ==========
+model Branch {
+  id          String       @id @default(cuid())
+  name        String
+  code        String?      @unique
+  createdAt   DateTime     @default(now())
+
+  departments Department[]
+  users       User[]
+  reviewers   UserRole[]
+  submissions Submission[]
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  branchId  String
+  name      String
+  createdAt DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  users  User[]
+}
+
+model Position {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  users     User[]
+}
+
+model JobType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  users     User[]
+}
+
+model EmployeeLevel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  users     User[]
+}
+
+// ========== 表单模板 ==========
+enum TemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model FormTemplate {
+  id          String         @id @default(cuid())
+  year        Int
+  title       String
+  description String?
+  status      TemplateStatus @default(DRAFT)
+  publishedAt DateTime?
+  createdBy   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  sections    FormSection[]
+  submissions Submission[]
+}
+
+model FormSection {
+  id         String       @id @default(cuid())
+  templateId String
+  title      String
+  description String?
+  sortOrder  Int          @default(0)
+
+  template FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items    FormItem[]
+}
+
+model FormItem {
+  id                String   @id @default(cuid())
+  sectionId         String
+  title             String
+  hint              String?
+  isRequired        Boolean  @default(false)
+  requireAttachment Boolean  @default(false)
+  maxSelections     Int      @default(1)
+  // [{ label: "省级刊物发表", score: 5 }, ...]
+  scoreOptions      Json     @default("[]")
+  sortOrder         Int      @default(0)
+
+  section          FormSection       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  submissionItems  SubmissionItem[]
+}
+
+// ========== 申报 ==========
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  L1_APPROVED
+  L2_APPROVED         // 终审通过 → 生成 PerformanceRecord
+  REJECTED            // 任一级别有项被驳回，退回员工
+}
+
+enum ItemStatus {
+  DRAFT
+  PENDING_L1
+  L1_APPROVED
+  PENDING_L2
+  L2_APPROVED
+  REJECTED
+}
+
+enum ReviewAction {
+  APPROVE
+  REJECT
+}
+
+model Submission {
+  id          String           @id @default(cuid())
+  userId      String
+  templateId  String
+  branchId    String?
+  status      SubmissionStatus @default(DRAFT)
+  totalScore  Decimal          @default(0) @db.Decimal(10, 2)
+  submittedAt DateTime?
+  l1ReviewerId String?
+  l1ReviewedAt DateTime?
+  l2ReviewerId String?
+  l2ReviewedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template FormTemplate     @relation(fields: [templateId], references: [id])
+  branch   Branch?          @relation(fields: [branchId], references: [id])
+  items    SubmissionItem[]
+  logs     ReviewLog[]
+
+  @@unique([userId, templateId])                    // 一人每个模板一份
+  @@index([branchId, status])
+}
+
+model SubmissionItem {
+  id            String     @id @default(cuid())
+  submissionId  String
+  itemId        String
+  // 选中的 scoreOptions 索引数组 [{ index: 0, label, score }]
+  selected      Json       @default("[]")
+  content       String?    @db.Text
+  score         Decimal    @default(0) @db.Decimal(10, 2)
+  status        ItemStatus @default(DRAFT)
+  rejectReason  String?    @db.Text
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  submission  Submission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  item        FormItem     @relation(fields: [itemId], references: [id])
+  attachments Attachment[]
+
+  @@unique([submissionId, itemId])
+}
+
+model Attachment {
+  id               String   @id @default(cuid())
+  submissionItemId String
+  filename         String
+  mimeType         String?
+  sizeBytes        BigInt?
+  // MinIO 对象 key：例如 submissions/{submissionId}/{itemId}/{uuid}-{filename}
+  storageKey       String
+  uploadedBy       String
+  createdAt        DateTime @default(now())
+
+  submissionItem SubmissionItem @relation(fields: [submissionItemId], references: [id], onDelete: Cascade)
+}
+
+model ReviewLog {
+  id                String       @id @default(cuid())
+  submissionId      String
+  submissionItemId  String?
+  reviewerId        String
+  level             Int                                // 1 或 2
+  action            ReviewAction
+  note              String?      @db.Text
+  createdAt         DateTime     @default(now())
+
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+}
+
+// ========== 年度绩效档案 ==========
+model PerformanceRecord {
+  id           String   @id @default(cuid())
+  userId       String
+  year         Int
+  submissionId String   @unique
+  totalScore   Decimal  @db.Decimal(10, 2)
+  // 归档快照：完整的 submission + items + attachments 元数据
+  archivedData Json
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, year])
+  @@index([year])
+}
