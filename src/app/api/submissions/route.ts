@@ -121,12 +121,13 @@ export async function POST(req: Request) {
       const existingMap = new Map(existing.map((e) => [e.itemId, e]));
       const lockedItemIds = new Set<string>();
 
-      // 检测是否从 L2 驳回（存在 L2_APPROVED 项说明已经到了二审环节）
-      const hasL2ApprovedItems = existing.some((it) => it.status === 'L2_APPROVED');
 
-      if (sub.status === 'REJECTED') {
-        for (const it of existing) {
-          if (it.status !== 'REJECTED') lockedItemIds.add(it.itemId);
+      // Lock items based on their own approval status, not the submission status.
+      // This prevents previously-approved items from being overwritten when a
+      // REJECTED submission is saved as draft then edited again.
+      for (const it of existing) {
+        if (it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED') {
+          lockedItemIds.add(it.itemId);
         }
       }
 
@@ -187,11 +188,8 @@ export async function POST(req: Request) {
           }
         }
 
-        // L2 驳回后重提：修复项直接进 PENDING_L2，跳过 L1
-        // 普通重提（L1 驳回或首次提交）：进 PENDING_L1
-        const newStatus = submit
-          ? (hasL2ApprovedItems ? 'PENDING_L2' : 'PENDING_L1')
-          : 'DRAFT';
+        // 所有重新提交统一回到一级审核入口
+        const newStatus = submit ? 'PENDING_L1' : 'DRAFT';
         await tx.submissionItem.upsert({
           where: { submissionId_itemId: { submissionId: sub.id, itemId: it.itemId } },
           update: { selected: it.selected as any, content: it.content, score, status: newStatus, rejectReason: null },
@@ -216,14 +214,12 @@ export async function POST(req: Request) {
             },
           });
         }
-        // L2 驳回后重提：submission 设为 L1_APPROVED 跳过一级审核
-        // 普通重提：submission 设为 SUBMITTED 进入一级审核
-        const resubmitStatus = hasL2ApprovedItems ? 'L1_APPROVED' : 'SUBMITTED';
+        // 所有重新提交统一回到 SUBMITTED，进入一级审核
         await tx.submission.update({
           where: { id: sub.id },
           data: {
-            status: resubmitStatus,
-            submittedAt: originalSubmittedAt ?? new Date(), // 首次提交时间保留
+            status: 'SUBMITTED',
+            submittedAt: originalSubmittedAt ?? new Date(),
             totalScore,
           },
         });

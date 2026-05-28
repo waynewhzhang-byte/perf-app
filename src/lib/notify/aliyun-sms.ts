@@ -5,7 +5,10 @@ export interface AliyunSmsConfig {
   accessKeyId: string;
   accessKeySecret: string;
   signName: string;
+  /** 验证码模板 Code（注册/登录/找回密码） */
   templateCode: string;
+  /** 业务通知模板 Code（申报提交、审核结果等），可选 */
+  noticeTemplateCode?: string;
 }
 
 function popEncode(s: string) {
@@ -16,6 +19,7 @@ export async function sendAliyunSms(
   cfg: AliyunSmsConfig,
   phone: string,
   templateParam: Record<string, string>,
+  templateCode?: string,
 ): Promise<void> {
   const params: Record<string, string> = {
     AccessKeyId: cfg.accessKeyId,
@@ -26,7 +30,7 @@ export async function sendAliyunSms(
     SignatureMethod: 'HMAC-SHA1',
     SignatureNonce: crypto.randomUUID(),
     SignatureVersion: '1.0',
-    TemplateCode: cfg.templateCode,
+    TemplateCode: templateCode || cfg.templateCode,
     TemplateParam: JSON.stringify(templateParam),
     Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     Version: '2017-05-25',

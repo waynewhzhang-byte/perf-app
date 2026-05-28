@@ -25,6 +25,9 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const filter = url.searchParams.get('filter'); // "completed" → 已审核记录
+  const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
+  const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10)));
+  const skip = (page - 1) * pageSize;
 
   // L1 限定分公司
   const l1Scopes = isL1
@@ -46,8 +49,14 @@ export async function GET(req: Request) {
     }
 
     const completedWhere: any = { id: { in: reviewedIds } };
-    if (isL1 && branchIds.length > 0) {
-      completedWhere.branchId = { in: branchIds };
+    // 排除当前仍在待审队列中的申报（驳回重提后回到 SUBMITTED/L1_APPROVED）
+    if (isL1) {
+      completedWhere.status = { not: 'SUBMITTED' };
+      if (branchIds.length > 0) {
+        completedWhere.branchId = { in: branchIds };
+      }
+    } else {
+      completedWhere.status = { not: 'L1_APPROVED' };
     }
 
     const submissions = await prisma.submission.findMany({
@@ -58,8 +67,11 @@ export async function GET(req: Request) {
         logs: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { updatedAt: 'desc' },
+      skip,
+      take: pageSize,
     });
-    return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1, filter: 'completed' });
+    const total = await prisma.submission.count({ where: completedWhere });
+    return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1, filter: 'completed', total, page, pageSize });
   }
 
   // 待审核（默认）
@@ -75,12 +87,15 @@ export async function GET(req: Request) {
     }
   }
 
+  const total = await prisma.submission.count({ where });
   const submissions = await prisma.submission.findMany({
     where,
     include: { user: true, items: { include: { item: true, attachments: true } } },
     orderBy: { submittedAt: 'asc' },
+    skip,
+    take: pageSize,
   });
-  return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1 });
+  return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1, total, page, pageSize });
 }
 
 export async function POST(req: Request) {

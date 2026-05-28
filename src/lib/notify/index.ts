@@ -13,6 +13,7 @@ const SmsSchema: z.ZodType<AliyunSmsConfig> = z.object({
   accessKeySecret: z.string().min(1),
   signName: z.string().min(1),
   templateCode: z.string().min(1),
+  noticeTemplateCode: z.string().min(1).optional(),
 });
 
 const EmailSchema: z.ZodType<SmtpConfig> = z.object({
@@ -88,8 +89,11 @@ export async function sendNotice(target: string, subject: string, body: string):
   const c = await loadConfig();
   if (!c) return; // 静默失败 - 通用通知不应阻塞业务
   if (c.channel === 'SMS') {
-    // SMS 模板限制；实际使用时建议配置专用通知模板
-    await sendAliyunSms(c.config, target, { code: body.slice(0, 20) });
+    if (!c.config.noticeTemplateCode) {
+      console.warn('短信通知模板未配置，跳过发送。请在管理后台配置 noticeTemplateCode。');
+      return;
+    }
+    await sendAliyunSms(c.config, target, { content: body }, c.config.noticeTemplateCode);
   } else {
     await sendSmtpMail(c.config, target, subject, body);
   }

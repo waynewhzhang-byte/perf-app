@@ -31,6 +31,24 @@ type EditingState = {
   sections: Section[];
 };
 
+const inputClass =
+  'rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20';
+
+const textareaClass =
+  'rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20';
+
+const btnPrimary =
+  'rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50';
+
+const btnOutline =
+  'rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 cursor-pointer disabled:opacity-50';
+
+const btnDanger =
+  'rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 cursor-pointer';
+
+const btnDashed =
+  'w-full rounded-lg border border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 transition-colors hover:border-slate-400 hover:bg-slate-50 cursor-pointer';
+
 function parseScoreOptions(raw: unknown): ScoreOpt[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((o) => {
@@ -189,7 +207,7 @@ export default function TemplatesPage() {
   };
 
   const togglePublish = async (id: string, status: Template['status']) => {
-    if (status === 'ARCHIVED') return; // terminal state
+    if (status === 'ARCHIVED') return;
     const next = status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
     if (!confirm(`确认将状态切换为 ${next === 'ARCHIVED' ? '已归档' : '已发布'}？`)) return;
     try {
@@ -230,25 +248,25 @@ export default function TemplatesPage() {
 
   if (editing) {
     return (
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
         {preview && (
           <TemplatePreviewModal template={preview} onClose={() => setPreview(null)} />
         )}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-xl font-bold">{editingId ? '编辑申报表' : '设计申报表'}</h1>
+          <h1 className="text-xl font-bold tracking-tight">{editingId ? '编辑申报表' : '设计申报表'}</h1>
           <div className="flex flex-wrap gap-2">
             <AdminPageActions />
             <button
               type="button"
               onClick={() => setPreview(toPreviewTemplate(editing))}
-              className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50"
+              className={btnOutline}
             >
               预览
             </button>
             <button
               type="button"
               onClick={() => { setEditing(null); setEditingId(null); }}
-              className="rounded border px-3 py-1.5 text-sm"
+              className={btnOutline}
             >
               取消
             </button>
@@ -256,43 +274,49 @@ export default function TemplatesPage() {
               type="button"
               onClick={save}
               disabled={saving}
-              className="rounded bg-slate-900 px-4 py-1.5 text-sm text-white disabled:opacity-50"
+              className={btnPrimary}
             >
               {saving ? '保存中…' : editingId ? '保存修改' : '保存为草稿'}
             </button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-slate-400">
           保存后可继续编辑；发布前建议先预览确认章节与分值档次。
         </p>
 
-        <div className="mt-5 grid gap-3 rounded-lg border bg-white p-4 sm:grid-cols-3">
-          <label className="text-sm"><span className="text-slate-600">年度</span>
+        <div className="mt-5 grid gap-3 rounded-xl border border-slate-200 bg-white p-5 sm:grid-cols-3">
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">年度</span>
             <input type="number" value={editing.year} onChange={(e) => setEditing({ ...editing, year: +e.target.value })}
-              className="mt-1 w-full rounded border px-2 py-1.5" /></label>
-          <label className="text-sm sm:col-span-2"><span className="text-slate-600">标题</span>
+              className={`mt-1 w-full ${inputClass}`} />
+          </label>
+          <label className="text-sm sm:col-span-2">
+            <span className="font-medium text-slate-600">标题</span>
             <input value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-              className="mt-1 w-full rounded border px-2 py-1.5" /></label>
-          <label className="text-sm sm:col-span-3"><span className="text-slate-600">说明</span>
+              className={`mt-1 w-full ${inputClass}`} />
+          </label>
+          <label className="text-sm sm:col-span-3">
+            <span className="font-medium text-slate-600">说明</span>
             <textarea value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-              className="mt-1 w-full rounded border px-2 py-1.5" rows={2} /></label>
+              className={`mt-1 w-full ${textareaClass}`} rows={2} />
+          </label>
         </div>
 
         <div className="mt-5 space-y-4">
           {editing.sections.map((sec, sIdx) => (
-            <div key={sIdx} className="rounded-lg border bg-white p-4">
+            <div key={sIdx} className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-start gap-2">
                 <input value={sec.title} onChange={(e) => {
                   const ns = [...editing.sections]; ns[sIdx] = { ...sec, title: e.target.value }; setEditing({ ...editing, sections: ns });
-                }} placeholder="章节标题" className="flex-1 rounded border px-2 py-1.5 font-semibold" />
+                }} placeholder="章节标题" className={`flex-1 font-semibold ${inputClass}`} />
                 <button onClick={() => {
                   const ns = editing.sections.filter((_, i) => i !== sIdx);
                   setEditing({ ...editing, sections: ns });
-                }} className="rounded border px-2 py-1.5 text-sm text-red-600">删除章节</button>
+                }} className={`shrink-0 ${btnDanger}`}>删除章节</button>
               </div>
               <input value={sec.description ?? ''} onChange={(e) => {
                 const ns = [...editing.sections]; ns[sIdx] = { ...sec, description: e.target.value }; setEditing({ ...editing, sections: ns });
-              }} placeholder="章节说明（可选）" className="mt-2 w-full rounded border px-2 py-1.5 text-sm" />
+              }} placeholder="章节说明（可选）" className={`mt-2 w-full text-sm ${inputClass}`} />
 
               <div className="mt-4 space-y-3">
                 {sec.items.map((it, iIdx) => (
@@ -315,101 +339,82 @@ export default function TemplatesPage() {
                   const ns = [...editing.sections];
                   ns[sIdx] = { ...sec, items: [...sec.items, blankItem(sec.items.length)] };
                   setEditing({ ...editing, sections: ns });
-                }} className="w-full rounded border border-dashed py-2 text-sm text-slate-500 hover:bg-slate-50">+ 添加申报项</button>
+                }} className={btnDashed}>+ 添加申报项</button>
               </div>
             </div>
           ))}
           <button onClick={() => setEditing({ ...editing, sections: [...editing.sections, blankSection(editing.sections.length)] })}
-            className="w-full rounded border border-dashed py-3 text-sm text-slate-500 hover:bg-slate-50">+ 添加章节</button>
+            className={btnDashed}>+ 添加章节</button>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       {preview && (
         <TemplatePreviewModal template={preview} onClose={() => setPreview(null)} />
       )}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">申报表配置</h1>
+          <h1 className="text-2xl font-bold tracking-tight">申报表配置</h1>
         </div>
         <div className="flex items-center gap-3">
           <AdminPageActions />
-          <button onClick={newTemplate} className="rounded bg-slate-900 px-4 py-2 text-sm text-white">+ 新建申报表</button>
+          <button onClick={newTemplate} className={btnPrimary}>+ 新建申报表</button>
         </div>
       </div>
 
       {loadError && (
-        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {loadError}
-          <button onClick={load} className="ml-3 underline">重试</button>
+          <button onClick={load} className="ml-3 font-medium underline cursor-pointer">重试</button>
         </div>
       )}
 
-      <ul className="mt-6 divide-y rounded-lg border bg-white">
+      <ul className="mt-6 divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
         {!dataLoaded && !loadError && (
-          <li className="p-6 text-center text-sm text-slate-500">加载中…</li>
+          <li className="px-5 py-10 text-center text-sm text-slate-400">加载中…</li>
         )}
         {dataLoaded && list.length === 0 && !loadError && (
-          <li className="p-6 text-center text-sm text-slate-500">暂无申报表，点击右上角新建。</li>
+          <li className="px-5 py-10 text-center text-sm text-slate-400">暂无申报表，点击右上角新建。</li>
         )}
         {list.map((t) => (
-          <li key={t.id} className="flex items-center justify-between p-4">
-            <div>
-              <p className="font-medium">{t.title} <span className="text-xs text-slate-400">{t.year}</span></p>
-              <p className="text-sm text-slate-500">
-                {t.sections.length} 章节 ｜ {t.sections.reduce((s, x) => s + x.items.length, 0)} 申报项 ｜
+          <li key={t.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+            <div className="min-w-0">
+              <p className="font-medium truncate">{t.title} <span className="text-xs text-slate-400">{t.year}</span></p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
+                <span>{t.sections.length} 章节</span>
+                <span>{t.sections.reduce((s, x) => s + x.items.length, 0)} 申报项</span>
                 <StatusBadge status={t.status} />
                 {(t._count?.submissions ?? 0) > 0 && (
-                  <span className="ml-1 text-amber-600">｜ {t._count!.submissions} 份申报</span>
+                  <span className="font-medium text-amber-600">{t._count!.submissions} 份申报</span>
                 )}
               </p>
             </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => openPreview(t)}
-                className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50"
-              >
-                预览
-              </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => openPreview(t)} className={btnOutline}>预览</button>
               {t.status !== 'ARCHIVED' && (
-                <button
-                  type="button"
-                  onClick={() => handleEdit(t)}
-                  className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50"
-                >
-                  编辑
-                </button>
+                <button type="button" onClick={() => handleEdit(t)} className={btnOutline}>编辑</button>
               )}
               {t.status === 'PUBLISHED' && (t._count?.submissions ?? 0) > 0 && (
                 <button
                   type="button"
                   onClick={() => duplicateAsDraft(t)}
-                  className="rounded border border-amber-200 px-3 py-1.5 text-sm text-amber-800 hover:bg-amber-50"
+                  className="rounded-lg border border-amber-200 px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 cursor-pointer"
                 >
                   复制为草稿
                 </button>
               )}
               {t.status !== 'ARCHIVED' && (
-                <button
-                  type="button"
-                  onClick={() => togglePublish(t.id, t.status)}
-                  className="rounded border px-3 py-1.5 text-sm"
-                >
+                <button type="button" onClick={() => togglePublish(t.id, t.status)} className={btnOutline}>
                   {t.status === 'PUBLISHED' ? '归档' : '发布'}
                 </button>
               )}
               {t.status === 'ARCHIVED' && (
                 <span className="self-center text-xs text-slate-400">已终态，仅可预览</span>
               )}
-              <button
-                type="button"
-                onClick={() => handleDelete(t.id, t.title)}
-                className="rounded border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
-              >
+              <button type="button" onClick={() => handleDelete(t.id, t.title)} className={btnDanger}>
                 删除
               </button>
             </div>
@@ -421,68 +426,87 @@ export default function TemplatesPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const m: Record<string, string> = {
-    DRAFT: 'text-slate-500', PUBLISHED: 'text-green-600', ARCHIVED: 'text-amber-600',
+  const config: Record<string, { label: string; className: string }> = {
+    DRAFT: { label: '草稿', className: 'bg-slate-100 text-slate-600' },
+    PUBLISHED: { label: '已发布', className: 'bg-emerald-50 text-emerald-700' },
+    ARCHIVED: { label: '已归档', className: 'bg-amber-50 text-amber-700' },
   };
-  const t: Record<string, string> = { DRAFT: '草稿', PUBLISHED: '已发布', ARCHIVED: '已归档' };
-  return <span className={`ml-1 ${m[status]}`}>{t[status]}</span>;
+  const c = config[status] ?? { label: status, className: 'bg-slate-100 text-slate-600' };
+  return (
+    <span className={`inline-block rounded-full px-2.5 py-px text-xs font-medium ${c.className}`}>
+      {c.label}
+    </span>
+  );
 }
 
 function ItemEditor({ item, onChange, onDelete }: { item: Item; onChange: (i: Item) => void; onDelete: () => void }) {
+  const smallInput =
+    'rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20';
+  const tinyInput =
+    'rounded border border-slate-300 px-2 py-1 text-xs transition-colors focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20';
+  const btnDangerSmall =
+    'rounded-lg px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 cursor-pointer';
+
   return (
-    <div className="rounded-md border bg-slate-50 p-3">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <div className="flex items-start gap-2">
         <input value={item.title} onChange={(e) => onChange({ ...item, title: e.target.value })}
-          placeholder="申报项标题，例如：发表论文" className="flex-1 rounded border px-2 py-1.5 text-sm" />
-        <button onClick={onDelete} className="rounded border px-2 py-1.5 text-xs text-red-600">删除</button>
+          placeholder="申报项标题，例如：发表论文" className={`flex-1 ${smallInput}`} />
+        <button onClick={onDelete} className={btnDangerSmall}>删除</button>
       </div>
       <input value={item.hint ?? ''} onChange={(e) => onChange({ ...item, hint: e.target.value })}
-        placeholder="提示信息，例如：请上传刊物封面与正文 PDF" className="mt-2 w-full rounded border px-2 py-1.5 text-xs" />
+        placeholder="提示信息，例如：请上传刊物封面与正文 PDF"
+        className={`mt-2 w-full text-xs ${tinyInput}`} />
 
-      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-700">
-        <label className="flex items-center gap-1">
-          <input type="checkbox" checked={item.isRequired} onChange={(e) => onChange({ ...item, isRequired: e.target.checked })} />
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs font-medium text-slate-700">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={item.isRequired} onChange={(e) => onChange({ ...item, isRequired: e.target.checked })}
+            className="rounded border-slate-300" />
           必填
         </label>
-        <label className="flex items-center gap-1">
-          <input type="checkbox" checked={item.requireAttachment} onChange={(e) => onChange({ ...item, requireAttachment: e.target.checked })} />
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={item.requireAttachment} onChange={(e) => onChange({ ...item, requireAttachment: e.target.checked })}
+            className="rounded border-slate-300" />
           需要附件
         </label>
-        <label className="flex items-center gap-1">
+        <label className="flex items-center gap-1.5">
           最多可选
           <input type="number" min={1} max={10} value={item.maxSelections}
             onChange={(e) => onChange({ ...item, maxSelections: Math.max(1, +e.target.value) })}
-            className="w-14 rounded border px-1 py-0.5" />
+            className={`w-14 rounded border border-slate-300 px-1.5 py-0.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20`} />
           项
         </label>
       </div>
 
       <div className="mt-3">
         <p className="text-xs font-semibold text-slate-600">分值档次</p>
-        <div className="mt-1 space-y-2">
+        <div className="mt-1.5 space-y-2">
           {item.scoreOptions.map((o, oi) => (
-            <div key={oi} className="rounded border bg-white p-2">
-              <div className="flex gap-1">
+            <div key={oi} className="rounded-lg border border-slate-200 bg-white p-2.5">
+              <div className="flex gap-1.5">
                 <input value={o.label} onChange={(e) => {
                   const ns = [...item.scoreOptions]; ns[oi] = { ...o, label: e.target.value };
                   onChange({ ...item, scoreOptions: ns });
-                }} placeholder="档次名称" className="flex-1 rounded border px-2 py-1 text-xs" />
+                }} placeholder="档次名称" className={`flex-1 ${tinyInput}`} />
                 <input type="number" value={o.score} onChange={(e) => {
                   const ns = [...item.scoreOptions]; ns[oi] = { ...o, score: +e.target.value };
                   onChange({ ...item, scoreOptions: ns });
-                }} className="w-20 rounded border px-2 py-1 text-xs" step="0.1" />
+                }} className={`w-20 ${tinyInput}`} step="0.1" placeholder="分值" />
                 <button onClick={() => onChange({ ...item, scoreOptions: item.scoreOptions.filter((_, i) => i !== oi) })}
-                  className="rounded border px-2 text-xs text-red-600">×</button>
+                  className={btnDangerSmall}>×</button>
               </div>
               <input value={o.description ?? ''} onChange={(e) => {
                 const ns = [...item.scoreOptions]; ns[oi] = { ...o, description: e.target.value };
                 onChange({ ...item, scoreOptions: ns });
-              }} placeholder="档次说明（可选，帮助员工理解如何选择，如：获得省部级奖项或荣誉）" className="mt-1 w-full rounded border px-2 py-1 text-xs text-slate-500" />
+              }} placeholder="档次说明（可选，帮助员工理解如何选择）"
+                className={`mt-1.5 w-full text-xs ${tinyInput} text-slate-500`} />
             </div>
           ))}
         </div>
         <button onClick={() => onChange({ ...item, scoreOptions: [...item.scoreOptions, { label: '', score: 0, description: '' }] })}
-          className="mt-2 rounded border border-dashed px-2 py-1 text-xs text-slate-500">+ 添加档次</button>
+          className="mt-2 rounded-lg border border-dashed border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-500 transition-colors hover:border-slate-400 hover:bg-white cursor-pointer">
+          + 添加档次
+        </button>
       </div>
     </div>
   );

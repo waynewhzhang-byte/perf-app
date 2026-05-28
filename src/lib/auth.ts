@@ -69,7 +69,7 @@ export async function clearSessionCookie(isAdmin = false) {
   cookies().delete(isAdmin ? COOKIE_NAME_ADMIN : COOKIE_NAME);
 }
 
-/** Verify the JWT and validate the payload shape at runtime. */
+/** Verify the JWT, validate the payload shape, and confirm the user still exists. */
 export async function getSession(isAdmin = false): Promise<SessionPayload | null> {
   const token = cookies().get(isAdmin ? COOKIE_NAME_ADMIN : COOKIE_NAME)?.value;
   if (!token) return null;
@@ -77,6 +77,13 @@ export async function getSession(isAdmin = false): Promise<SessionPayload | null
     const { payload } = await jwtVerify(token, getSecretKey());
     const result = sessionPayloadSchema.safeParse(payload);
     if (!result.success) return null;
+    // Verify the user still exists — prevents deleted/disabled users from
+    // using tokens that were issued before their account was removed.
+    const exists = await prisma.user.findUnique({
+      where: { id: result.data.userId },
+      select: { id: true },
+    });
+    if (!exists) return null;
     return result.data;
   } catch {
     return null;

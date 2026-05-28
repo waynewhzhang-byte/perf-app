@@ -145,10 +145,36 @@ export async function POST(req: Request) {
           },
         });
 
-        await putObject(key, buf, mimeType);
-        attachments.push({ id: att.id, filename: att.filename });
+        attachments.push({ id: att.id, filename: att.filename, _buf: buf, _key: key, _mimeType: mimeType } as any);
       }
     });
+
+    // Upload to MinIO OUTSIDE the transaction to avoid holding DB locks
+    // during network I/O. If MinIO fails, clean up the DB records.
+    const createdIds: string[] = [];
+    try {
+      for (const att of attachments) {
+        await putObject((att as any)._key, (att as any)._buf, (att as any)._mimeType);
+        createdIds.push(att.id);
+      }
+    } catch (uploadErr) {
+      // Roll back DB records for files that failed to upload
+      if (createdIds.length > 0) {
+        await prisma.attachment.deleteMany({ where: { id: { in: createdIds } } }).catch(() => {});
+      }
+      // Also clean up any MinIO objects that made it through before the failure
+      for (const att of attachments) {
+        removeObject((att as any)._key).catch(() => {});
+      }
+      throw uploadErr;
+    }
+
+    // Clean up temporary fields
+    for (const att of attachments) {
+      delete (att as any)._buf;
+      delete (att as any)._key;
+      delete (att as any)._mimeType;
+    }
 
     recordAttempt(`upload:user:${s.userId}`, UPLOAD_RATE_WINDOW_MS);
     recordAttempt(`upload:ip:${ip}`, UPLOAD_RATE_WINDOW_MS);

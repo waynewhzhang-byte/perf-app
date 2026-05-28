@@ -47,11 +47,15 @@ export function getAttemptCount(key: string): number {
   return entry.count;
 }
 
-/** Extract the client IP from standard proxy / CDN headers. */
+/** Extract the client IP from standard proxy / CDN headers.
+ * IMPORTANT: Only trusts X-Forwarded-For when the app is behind a trusted
+ * reverse proxy that strips spoofed headers. In direct-exposure deployments,
+ * prefer X-Real-IP (set by nginx/Caddy) or the socket remote address.
+ */
 export function extractIP(req: Request): string {
   return (
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     '127.0.0.1'
   );
 }

@@ -232,9 +232,18 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: '缺少模板 ID' }, { status: 400 });
     }
 
-    const existing = await prisma.formTemplate.findUnique({ where: { id } });
+    const existing = await prisma.formTemplate.findUnique({
+      where: { id },
+      include: { _count: { select: { submissions: true } } },
+    });
     if (!existing) {
       return NextResponse.json({ error: '模板不存在' }, { status: 404 });
+    }
+    if (existing._count.submissions > 0) {
+      return NextResponse.json({
+        error: '该模板已有员工申报，无法删除。请先归档模板。',
+        code: 'HAS_SUBMISSIONS',
+      }, { status: 409 });
     }
 
     await prisma.formTemplate.delete({ where: { id } });

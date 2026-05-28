@@ -37,11 +37,11 @@ export async function canViewAttachment(
   const sub = att.submissionItem.submission;
   if (sub.userId === userId) return true;
 
-  if (roles.includes('REVIEWER_L2') && sub.status === 'L1_APPROVED') {
+  if (roles.includes('REVIEWER_L2') && (sub.status === 'L1_APPROVED' || sub.status === 'L2_APPROVED' || sub.status === 'REJECTED')) {
     return true;
   }
 
-  if (roles.includes('REVIEWER_L1') && sub.status === 'SUBMITTED') {
+  if (roles.includes('REVIEWER_L1') && (sub.status === 'SUBMITTED' || sub.status === 'L1_APPROVED' || sub.status === 'L2_APPROVED' || sub.status === 'REJECTED')) {
     if (!sub.branchId) return false;
     const scopes = await prisma.userRole.findMany({
       where: { userId, role: 'REVIEWER_L1' },

@@ -1,5 +1,5 @@
 'use client';
-// 员工填报页：分章节渲染 → 选择分值档次 → 上传附件 → 保存草稿 / 提交
+// 员工填报页
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -35,7 +35,6 @@ export default function SubmissionPage() {
 
   useEffect(() => {
     (async () => {
-      // 通过公开接口获取已发布模板
       const [tplRes, subRes] = await Promise.all([
         fetch(`/api/templates/${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json()),
@@ -146,65 +145,106 @@ export default function SubmissionPage() {
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert('保存失败：' + (e.error || r.status)); return; }
     if (submit) { alert('已提交，等待审核'); router.push('/app'); return; }
     alert('草稿已保存');
-    // refresh to grab submission id for attachments
     location.reload();
   };
 
-  if (loading) return <main className="mx-auto max-w-3xl px-6 py-10 text-sm text-slate-500">加载中…</main>;
-  if (!tpl) return <main className="mx-auto max-w-3xl px-6 py-10 text-sm text-red-600">表单不存在或未发布</main>;
+  if (loading) return (
+    <main className="mx-auto max-w-3xl px-4 py-16 sm:px-6 lg:px-8">
+      <div className="space-y-6">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="animate-pulse rounded-xl border border-slate-200 bg-white p-6">
+            <div className="mb-4 h-6 w-48 rounded bg-slate-200" />
+            <div className="space-y-2">
+              <div className="h-4 w-full rounded bg-slate-100" />
+              <div className="h-4 w-3/4 rounded bg-slate-100" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </main>
+  );
+  if (!tpl) return (
+    <main className="mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 lg:px-8">
+      <p className="text-sm text-red-600">表单不存在或未发布</p>
+    </main>
+  );
 
   const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED';
+  const statusMap: Record<string, string> = {
+    SUBMITTED: '待审核', L1_APPROVED: '一审通过', L2_APPROVED: '终审通过',
+  };
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-8">
+    <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Link href="/app" className="text-sm text-slate-500 hover:underline">← 返回</Link>
-          <h1 className="mt-1 text-2xl font-bold">{tpl.title}</h1>
+          <Link href="/app" className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-700 cursor-pointer">
+            ← 返回
+          </Link>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight">{tpl.title}</h1>
           <p className="mt-1 text-sm text-slate-500">{tpl.description}</p>
         </div>
         <LogoutButton />
       </div>
+
       {sub?.status === 'REJECTED' && (
-        <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <svg className="h-5 w-5 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
           本次申报已被驳回，仅可修改下方标红的项后重新提交。
         </div>
       )}
+
       {sub?.status && sub.status !== 'DRAFT' && sub.status !== 'REJECTED' && (
-        <div className="mt-3 rounded border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-          当前状态：{(() => { const m: Record<string, string> = { SUBMITTED: '待审核', L1_APPROVED: '一审通过', L2_APPROVED: '终审通过' }; return m[sub.status] ?? sub.status; })()}，已不可编辑。
+        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          当前状态：{statusMap[sub.status] ?? sub.status}，已不可编辑。
         </div>
       )}
 
-      <div className="sticky top-0 z-10 -mx-6 mt-4 border-y bg-white/90 px-6 py-3 backdrop-blur">
+      <div className="sticky top-0 z-10 -mx-4 mt-4 border-y border-slate-200 bg-white/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-600">累计分数</span>
-          <span className="text-xl font-bold text-slate-900">{total.toFixed(1)}</span>
+          <span className="text-sm font-medium text-slate-500">累计分数</span>
+          <span className="text-2xl font-bold tracking-tight tabular-nums">{total.toFixed(1)}</span>
         </div>
       </div>
 
       <div className="mt-5 space-y-6">
         {tpl.sections.map((sec) => (
-          <section key={sec.id} className="rounded-lg border bg-white p-4">
+          <section key={sec.id} className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="font-semibold">{sec.title}</h2>
-            {sec.description && <p className="mt-1 text-xs text-slate-500">{sec.description}</p>}
+            {sec.description && <p className="mt-1 text-xs text-slate-400">{sec.description}</p>}
             <div className="mt-4 space-y-5">
               {sec.items.map((it) => {
                 const a = answers[it.id]; const locked = isLocked(it.id);
                 const rejected = a?.status === 'REJECTED';
                 return (
-                  <div key={it.id} className={`rounded border p-3 ${rejected ? 'border-red-300 bg-red-50' : locked ? 'bg-slate-50 opacity-70' : ''}`}>
+                  <div key={it.id} className={`rounded-lg border p-4 ${
+                    rejected ? 'border-red-300 bg-red-50' : locked ? 'bg-slate-50 opacity-70' : 'border-slate-200'
+                  }`}>
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-medium">
                         {it.title}
                         {it.isRequired && <span className="ml-1 text-red-500">*</span>}
-                        {locked && <span className="ml-2 text-xs text-slate-500">（已审核通过，锁定）</span>}
+                        {locked && <span className="ml-2 text-xs text-slate-400">（已审核通过，锁定）</span>}
                       </p>
-                      <span className="text-xs text-slate-500">{it.maxSelections > 1 ? `多选 ≤${it.maxSelections}` : '单选'}</span>
+                      <span className="shrink-0 text-xs text-slate-400">
+                        {it.maxSelections > 1 ? `最多选择 ${it.maxSelections} 项` : '单项选择'}
+                      </span>
                     </div>
-                    {it.hint && <p className="mt-1 text-xs text-slate-500">💡 {it.hint}</p>}
+
+                    {it.hint && (
+                      <div className="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500">
+                        <svg className="mt-px h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M12 17.25h.008v.008H12v-.008z" />
+                        </svg>
+                        <span>{it.hint}</span>
+                      </div>
+                    )}
                     {rejected && a?.rejectReason && (
-                      <p className="mt-2 text-xs text-red-700">驳回原因：{a.rejectReason}</p>
+                      <p className="mt-2 rounded-md bg-red-100 px-3 py-1.5 text-xs font-medium text-red-700">
+                        驳回原因：{a.rejectReason}
+                      </p>
                     )}
 
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -213,15 +253,19 @@ export default function SubmissionPage() {
                         return (
                           <button key={idx} type="button" disabled={!editable || locked}
                             onClick={() => toggle(it, idx)}
-                            className={`rounded border px-3 py-2 text-left text-sm transition ${
-                              on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white hover:border-slate-400'
-                            } disabled:cursor-not-allowed`}>
+                            className={`rounded-lg border px-4 py-3 text-left text-sm transition-all duration-200 ${
+                              on
+                                ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                                : 'bg-white hover:border-slate-400 hover:shadow-sm'
+                            } disabled:cursor-not-allowed disabled:opacity-60`}>
                             <div className="flex items-center justify-between">
                               <span className="font-medium">{o.label}</span>
-                              <span className={on ? 'font-bold' : 'text-slate-500'}>{o.score} 分</span>
+                              <span className={`text-sm ${on ? 'font-bold text-white' : 'font-medium text-slate-500'}`}>
+                                {o.score} 分
+                              </span>
                             </div>
                             {o.description && (
-                              <p className={`mt-1 text-xs ${on ? 'text-slate-300' : 'text-slate-400'}`}>
+                              <p className={`mt-1 text-xs leading-relaxed ${on ? 'text-slate-300' : 'text-slate-400'}`}>
                                 {o.description}
                               </p>
                             )}
@@ -231,21 +275,30 @@ export default function SubmissionPage() {
                     </div>
 
                     <textarea value={a?.content ?? ''} onChange={(e) => setContent(it.id, e.target.value)}
-                      disabled={!editable || locked} placeholder="备注说明（可选）"
-                      rows={2} className="mt-3 w-full rounded border px-2 py-1.5 text-sm disabled:bg-slate-50" />
+                      disabled={!editable || locked}
+                      placeholder="备注说明（可选）"
+                      rows={2}
+                      className="mt-3 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
 
                     {it.requireAttachment && (
                       <div className="mt-3">
                         <p className="text-xs font-semibold text-slate-600">证明材料</p>
-                        <ul className="mt-1 space-y-0.5 text-xs text-slate-600">
+                        <ul className="mt-1 space-y-0.5">
                           {(a?.attachments ?? []).map((at) => (
-                            <li key={at.id}>📎 {at.filename}</li>
+                            <li key={at.id} className="flex items-center gap-1.5 text-xs text-slate-600">
+                              <svg className="h-3.5 w-3.5 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                              </svg>
+                              {at.filename}
+                            </li>
                           ))}
-                          {(!a?.attachments || a.attachments.length === 0) && <li className="text-slate-400">尚未上传</li>}
+                          {(!a?.attachments || a.attachments.length === 0) && (
+                            <li className="text-xs text-slate-400">尚未上传</li>
+                          )}
                         </ul>
                         {editable && !locked && (
-                          <>
-                            <p className="mt-2 text-xs text-slate-500">
+                          <div className="mt-2">
+                            <p className="text-xs text-slate-400">
                               仅支持 PDF、图片、Word/Excel、TXT，单文件 ≤10MB
                             </p>
                             <input
@@ -253,9 +306,9 @@ export default function SubmissionPage() {
                               multiple
                               accept={UPLOAD_ACCEPT}
                               onChange={(e) => upload(it.id, e.target.files)}
-                              className="mt-1 block text-xs"
+                              className="mt-1 block text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-xs file:font-medium file:text-slate-700 file:transition-colors hover:file:bg-slate-200 cursor-pointer"
                             />
-                          </>
+                          </div>
                         )}
                       </div>
                     )}
@@ -268,12 +321,20 @@ export default function SubmissionPage() {
       </div>
 
       {editable && (
-        <div className="sticky bottom-0 mt-6 -mx-6 border-t bg-white px-6 py-3">
-          <div className="flex justify-end gap-2">
-            <button onClick={() => save(false)} disabled={busy} className="rounded border px-4 py-2 text-sm">
+        <div className="sticky bottom-0 -mx-4 mt-6 border-t border-slate-200 bg-white px-4 py-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => save(false)}
+              disabled={busy}
+              className="rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
               {busy ? '保存中…' : '保存草稿'}
             </button>
-            <button onClick={() => save(true)} disabled={busy} className="rounded bg-slate-900 px-4 py-2 text-sm text-white">
+            <button
+              onClick={() => save(true)}
+              disabled={busy}
+              className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
               {busy ? '提交中…' : '提交审核'}
             </button>
           </div>

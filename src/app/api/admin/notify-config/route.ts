@@ -13,6 +13,7 @@ const SmsSchema = z.object({
     accessKeySecret: z.string().min(1),
     signName: z.string().min(1),
     templateCode: z.string().min(1),
+    noticeTemplateCode: z.string().min(1).optional(),
   }),
 });
 
