@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
 
 interface Template { id: string; title: string; year: number }
@@ -289,9 +289,8 @@ export default function ReportsPage() {
                   </thead>
                   <tbody className="divide-y">
                     {active.records.map((rec, idx) => (
-                      <>
+                      <Fragment key={rec.submissionId}>
                         <tr
-                          key={rec.submissionId}
                           onClick={() => toggle(rec.submissionId)}
                           className={`cursor-pointer transition-colors hover:bg-slate-50 ${expanded.has(rec.submissionId) ? 'bg-slate-50' : ''}`}
                         >
@@ -359,7 +358,7 @@ export default function ReportsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
