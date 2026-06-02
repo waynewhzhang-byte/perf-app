@@ -255,7 +255,7 @@ export default function AdminUsersPage() {
     if (role === 'REVIEWER_L1' && !present) {
       const branchId = scopeBranchId ?? l1BranchByUser[user.id];
       if (!branchId) {
-        setMsg({ type: 'error', text: '请先添加分公司' });
+        setMsg({ type: 'error', text: '请先添加工区' });
         return;
       }
       if (hasRole(user, 'REVIEWER_L1', branchId)) return;
@@ -536,7 +536,7 @@ export default function AdminUsersPage() {
                             disabled={org.branches.length === 0 || busy}
                           >
                             {org.branches.length === 0 ? (
-                              <option value="">无分公司</option>
+                              <option value="">无工区</option>
                             ) : (
                               org.branches.map((b) => (
                                 <option key={b.id} value={b.id}>{b.name}</option>
@@ -678,7 +678,7 @@ function ProfileFields({
           className={inputClass}
         />
       </Field>
-      <Field label="分公司">
+      <Field label="工区">
         <select
           value={form.branchId}
           onChange={(e) => patch({ branchId: e.target.value, departmentId: '' })}

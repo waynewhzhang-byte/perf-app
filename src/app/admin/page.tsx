@@ -46,12 +46,13 @@ export default async function AdminHome() {
       <nav className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <NavCard href="/admin/notify" title="通知渠道" desc="短信 / 邮件 切换与配置" />
         <NavCard href="/admin/auth" title="登录验证策略" desc="验证码开关与强密码规则" />
-        <NavCard href="/admin/organization" title="组织架构" desc="分公司 / 部门 / 岗位 / 工种" />
+        <NavCard href="/admin/organization" title="组织架构" desc="工区 / 部门 / 申报字典" />
+        <NavCard href="/admin/auto-review-rules" title="自动预审规则" desc="工作年限与申报等级校验" />
         <NavCard href="/admin/templates" title="申报表配置" desc="设计与发布申报模板" />
         <NavCard href="/admin/users" title="用户与角色" desc="审核员分配、角色管理" />
         <NavCard href="/admin/review-audit" title="审核审计" desc="审核进度、结果与评价报告" />
         <NavCard href="/admin/reports" title="报表分析" desc="已通过员工分值按表单统计" />
-        <NavCard href="/admin/export" title="数据导出" desc="按分公司+年度打包 ZIP" />
+        <NavCard href="/admin/export" title="数据导出" desc="按工区+年度打包 ZIP" />
       </nav>
     </main>
   );

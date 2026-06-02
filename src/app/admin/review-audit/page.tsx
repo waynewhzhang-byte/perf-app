@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AdminPageActions } from '@/components/admin-page-actions';
 
 interface BranchFilter { id: string; name: string }
-interface Stats { total: number; draft: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
+interface Stats { total: number; draft: number; preReviewRejected: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
 interface SubUser { id: string; fullName: string; contact: string; employeeNo?: string | null; branch?: { id: string; name: string } | null }
 interface SubTemplate { id: string; title: string; year: number }
 interface SubItem {
@@ -16,11 +16,14 @@ interface SubItem {
 interface ReviewLogEntry { id: string; reviewerId: string; level: number; action: string; note?: string | null; createdAt: string; submissionItemId?: string | null }
 interface AuditSubmission {
   id: string; totalScore: number; status: string; submittedAt?: string | null; createdAt: string;
+  workAreaName?: string | null; workYears?: number | null; declarationLevelName?: string | null; declarationSpecialtyName?: string | null;
   user: SubUser; template: SubTemplate;
   _count: { items: number; logs: number };
 }
 interface AuditDetail {
   id: string; totalScore: number; status: string; submittedAt?: string | null;
+  workAreaName?: string | null; hireDate?: string | null; workYears?: number | null;
+  declarationLevelName?: string | null; declarationSpecialtyName?: string | null; preReviewMessages?: string[] | null;
   user: SubUser & { department?: { id: string; name: string } | null; position?: { id: string; name: string } | null };
   template: SubTemplate;
   items: SubItem[];
@@ -79,6 +82,7 @@ export default function ReviewAuditPage() {
       SUBMITTED: { label: '待一审', cls: 'bg-yellow-100 text-yellow-700' },
       L1_APPROVED: { label: '待二审', cls: 'bg-blue-100 text-blue-700' },
       L2_APPROVED: { label: '终审通过', cls: 'bg-green-100 text-green-700' },
+      PRE_REVIEW_REJECTED: { label: '预审未通过', cls: 'bg-red-100 text-red-700' },
       REJECTED: { label: '已驳回', cls: 'bg-red-100 text-red-700' },
     };
     const m = map[s] ?? { label: s, cls: 'bg-slate-100' };
@@ -105,7 +109,7 @@ export default function ReviewAuditPage() {
       {/* 筛选栏 */}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-white p-3">
         <label className="text-xs text-slate-500">
-          分公司
+          工区
           <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
             <option value="all">全部</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -123,6 +127,7 @@ export default function ReviewAuditPage() {
           <select value={status} onChange={(e) => setStatus(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
             <option value="all">全部</option>
             <option value="DRAFT">草稿</option>
+            <option value="PRE_REVIEW_REJECTED">预审未通过</option>
             <option value="SUBMITTED">待审核</option>
             <option value="L1_APPROVED">一级已通过</option>
             <option value="L2_APPROVED">终审通过</option>
@@ -138,9 +143,10 @@ export default function ReviewAuditPage() {
 
       {/* 统计卡片 */}
       {stats && (
-        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-6">
+        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-7">
           <StatCard label="总计" value={stats.total} color="text-slate-900" />
           <StatCard label="草稿" value={stats.draft} color="text-slate-500" />
+          <StatCard label="预审未过" value={stats.preReviewRejected} color="text-red-600" />
           <StatCard label="待一审" value={stats.submitted} color="text-yellow-600" />
           <StatCard label="待二审" value={stats.l1Approved} color="text-blue-600" />
           <StatCard label="终审通过" value={stats.l2Approved} color="text-green-600" />
@@ -168,7 +174,7 @@ export default function ReviewAuditPage() {
                   <div>
                     <span className="font-medium text-sm">{sub.user.fullName}</span>
                     <span className="ml-2 text-xs text-slate-400">
-                      {sub.user.employeeNo || sub.user.contact} · {sub.user.branch?.name || '—'} · {sub.template.title}（{sub.template.year}）
+                      {sub.user.employeeNo || sub.user.contact} · {sub.workAreaName || sub.user.branch?.name || '—'} · {sub.template.title}（{sub.template.year}）
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -200,6 +206,22 @@ export default function ReviewAuditPage() {
                           <p className="mt-1 text-2xl font-bold">{Number(detail?.totalScore).toFixed(1)}</p>
                           <p className="text-xs text-slate-400">总分</p>
                         </div>
+                      </div>
+
+                      <div className="rounded-lg border bg-white p-3">
+                        <h4 className="text-xs font-semibold text-slate-500">能级评价申报信息</h4>
+                        <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
+                          <span>工区：{detail?.workAreaName || detail?.user.branch?.name || '—'}</span>
+                          <span>入职时间：{detail?.hireDate ? String(detail.hireDate).slice(0, 10) : '—'}</span>
+                          <span>工作年限：{detail?.workYears ?? '—'}</span>
+                          <span>申报等级：{detail?.declarationLevelName || '—'}</span>
+                          <span>申报专业：{detail?.declarationSpecialtyName || '—'}</span>
+                        </div>
+                        {detail?.status === 'PRE_REVIEW_REJECTED' && (detail?.preReviewMessages ?? []).length > 0 && (
+                          <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            自动预审说明：{detail!.preReviewMessages!.join('；')}
+                          </div>
+                        )}
                       </div>
 
                       {/* 逐项明细 */}
@@ -247,7 +269,7 @@ export default function ReviewAuditPage() {
                                   </div>
                                   <div className="pb-2">
                                     <p className="text-xs">
-                                      <span className="font-medium">{log.level === 1 ? '一级审核' : '二级终审'}</span>
+                                      <span className="font-medium">{log.level === 0 ? '提交/预审' : log.level === 1 ? '一级审核' : '二级终审'}</span>
                                       <span className={`ml-2 ${log.action === 'APPROVE' ? 'text-green-600' : 'text-red-600'}`}>
                                         {log.action === 'APPROVE' ? '通过' : '驳回'}
                                       </span>

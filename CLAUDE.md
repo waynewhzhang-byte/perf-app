@@ -164,7 +164,8 @@ openssl rand -hex 32   # JWT_SECRET
 DATABASE_URL          — PostgreSQL 连接串
 JWT_SECRET            — JWT 签名密钥（32 字节 hex）
 NOTIFY_SECRET_KEY     — AES-256-GCM 加密密钥（32 字节 hex）
-MINIO_ENDPOINT/PORT/USE_SSL/ACCESS_KEY/SECRET_KEY/BUCKET  — MinIO 配置
+MINIO_ENDPOINT/PORT/USE_SSL/ACCESS_KEY/SECRET_KEY/BUCKET  — MinIO 服务端（同机用 127.0.0.1）
+MINIO_PUBLIC_ENDPOINT/PORT/USE_SSL  — 预签名 URL 对外地址（可选）
 APP_BASE_URL          — 应用 base URL（通知链接用）
 ```
 

@@ -241,7 +241,7 @@ export default function Register() {
         )}
 
         <div>
-          <label htmlFor="reg-branch" className="mb-1.5 block text-sm font-medium text-slate-700">分公司</label>
+          <label htmlFor="reg-branch" className="mb-1.5 block text-sm font-medium text-slate-700">工区</label>
           <select
             id="reg-branch"
             className={selectClass}
@@ -249,7 +249,7 @@ export default function Register() {
             onChange={(e) => setBranchId(e.target.value)}
             disabled={orgs.branches.length === 0}
           >
-            <option value="">请选择分公司（可选）</option>
+            <option value="">请选择工区（可选）</option>
             {orgs.branches.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}

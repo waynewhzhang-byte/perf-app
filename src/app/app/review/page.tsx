@@ -13,12 +13,23 @@ interface AttachmentPreview {
 }
 interface SubItem {
   id: string;
-  item: { title: string; hint?: string; requireAttachment: boolean };
-  selected: { label: string; score: number }[];
+  item: { title: string; hint?: string; requireAttachment: boolean; sectionId?: string };
+  selected: { optionId?: string; label: string; score: number; count?: number }[];
   content?: string;
   score: string | number;
   status: string;
   attachments: Att[];
+  optionReviews: OptionReview[];
+}
+interface OptionReview {
+  id: string;
+  optionId: string;
+  label: string;
+  score: string | number;
+  count?: number | null;
+  status: string;
+  rejectReason?: string | null;
+  department?: { id: string; name: string } | null;
 }
 interface ReviewLogEntry {
   id: string;
@@ -31,6 +42,9 @@ interface ReviewLogEntry {
 }
 interface Submission {
   id: string; totalScore: string | number; status: string; submittedAt?: string;
+  workAreaName?: string | null; hireDate?: string | null; workYears?: number | null;
+  declarationLevelName?: string | null; declarationSpecialtyName?: string | null;
+  preReviewPassed?: boolean | null; preReviewMessages?: string[] | null;
   user: { fullName: string; contact: string; employeeNo?: string };
   items: SubItem[];
   logs?: ReviewLogEntry[];
@@ -47,6 +61,8 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<AttachmentPreview | null>(null);
   const [openingAttId, setOpeningAttId] = useState<string | null>(null);
+  const [overallAction, setOverallAction] = useState<'APPROVE' | 'REJECT'>('APPROVE');
+  const [overallNote, setOverallNote] = useState('');
 
   const openAttachment = async (attId: string) => {
     setOpeningAttId(attId);
@@ -74,6 +90,8 @@ export default function ReviewPage() {
   const switchTab = (t: Tab) => {
     setTab(t);
     setDecisions({});
+    setOverallAction('APPROVE');
+    setOverallNote('');
     if (t === 'completed') load('completed'); else load();
   };
 
@@ -82,30 +100,53 @@ export default function ReviewPage() {
   const setDec = (itemId: string, patch: Partial<{ action: 'APPROVE' | 'REJECT'; note: string }>) =>
     setDecisions((prev) => ({ ...prev, [itemId]: { ...(prev[itemId] ?? { action: 'APPROVE' }), ...patch } }));
 
+  const pendingOptionReviews = (submission: Submission) =>
+    submission.items.flatMap((item) =>
+      (item.optionReviews ?? [])
+        .filter((review) => review.status === 'PENDING_L2')
+        .map((review) => ({ ...review, submissionItemId: item.id, item })),
+    );
+
   const setAll = (action: 'APPROVE' | 'REJECT') => {
     if (!active) return;
-    const targetStatus = level === 1 ? 'PENDING_L1' : 'PENDING_L2';
     const next: typeof decisions = { ...decisions };
-    active.items.forEach((it) => { if (it.status === targetStatus) next[it.id] = { action, note: next[it.id]?.note }; });
+    if (level === 1) {
+      active.items.forEach((it) => { if (it.status === 'PENDING_L1') next[it.id] = { action, note: next[it.id]?.note }; });
+    } else {
+      pendingOptionReviews(active).forEach((review) => { next[review.id] = { action, note: next[review.id]?.note }; });
+    }
     setDecisions(next);
   };
 
   const submit = async () => {
     if (!active) return;
-    const targetStatus = level === 1 ? 'PENDING_L1' : 'PENDING_L2';
-    const pendingItems = active.items.filter((it) => it.status === targetStatus);
-    const decs = pendingItems.map((it) => ({
-      submissionItemId: it.id,
-      action: decisions[it.id]?.action ?? 'APPROVE',
-      note: decisions[it.id]?.note,
-    }));
+    const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
+    const pendingOptions = pendingOptionReviews(active);
+    if (level === 1 && pendingItems.length === 0) { alert('当前没有待审申报项'); return; }
+    if (level === 2 && pendingOptions.length === 0) { alert('当前没有属于您部门的待审子项'); return; }
+    if (level === 1 && overallAction === 'REJECT' && !overallNote.trim()) { alert('整表驳回必须填写原因'); return; }
+    const decs = level === 1
+      ? pendingItems.map((it) => ({
+          submissionItemId: it.id,
+          action: decisions[it.id]?.action ?? 'APPROVE',
+          note: decisions[it.id]?.note,
+        }))
+      : pendingOptions.map((review) => ({
+          optionReviewId: review.id,
+          action: decisions[review.id]?.action ?? 'APPROVE',
+          note: decisions[review.id]?.note,
+        }));
     const missingNote = decs.find((d) => d.action === 'REJECT' && !d.note?.trim());
     if (missingNote) { alert('驳回的项必须填写原因'); return; }
     setBusy(true);
-    const r = await fetch('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ submissionId: active.id, decisions: decs }) });
+    const r = await fetch('/api/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: active.id, overallAction: level === 1 ? overallAction : undefined, overallNote: level === 1 ? overallNote : undefined, decisions: decs }),
+    });
     setBusy(false);
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
-    setDecisions({}); load();
+    setDecisions({}); setOverallAction('APPROVE'); setOverallNote(''); load();
   };
 
   const reviewTimeline = useMemo(() => {
@@ -139,6 +180,7 @@ export default function ReviewPage() {
       SUBMITTED: { label: '待审核', cls: 'bg-amber-50 text-amber-700' },
       L1_APPROVED: { label: '一审通过', cls: 'bg-blue-50 text-blue-700' },
       L2_APPROVED: { label: '终审通过', cls: 'bg-emerald-50 text-emerald-700' },
+      PRE_REVIEW_REJECTED: { label: '预审未通过', cls: 'bg-red-50 text-red-700' },
       REJECTED: { label: '已驳回', cls: 'bg-red-50 text-red-700' },
     };
     const m = map[s] ?? { label: s, cls: 'bg-slate-100 text-slate-600' };
@@ -159,7 +201,7 @@ export default function ReviewPage() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight">
             审核工作台
             <span className="ml-2 text-sm font-normal text-slate-400">
-              （{level === 2 ? '二级 / 总公司' : '一级 / 分公司'}）
+              （{level === 2 ? '二级 / 总公司' : '一级 / 工区'}）
             </span>
           </h1>
         </div>
@@ -226,9 +268,9 @@ export default function ReviewPage() {
             <>
               <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                 <div>
-                  <h2 className="font-semibold">{active.user.fullName}（{active.user.contact}）</h2>
-                  <p className="mt-0.5 text-xs text-slate-400">总分 {String(active.totalScore)}</p>
-                </div>
+	                  <h2 className="font-semibold">{active.user.fullName}（{active.user.contact}）</h2>
+	                  <p className="mt-0.5 text-xs text-slate-400">总分 {String(active.totalScore)}</p>
+	                </div>
                 <div className="flex gap-2">
                   <button onClick={() => setAll('APPROVE')} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-slate-50 cursor-pointer">
                     全部通过
@@ -237,14 +279,118 @@ export default function ReviewPage() {
                     全部驳回
                   </button>
                 </div>
-              </div>
+	              </div>
 
-              <ul className="mt-3 space-y-3">
-                {active.items.map((it) => {
+	              <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-5">
+	                <span>工区：{active.workAreaName || '—'}</span>
+	                <span>入职时间：{active.hireDate ? String(active.hireDate).slice(0, 10) : '—'}</span>
+	                <span>工作年限：{active.workYears ?? '—'}</span>
+	                <span>申报等级：{active.declarationLevelName || '—'}</span>
+	                <span>申报专业：{active.declarationSpecialtyName || '—'}</span>
+	              </div>
+
+                {level === 1 && active.preReviewPassed === false && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <p className="font-semibold">自动预审未通过，需一级审核员人工兜底判断。</p>
+                    {(active.preReviewMessages ?? []).length > 0 && (
+                      <ul className="mt-1 list-inside list-disc">
+                        {active.preReviewMessages!.map((msg, idx) => <li key={`${msg}-${idx}`}>{msg}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {level === 1 && (
+                  <div className={`mt-3 rounded-lg border p-3 text-sm ${
+                    overallAction === 'REJECT' ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'
+                  }`}>
+                    <div className="flex flex-wrap items-center gap-4">
+                      <span className="text-xs font-semibold text-slate-600">整表/表头结论</span>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                        <input type="radio" checked={overallAction === 'APPROVE'} onChange={() => setOverallAction('APPROVE')} />
+                        通过，进入二级子项审核
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                        <input type="radio" checked={overallAction === 'REJECT'} onChange={() => setOverallAction('REJECT')} />
+                        整表驳回
+                      </label>
+                    </div>
+                    {overallAction === 'REJECT' && (
+                      <input
+                        value={overallNote}
+                        onChange={(e) => setOverallNote(e.target.value)}
+                        placeholder="请填写整表/表头驳回原因（员工可见）"
+                        className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                      />
+                    )}
+                  </div>
+                )}
+
+	              <ul className="mt-3 space-y-3">
+                {level === 2 ? pendingOptionReviews(active).map((review) => {
+                  const d = decisions[review.id] ?? { action: 'APPROVE' as const };
+                  const it = review.item;
+                  return (
+                    <li key={review.id} className={`rounded-lg border p-4 ${
+                      d.action === 'REJECT' ? 'border-red-300 bg-red-50' : 'border-slate-200'
+                    }`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-sm">{it.item.title}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            待审子项：<b>{review.label}</b>
+                            {review.count != null ? ` × ${review.count} 次` : ''}
+                            {' · '}分值 {String(review.score)}
+                            {review.department?.name ? ` · ${review.department.name}` : ''}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            申报项选择：{it.selected.map((sel) => sel.count != null ? `${sel.label}×${sel.count}次` : `${sel.label}(${sel.score}分)`).join('、') || '—'}
+                          </p>
+                          {it.content && <p className="mt-1 text-xs text-slate-500">备注：{it.content}</p>}
+                          {it.attachments.length > 0 ? (
+                            <ul className="mt-1 space-y-0.5">
+                              {it.attachments.map((a) => (
+                                <li key={a.id}>
+                                  <button
+                                    type="button"
+                                    onClick={() => openAttachment(a.id)}
+                                    disabled={openingAttId === a.id}
+                                    className="flex items-center gap-1 text-xs font-medium text-primary-600 transition-colors hover:text-primary-700 disabled:opacity-50 cursor-pointer"
+                                  >
+                                    {openingAttId === a.id ? '打开中…' : a.filename}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : it.item.requireAttachment && (
+                            <p className="mt-1 text-xs text-red-600">未上传证明材料</p>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 gap-3">
+                          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                            <input type="radio" checked={d.action === 'APPROVE'} onChange={() => setDec(review.id, { action: 'APPROVE' })} className="text-primary-600" />
+                            通过
+                          </label>
+                          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                            <input type="radio" checked={d.action === 'REJECT'} onChange={() => setDec(review.id, { action: 'REJECT' })} className="text-red-600" />
+                            驳回
+                          </label>
+                        </div>
+                      </div>
+                      {d.action === 'REJECT' && (
+                        <input
+                          value={d.note ?? ''}
+                          onChange={(e) => setDec(review.id, { note: e.target.value })}
+                          placeholder="请填写驳回原因（员工可见）"
+                          className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                        />
+                      )}
+                    </li>
+                  );
+                }) : active.items.map((it) => {
                   const d = decisions[it.id] ?? { action: 'APPROVE' as const };
                   const isPreviouslyApproved =
-                    (level === 1 && (it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED')) ||
-                    (level === 2 && it.status === 'L2_APPROVED');
+                    it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED';
                   const statusLabel =
                     it.status === 'L1_APPROVED' ? '已通过（一级）' :
                     it.status === 'L2_APPROVED' ? '已通过（终审）' : '';
@@ -267,7 +413,7 @@ export default function ReviewPage() {
                             )}
                           </div>
                           <p className="mt-1 text-xs text-slate-500">
-                            选中：{it.selected.map((s) => `${s.label}(${s.score}分)`).join('、') || '—'}
+                            选中：{it.selected.map((sel) => sel.count != null ? `${sel.label}×${sel.count}次` : `${sel.label}(${sel.score}分)`).join('、') || '—'}
                             {' · '}得分 <b>{String(it.score)}</b>
                           </p>
                           {it.content && <p className="mt-1 text-xs text-slate-500">备注：{it.content}</p>}
@@ -293,7 +439,9 @@ export default function ReviewPage() {
                             <p className="mt-1 text-xs text-red-600">未上传证明材料</p>
                           )}
                         </div>
-                        {!isPreviouslyApproved ? (
+                        {isPreviouslyApproved ? (
+                          <span className="shrink-0 text-xs font-medium text-emerald-600">无需重复审核</span>
+                        ) : (
                           <div className="flex shrink-0 gap-3">
                             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
                               <input
@@ -314,11 +462,9 @@ export default function ReviewPage() {
                               驳回
                             </label>
                           </div>
-                        ) : (
-                          <span className="shrink-0 text-xs font-medium text-emerald-600">无需重复审核</span>
                         )}
                       </div>
-                      {d.action === 'REJECT' && (
+                      {!isPreviouslyApproved && d.action === 'REJECT' && (
                         <input
                           value={d.note ?? ''}
                           onChange={(e) => setDec(it.id, { note: e.target.value })}

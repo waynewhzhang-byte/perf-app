@@ -5,7 +5,12 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { getSession } from '@/lib/auth';
-import { putObject, removeObject } from '@/lib/minio';
+import {
+  isMinioConnectivityError,
+  MinioUnavailableError,
+  putObject,
+  removeObject,
+} from '@/lib/minio';
 import {
   sanitizeUploadFilename,
   UPLOAD_MAX_FILES_PER_ITEM,
@@ -183,6 +188,13 @@ export async function POST(req: Request) {
   } catch (e) {
     if (e instanceof EditableError) {
       return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    if (isMinioConnectivityError(e)) {
+      console.error('POST /api/attachments MinIO:', e);
+      return NextResponse.json(
+        { error: new MinioUnavailableError(e).message },
+        { status: 503 },
+      );
     }
     console.error('POST /api/attachments:', e);
     return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });

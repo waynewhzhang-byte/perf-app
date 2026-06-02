@@ -5,10 +5,12 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
+import { ensureScoreOptionIds } from '@/lib/form-options';
 
 // ---- Validation schemas ----
 
 const ScoreOptionSchema = z.object({
+  optionId: z.string().optional(),
   label: z.string().min(1, '分值档次名称不能为空'),
   score: z.number().min(-100, '分值超出范围').max(100, '分值超出范围'),
   description: z.string().optional(),
@@ -20,8 +22,13 @@ const ItemSchema = z.object({
   isRequired: z.boolean().default(false),
   requireAttachment: z.boolean().default(false),
   maxSelections: z.number().int().min(1).default(1),
+  scoreMode: z.enum(['TIERS', 'COUNTED']).default('TIERS'),
+  maxScore: z.number().min(0).max(1000).optional().nullable(),
   scoreOptions: z.array(ScoreOptionSchema).min(1, '申报项至少需要一个分值档次'),
   sortOrder: z.number().int().default(0),
+}).refine((it) => it.scoreMode !== 'COUNTED' || (it.maxScore != null && it.maxScore > 0), {
+  message: '按次数计分的申报项必须设置大于 0 的上限分',
+  path: ['maxScore'],
 });
 
 const SectionSchema = z.object({
@@ -43,6 +50,32 @@ const PublishSchema = z.object({
   status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']),
 });
 
+// 文字修订：仅改文案，不改结构与分值（用于已发布且有申报的模板纠错别字）
+const TextOptionSchema = z.object({
+  optionId: z.string().optional(),
+  label: z.string().min(1),
+  description: z.string().optional().nullable(),
+});
+const TextItemSchema = z.object({
+  id: z.string(),
+  title: z.string().min(1),
+  hint: z.string().optional().nullable(),
+  scoreOptions: z.array(TextOptionSchema),
+});
+const TextSectionSchema = z.object({
+  id: z.string(),
+  title: z.string().min(1),
+  description: z.string().optional().nullable(),
+  items: z.array(TextItemSchema),
+});
+const TextEditSchema = z.object({
+  id: z.string(),
+  mode: z.literal('text'),
+  title: z.string().min(1),
+  description: z.string().optional().nullable(),
+  sections: z.array(TextSectionSchema),
+});
+
 // ---- State-machine transition rules ----
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -50,6 +83,20 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   PUBLISHED: ['ARCHIVED'],
   ARCHIVED: [], // terminal — cannot transition to any other state
 };
+
+function normalizeSectionsForWrite(sections: z.infer<typeof SectionSchema>[]) {
+  return sections.map((s) => ({
+    title: s.title,
+    description: s.description,
+    sortOrder: s.sortOrder,
+    items: {
+      create: s.items.map((it) => ({
+        ...it,
+        scoreOptions: ensureScoreOptionIds(it.scoreOptions) as any,
+      })),
+    },
+  }));
+}
 
 // ---- Handlers ----
 
@@ -90,10 +137,7 @@ export async function POST(req: Request) {
       data: {
         year, title, description, createdBy: session.userId,
         sections: {
-          create: sections.map((s) => ({
-            title: s.title, description: s.description, sortOrder: s.sortOrder,
-            items: { create: s.items },
-          })),
+          create: normalizeSectionsForWrite(sections),
         },
       },
     });
@@ -117,6 +161,11 @@ export async function PUT(req: Request) {
     const id: string | undefined = body.id;
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ error: '缺少模板 ID' }, { status: 400 });
+    }
+
+    // 文字修订模式：仅改文案，允许已发布且有申报的模板执行（不影响已归档快照）
+    if (body.mode === 'text') {
+      return await handleTextEdit(body);
     }
 
     const parsed = TemplateSchema.safeParse(body);
@@ -152,10 +201,7 @@ export async function PUT(req: Request) {
       data: {
         year, title, description,
         sections: {
-          create: sections.map((s) => ({
-            title: s.title, description: s.description, sortOrder: s.sortOrder,
-            items: { create: s.items },
-          })),
+          create: normalizeSectionsForWrite(sections),
         },
       },
     });
@@ -168,6 +214,92 @@ export async function PUT(req: Request) {
     console.error('PUT /api/admin/templates:', e);
     return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
   }
+}
+
+/**
+ * Text-only revision: fix typos in titles/descriptions/hints/option labels
+ * WITHOUT touching structure (no add/remove of sections/items/options) or scores.
+ * Allowed on PUBLISHED templates even with submissions — archived snapshots in
+ * PerformanceRecord are independent copies and remain unchanged.
+ */
+async function handleTextEdit(body: unknown) {
+  const parsed = TextEditSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: '参数无效' }, { status: 400 });
+  }
+  const { id, title, description, sections } = parsed.data;
+
+  const existing = await prisma.formTemplate.findUnique({
+    where: { id },
+    include: { sections: { include: { items: true } } },
+  });
+  if (!existing) {
+    return NextResponse.json({ error: '模板不存在' }, { status: 404 });
+  }
+  if (existing.status === 'ARCHIVED') {
+    return NextResponse.json({ error: '已归档模板不可编辑' }, { status: 409 });
+  }
+
+  // 结构必须完全一致：章节、申报项、分值档次数量与 id 都不可变
+  const existingSectionIds = new Set(existing.sections.map((s) => s.id));
+  if (sections.length !== existing.sections.length ||
+      !sections.every((s) => existingSectionIds.has(s.id))) {
+    return NextResponse.json({ error: '文字修订不可增删章节，请使用「复制为草稿」调整结构' }, { status: 400 });
+  }
+  for (const sec of sections) {
+    const exSec = existing.sections.find((s) => s.id === sec.id)!;
+    const exItemIds = new Set(exSec.items.map((it) => it.id));
+    if (sec.items.length !== exSec.items.length ||
+        !sec.items.every((it) => exItemIds.has(it.id))) {
+      return NextResponse.json({ error: '文字修订不可增删申报项，请使用「复制为草稿」调整结构' }, { status: 400 });
+    }
+    for (const it of sec.items) {
+      const exItem = exSec.items.find((x) => x.id === it.id)!;
+      const exOptions = Array.isArray(exItem.scoreOptions) ? (exItem.scoreOptions as unknown[]) : [];
+      if (it.scoreOptions.length !== exOptions.length) {
+        return NextResponse.json({ error: '文字修订不可增删分值档次，请使用「复制为草稿」调整结构' }, { status: 400 });
+      }
+    }
+  }
+
+  // 逐条更新文字字段，分值保持原值
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.formTemplate.update({
+        where: { id },
+        data: { title, description: description ?? null },
+      });
+      for (const sec of sections) {
+        await tx.formSection.update({
+          where: { id: sec.id },
+          data: { title: sec.title, description: sec.description ?? null },
+        });
+        const exSec = existing.sections.find((s) => s.id === sec.id)!;
+        for (const it of sec.items) {
+          const exItem = exSec.items.find((x) => x.id === it.id)!;
+          const exOptions = (exItem.scoreOptions as Array<{ optionId?: string; score: number }>);
+          const mergedOptions = it.scoreOptions.map((o, idx) => ({
+            optionId: exOptions[idx]?.optionId,
+            label: o.label,
+            score: exOptions[idx]?.score ?? 0, // 保留原分值
+            description: o.description ?? undefined,
+          }));
+          await tx.formItem.update({
+            where: { id: it.id },
+            data: {
+              title: it.title,
+              hint: it.hint ?? null,
+              scoreOptions: mergedOptions as any,
+            },
+          });
+        }
+      }
+    });
+  } catch (e) {
+    console.error('PUT(text) /api/admin/templates:', e);
+    return NextResponse.json({ error: '文字修订失败' }, { status: 500 });
+  }
+  return NextResponse.json({ success: true, id });
 }
 
 /** Publish / archive status transitions with state-machine validation. */
@@ -186,7 +318,7 @@ export async function PATCH(req: Request) {
     // Read current status to validate the transition.
     const current = await prisma.formTemplate.findUnique({
       where: { id },
-      select: { status: true, publishedAt: true },
+      include: { sections: { include: { items: { include: { optionReviewers: true } } } } },
     });
     if (!current) {
       return NextResponse.json({ error: '模板不存在' }, { status: 404 });
@@ -197,6 +329,28 @@ export async function PATCH(req: Request) {
       return NextResponse.json({
         error: `不允许从 ${current.status} 转换为 ${newStatus}`,
       }, { status: 409 });
+    }
+
+    if (newStatus === 'PUBLISHED') {
+      const missing = current.sections.flatMap((section) =>
+        section.items.flatMap((item) => {
+          const assigned = new Set(item.optionReviewers.map((reviewer) => reviewer.optionId));
+          const options = Array.isArray(item.scoreOptions) ? item.scoreOptions as Array<{ optionId?: string; label?: string }> : [];
+          return options
+            .map((option, index) => ({
+              label: option.label || `第 ${index + 1} 个子项`,
+              optionId: option.optionId || `${item.id}:${index}`,
+            }))
+            .filter((option) => !assigned.has(option.optionId))
+            .map((option) => `${section.title} / ${item.title} / ${option.label}`);
+        }),
+      );
+      if (missing.length > 0) {
+        return NextResponse.json({
+          error: `以下申报子项尚未配置二级审核部门：${missing.join('、')}`,
+          code: 'MISSING_OPTION_REVIEWERS',
+        }, { status: 409 });
+      }
     }
 
     // Preserve original publish timestamp on archive.

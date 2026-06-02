@@ -81,13 +81,14 @@ export async function GET(req: Request) {
     const stats = {
       total: submissions.length,
       draft: submissions.filter((s) => s.status === 'DRAFT').length,
+      preReviewRejected: submissions.filter((s) => s.status === 'PRE_REVIEW_REJECTED').length,
       submitted: submissions.filter((s) => s.status === 'SUBMITTED').length,
       l1Approved: submissions.filter((s) => s.status === 'L1_APPROVED').length,
       l2Approved: submissions.filter((s) => s.status === 'L2_APPROVED').length,
       rejected: submissions.filter((s) => s.status === 'REJECTED').length,
     };
 
-    // 获取所有分公司列表供筛选
+    // 获取所有工区列表供筛选
     const branches = await prisma.branch.findMany({
       select: { id: true, name: true },
       orderBy: { createdAt: 'asc' },

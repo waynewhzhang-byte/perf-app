@@ -74,15 +74,23 @@ DATABASE_URL="postgresql://perf:perf@localhost:5432/perf?schema=public"
 
 ### 3.2 MinIO（附件存储）
 
-`.env` 中（与 MinIO 启动日志中的 **API** 地址一致，默认账号 `minioadmin` / `minioadmin`）：
+`.env` 中（默认账号 `minioadmin` / `minioadmin`）：
 ```
-MINIO_ENDPOINT=localhost
+# 应用进程连接 MinIO（上传、导出 ZIP、bucket 检查）
+MINIO_ENDPOINT=127.0.0.1
 MINIO_PORT=9000
 MINIO_USE_SSL=false
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 MINIO_BUCKET=perf-attachments
+
+# 浏览器打开附件时的预签名 URL（员工可访问的 IP 或域名；不配则与 MINIO_* 相同）
+# MINIO_PUBLIC_ENDPOINT=your-server-public-ip-or-domain
+# MINIO_PUBLIC_PORT=9000
+# MINIO_PUBLIC_USE_SSL=false
 ```
+
+本地开发若 MinIO 只监听 `localhost`，`MINIO_ENDPOINT` 填 `127.0.0.1` 或 `localhost` 均可。
 
 **两种启动方式（二选一）：**
 
@@ -175,6 +183,26 @@ sendNotice(target: string, subject: string, body: string)
 - MinIO：生产用分布式模式 + 异地备份
 - Next.js：`pnpm build && pnpm start`（或 Docker 化）
 - 日志：建议接入 Loki / ELK；审计日志已落库 `ReviewLog`
+
+### MinIO 与 Next.js 同机部署（避免附件 ETIMEDOUT）
+
+Next.js 与 MinIO 在同一台云主机时，**切勿**将 `MINIO_ENDPOINT` 设为该机公网 IP。多数云厂商不支持本机经公网 IP 回连（hairpin），会出现 `connect ETIMEDOUT`，而 `ss` 仍显示 9000 在监听。
+
+在服务器上自检：
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9000/minio/health/live
+curl -sS -o /dev/null -w "%{http_code}\n" --connect-timeout 5 http://YOUR_PUBLIC_IP:9000/minio/health/live
+```
+
+推荐配置：
+
+| 变量 | 值 | 用途 |
+|------|-----|------|
+| `MINIO_ENDPOINT` | `127.0.0.1` | 应用服务端上传、下载、导出 |
+| `MINIO_PUBLIC_ENDPOINT` | 公网 IP 或 `minio.example.com` | 仅用于生成员工浏览器可打开的预签名 URL |
+
+修改 `.env` 后须**重启** Next.js 进程。若通过 Nginx 以 HTTPS 暴露 MinIO，将 `MINIO_PUBLIC_*` 设为域名并设 `MINIO_PUBLIC_USE_SSL=true`。
 
 ---
 

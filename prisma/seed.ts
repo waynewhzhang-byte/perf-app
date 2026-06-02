@@ -15,13 +15,18 @@ async function main() {
   // ============================================================
   console.log('🧹 清理已有数据...');
   await prisma.reviewLog.deleteMany();
+  await prisma.submissionOptionReview.deleteMany();
   await prisma.attachment.deleteMany();
   await prisma.submissionItem.deleteMany();
   await prisma.submission.deleteMany();
   await prisma.performanceRecord.deleteMany();
+  await prisma.formOptionReviewer.deleteMany();
   await prisma.formItem.deleteMany();
   await prisma.formSection.deleteMany();
   await prisma.formTemplate.deleteMany();
+  await prisma.autoReviewRule.deleteMany();
+  await prisma.declarationSpecialty.deleteMany();
+  await prisma.declarationLevel.deleteMany();
   await prisma.userRole.deleteMany();
   await prisma.user.deleteMany();
   await prisma.employeeLevel.deleteMany();
@@ -176,6 +181,32 @@ async function main() {
     levels[name] = lv.id;
   }
   console.log(`  ✓ ${levelNames.length} 个员工等级`);
+
+  const declarationLevelNames = ['1级', '2级', '3级'];
+  const declarationLevels: Record<string, string> = {};
+  for (const [idx, name] of declarationLevelNames.entries()) {
+    const level = await prisma.declarationLevel.create({ data: { name, sortOrder: idx } });
+    declarationLevels[name] = level.id;
+  }
+  console.log(`  ✓ ${declarationLevelNames.length} 个能级评价申报等级`);
+
+  const declarationSpecialtyNames = ['输电运检', '变电运检', '继电保护', '调度运行', '营销服务'];
+  for (const [idx, name] of declarationSpecialtyNames.entries()) {
+    await prisma.declarationSpecialty.create({ data: { name, sortOrder: idx } });
+  }
+  console.log(`  ✓ ${declarationSpecialtyNames.length} 个能级评价申报专业`);
+
+  await prisma.autoReviewRule.create({
+    data: {
+      name: '工作年限满5年未满8年只能申报2级',
+      enabled: true,
+      minWorkYears: 5,
+      maxWorkYears: 8,
+      allowedLevelIds: [declarationLevels['2级']],
+      rejectMessage: '工作年限满5年未满8年时，只能申报2级；如需申报其他等级，请确认入职时间或调整申报等级。',
+    },
+  });
+  console.log('  ✓ 自动预审示例规则：5年以上8年以下只能申报2级');
   console.log('✅ 组织架构创建完成\n');
 
   // ============================================================
@@ -215,6 +246,7 @@ async function main() {
         fullName: u.fullName,
         employeeNo: u.employeeNo,
         branchId: branches['公司总部'],
+        departmentId: departments['公司总部']['人力资源部'],
         positionId: positions['安全监察专责'],
         jobTypeId: jobTypes['安全监察'],
         employeeLevelId: levels['高级工程师'],
@@ -462,13 +494,32 @@ async function main() {
       },
     });
     for (let i = 0; i < sec.items.length; i++) {
-      await prisma.formItem.create({
+      const itemSeed = sec.items[i];
+      const formItem = await prisma.formItem.create({
         data: {
           sectionId: formSection.id,
-          ...sec.items[i],
+          ...itemSeed,
+          scoreOptions: [],
           sortOrder: i,
         },
       });
+      const scoreOptions = itemSeed.scoreOptions.map((option, index) => ({
+        ...option,
+        optionId: `${formItem.id}:${index}`,
+      }));
+      await prisma.formItem.update({
+        where: { id: formItem.id },
+        data: { scoreOptions },
+      });
+      for (const option of scoreOptions) {
+        await prisma.formOptionReviewer.create({
+          data: {
+            itemId: formItem.id,
+            optionId: option.optionId,
+            departmentId: departments['公司总部']['人力资源部'],
+          },
+        });
+      }
     }
   }
   console.log(`  ✓ 模板1: "${template1.title}" (${sections.length} 个章节)`);
@@ -543,13 +594,32 @@ async function main() {
       },
     });
     for (let i = 0; i < sec.items.length; i++) {
-      await prisma.formItem.create({
+      const itemSeed = sec.items[i];
+      const formItem = await prisma.formItem.create({
         data: {
           sectionId: formSection.id,
-          ...sec.items[i],
+          ...itemSeed,
+          scoreOptions: [],
           sortOrder: i,
         },
       });
+      const scoreOptions = itemSeed.scoreOptions.map((option, index) => ({
+        ...option,
+        optionId: `${formItem.id}:${index}`,
+      }));
+      await prisma.formItem.update({
+        where: { id: formItem.id },
+        data: { scoreOptions },
+      });
+      for (const option of scoreOptions) {
+        await prisma.formOptionReviewer.create({
+          data: {
+            itemId: formItem.id,
+            optionId: option.optionId,
+            departmentId: departments['公司总部']['人力资源部'],
+          },
+        });
+      }
     }
   }
   console.log(`  ✓ 模板2: "${template2.title}" (${mgmtSections.length} 个章节)`);

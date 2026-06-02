@@ -1,43 +1,9 @@
-// 按分公司+年度打包 ZIP（流式）
+// 按工区+年度打包 ZIP（流式）
 import archiver from 'archiver';
 import { PassThrough } from 'stream';
 import { prisma } from './prisma';
 import { getObjectStream } from './minio';
-
-/**
- * Sanitize a value for safe CSV output (RFC 4180).
- * - Wraps fields containing comma, double-quote, or newline in double-quotes.
- * - Doubles any embedded double-quotes (RFC 4180 escaping).
- * - Prefixes formula-trigger characters (=, +, -, @) with a single quote
- *   to prevent CSV injection when opened in Excel or Google Sheets.
- */
-function csvField(value: string): string {
-  let sanitized = value;
-  // Prevent CSV formula injection (OWASP: CSV Injection)
-  if (/^[=+\-@]/.test(sanitized)) {
-    sanitized = `'${sanitized}`;
-  }
-  // RFC 4180: wrap in double-quotes if field contains comma, double-quote, or newline
-  if (/[",\n\r]/.test(sanitized)) {
-    sanitized = `"${sanitized.replace(/"/g, '""')}"`;
-  }
-  return sanitized;
-}
-
-/**
- * Sanitize a path segment for safe use in ZIP entry names.
- * Replaces characters invalid on Windows and blocks path traversal.
- * Falls back to '_unnamed_' if the segment collapses to empty.
- */
-function safeSegment(segment: string): string {
-  const cleaned = segment
-    .replace(/[/\\:*?"<>|]/g, '_') // Windows-invalid chars and path separators
-    .replace(/\.\./g, '_')          // path traversal
-    .trim();
-  return cleaned || '_unnamed_';
-}
-
-const BOM = '﻿'; // UTF-8 BOM for Excel CJK compatibility on Windows
+import { csvField, safeSegment, BOM } from './csv-utils';
 
 export async function buildBranchYearZip(branchId: string, year: number) {
   const stream = new PassThrough();
@@ -101,7 +67,7 @@ export async function buildBranchYearZip(branchId: string, year: number) {
       [
         '绩效申报数据导出',
         '================',
-        `分公司: ${branchId}`,
+        `工区: ${branchId}`,
         `年度: ${year}`,
         `导出时间: ${new Date().toISOString()}`,
         '',

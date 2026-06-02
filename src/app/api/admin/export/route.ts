@@ -1,4 +1,4 @@
-// 管理员：按分公司+年度 导出 ZIP
+// 管理员：按工区+年度 导出 ZIP
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';

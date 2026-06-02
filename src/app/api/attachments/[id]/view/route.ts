@@ -7,7 +7,11 @@ import {
   loadAttachmentForView,
 } from '@/lib/attachment-access';
 import { getSession, getUserRoles } from '@/lib/auth';
-import { presignedGetUrl } from '@/lib/minio';
+import {
+  isMinioConnectivityError,
+  MinioUnavailableError,
+  presignedGetUrl,
+} from '@/lib/minio';
 
 const VIEW_URL_EXPIRY_SEC = 600;
 
@@ -32,10 +36,22 @@ export async function GET(
   }
 
   const mimeType = att.mimeType || 'application/octet-stream';
-  const viewUrl = await presignedGetUrl(att.storageKey, VIEW_URL_EXPIRY_SEC, {
-    'response-content-disposition': inlineContentDisposition(att.filename),
-    'response-content-type': mimeType,
-  });
+  let viewUrl: string;
+  try {
+    viewUrl = await presignedGetUrl(att.storageKey, VIEW_URL_EXPIRY_SEC, {
+      'response-content-disposition': inlineContentDisposition(att.filename),
+      'response-content-type': mimeType,
+    });
+  } catch (e) {
+    if (isMinioConnectivityError(e)) {
+      console.error('GET /api/attachments/view MinIO:', e);
+      return NextResponse.json(
+        { error: new MinioUnavailableError(e).message },
+        { status: 503 },
+      );
+    }
+    throw e;
+  }
 
   const redirect = new URL(req.url).searchParams.get('redirect') === '1';
   if (redirect) {

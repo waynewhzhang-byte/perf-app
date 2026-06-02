@@ -39,6 +39,52 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  const downloadFile = useCallback(async (url: string, fallbackName: string) => {
+    setError(null);
+    try {
+      const r = await fetch(url);
+      if (r.status === 401) { window.location.href = '/admin/login'; return; }
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setError(d.error || `导出失败（${r.status}）`);
+        return;
+      }
+      const blob = await r.blob();
+      const disposition = r.headers.get('Content-Disposition');
+      const filenameRe = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i;
+      const match = disposition ? filenameRe.exec(disposition) : null;
+      const filename = match ? decodeURIComponent(match[1]) : fallbackName;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      setError('导出请求失败，请稍后重试');
+    }
+  }, []);
+
+  const exportSummary = useCallback(async () => {
+    if (!selectedTpl) return;
+    setExporting('csv');
+    await downloadFile(`/api/admin/reports/export?format=csv&templateId=${encodeURIComponent(selectedTpl)}`, 'summary.csv');
+    setExporting(null);
+  }, [selectedTpl, downloadFile]);
+
+  const exportZip = useCallback(async () => {
+    if (!selectedTpl) return;
+    setExporting('zip');
+    await downloadFile(`/api/admin/reports/export?format=zip&templateId=${encodeURIComponent(selectedTpl)}`, 'export.zip');
+    setExporting(null);
+  }, [selectedTpl, downloadFile]);
+
+  const exportEmployee = useCallback(async (submissionId: string, name: string) => {
+    setExporting(submissionId);
+    await downloadFile(`/api/admin/reports/export?format=employee&submissionId=${encodeURIComponent(submissionId)}`, `${name}.zip`);
+    setExporting(null);
+  }, [downloadFile]);
 
   const load = useCallback(async (tplId?: string) => {
     setLoading(true); setError(null);
@@ -131,6 +177,22 @@ export default function ReportsPage() {
         <button onClick={() => load(selectedTpl)} disabled={loading} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
           {loading ? '加载中…' : '刷新'}
         </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={exportSummary}
+            disabled={!selectedTpl || exporting !== null}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {exporting === 'csv' ? '导出中…' : '导出汇总表 (CSV)'}
+          </button>
+          <button
+            onClick={exportZip}
+            disabled={!selectedTpl || exporting !== null}
+            className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+          >
+            {exporting === 'zip' ? '打包中…' : '导出完整档案 (ZIP)'}
+          </button>
+        </div>
       </div>
 
       {loading && !active && <p className="py-12 text-center text-sm text-slate-400">加载中…</p>}
@@ -219,7 +281,7 @@ export default function ReportsPage() {
                     <tr className="border-b bg-slate-50 text-xs font-semibold text-slate-500">
                       <th className="w-8 py-2.5 pl-5" />
                       <th className="py-2.5 pr-3">员工</th>
-                      <th className="py-2.5 pr-3">分公司</th>
+                      <th className="py-2.5 pr-3">工区</th>
                       <th className="py-2.5 pr-3">部门</th>
                       <th className="py-2.5 pr-3 text-right">总分</th>
                       <th className="w-20 py-2.5 pr-5 text-right">申报项</th>
@@ -285,6 +347,15 @@ export default function ReportsPage() {
                                   ))}
                                 </tbody>
                               </table>
+                              <div className="mt-3 flex justify-end">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); exportEmployee(rec.submissionId, `${rec.employeeNo || ''}-${rec.userName}`); }}
+                                  disabled={exporting !== null}
+                                  className="rounded-lg border border-primary-300 bg-white px-3 py-1.5 text-xs font-medium text-primary-700 hover:bg-primary-50 disabled:opacity-50"
+                                >
+                                  {exporting === rec.submissionId ? '导出中…' : '导出该员工档案 (ZIP)'}
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         )}

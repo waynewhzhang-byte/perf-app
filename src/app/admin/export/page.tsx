@@ -1,5 +1,5 @@
 'use client';
-// 按分公司 + 年度导出归档 ZIP
+// 按工区 + 年度导出归档 ZIP
 import { useEffect, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
 
@@ -24,13 +24,13 @@ export default function ExportPage() {
         setBranches(list);
         setBranchId((prev) => prev || list[0]?.id || '');
       })
-      .catch(() => setMsg({ type: 'error', text: '无法加载分公司列表' }));
+      .catch(() => setMsg({ type: 'error', text: '无法加载工区列表' }));
   }, []);
 
   async function download() {
     setMsg(null);
     if (!branchId) {
-      setMsg({ type: 'error', text: '请选择分公司' });
+      setMsg({ type: 'error', text: '请选择工区' });
       return;
     }
     if (!Number.isFinite(year) || year < 2000 || year > 2100) {
@@ -76,7 +76,7 @@ export default function ExportPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">数据导出</h1>
           <p className="mt-1 text-sm text-slate-500">
-            按分公司与年度打包下载：manifest.csv、每人 archive.json 及附件
+            按工区与年度打包下载：manifest.csv、每人 archive.json 及附件
           </p>
         </div>
         <AdminPageActions />
@@ -84,7 +84,7 @@ export default function ExportPage() {
 
       <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
         <label className="block text-sm">
-          <span className="font-medium text-slate-600">分公司</span>
+          <span className="font-medium text-slate-600">工区</span>
           <select
             value={branchId}
             onChange={(e) => setBranchId(e.target.value)}
@@ -92,7 +92,7 @@ export default function ExportPage() {
             className={inputClass}
           >
             {branches.length === 0 ? (
-              <option value="">请先在组织架构中添加分公司</option>
+              <option value="">请先在组织架构中添加工区</option>
             ) : (
               branches.map((b) => (
                 <option key={b.id} value={b.id}>

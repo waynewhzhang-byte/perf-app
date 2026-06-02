@@ -1,6 +1,7 @@
 'use client';
 
 export interface ScoreOpt {
+  optionId?: string;
   label: string;
   score: number;
   description?: string;
@@ -12,6 +13,8 @@ export interface PreviewItem {
   isRequired: boolean;
   requireAttachment: boolean;
   maxSelections: number;
+  scoreMode?: 'TIERS' | 'COUNTED';
+  maxScore?: number | null;
   scoreOptions: ScoreOpt[];
   sortOrder?: number;
 }
@@ -44,6 +47,9 @@ function totalMaxScore(sections: PreviewSection[]) {
     (sum, sec) =>
       sum +
       sec.items.reduce((is, it) => {
+        if (it.scoreMode === 'COUNTED') {
+          return is + Number(it.maxScore ?? 0); // 封顶分即理论满分（Decimal 可能为字符串）
+        }
         const scores = it.scoreOptions.map((o) => o.score);
         if (scores.length === 0) return is;
         const maxPerItem =
@@ -88,19 +94,23 @@ export function TemplatePreviewBody({ template }: { template: PreviewTemplate })
                     {it.isRequired && <span className="ml-1 text-red-500">*</span>}
                   </p>
                   <span className="shrink-0 text-xs text-slate-500">
-                    {it.maxSelections > 1 ? `多选 ≤${it.maxSelections}` : '单选'}
+                    {it.scoreMode === 'COUNTED'
+                      ? `按次数计分 · 上限 ${it.maxScore ?? 0} 分`
+                      : it.maxSelections > 1 ? `多选 ≤${it.maxSelections}` : '单选'}
                   </span>
                 </div>
                 {it.hint && <p className="mt-1 text-xs text-slate-500">{it.hint}</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {it.scoreOptions.map((o, oi) => (
                     <div
-                      key={oi}
+                      key={`${o.label}-${oi}`}
                       className="rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium">{o.label || '（未命名档次）'}</span>
-                        <span className="font-bold">{o.score} 分</span>
+                        <span className="font-medium">{o.label || '（未命名）'}</span>
+                        <span className="font-bold">
+                          {o.score} 分{it.scoreMode === 'COUNTED' ? ' / 次' : ''}
+                        </span>
                       </div>
                       {o.description && (
                         <p className="mt-1 text-xs text-slate-400">{o.description}</p>

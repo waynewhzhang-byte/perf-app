@@ -95,10 +95,11 @@ export default async function EmployeeHome() {
               SUBMITTED: { label: '待审核', className: 'bg-blue-50 text-blue-700' },
               L1_APPROVED: { label: '一审通过', className: 'bg-emerald-50 text-emerald-700' },
               L2_APPROVED: { label: '终审通过', className: 'bg-emerald-100 text-emerald-800' },
+              PRE_REVIEW_REJECTED: { label: '预审未通过', className: 'bg-red-50 text-red-700' },
               REJECTED: { label: '已驳回', className: 'bg-amber-50 text-amber-700' },
             };
             const sc = statusConfig[s.status] ?? { label: s.status, className: 'bg-slate-100 text-slate-600' };
-            const isRejected = s.status === 'REJECTED';
+            const isRejected = s.status === 'REJECTED' || s.status === 'PRE_REVIEW_REJECTED';
             return (
               <li key={s.id} className="flex items-center justify-between gap-4 px-5 py-4">
                 <div className="min-w-0">

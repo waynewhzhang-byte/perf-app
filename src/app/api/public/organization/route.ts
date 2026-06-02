@@ -5,12 +5,14 @@ import { prisma } from '@/lib/prisma';
 
 export async function GET() {
   try {
-    const [branches, departments, positions, jobTypes, employeeLevels] = await Promise.all([
+    const [branches, departments, positions, jobTypes, employeeLevels, declarationLevels, declarationSpecialties] = await Promise.all([
       prisma.branch.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, code: true } }),
       prisma.department.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, branchId: true } }),
       prisma.position.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
       prisma.jobType.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
       prisma.employeeLevel.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
+      prisma.declarationLevel.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }], select: { id: true, name: true } }),
+      prisma.declarationSpecialty.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }], select: { id: true, name: true } }),
     ]);
     return NextResponse.json({
       success: true,
@@ -19,6 +21,8 @@ export async function GET() {
       positions,
       jobTypes,
       employeeLevels,
+      declarationLevels,
+      declarationSpecialties,
     });
   } catch (e) {
     console.error('GET /api/public/organization:', e);

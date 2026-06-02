@@ -78,9 +78,10 @@ model User {
   jobType        JobType?        @relation(fields: [jobTypeId], references: [id])
   employeeLevel  EmployeeLevel?  @relation(fields: [employeeLevelId], references: [id])
 
-  roles       UserRole[]
-  submissions Submission[]
-  records     PerformanceRecord[]
+  roles            UserRole[]
+  submissions      Submission[]
+  records          PerformanceRecord[]
+  sectionReviews   SectionReviewer[]
 }
 
 enum AppRole {
@@ -117,6 +118,36 @@ model Branch {
   submissions Submission[]
 }
 
+model DeclarationLevel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  submissions Submission[]
+}
+
+model DeclarationSpecialty {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  submissions Submission[]
+}
+
+model AutoReviewRule {
+  id              String   @id @default(cuid())
+  name            String
+  enabled         Boolean  @default(true)
+  minWorkYears    Int?
+  maxWorkYears    Int?
+  allowedLevelIds Json     @default("[]")
+  rejectMessage   String   @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
 model Department {
   id        String   @id @default(cuid())
   branchId  String
@@ -125,6 +156,8 @@ model Department {
 
   branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
   users  User[]
+  optionReviewers FormOptionReviewer[]
+  submissionOptionReviews SubmissionOptionReview[]
 }
 
 model Position {
@@ -177,29 +210,70 @@ model FormSection {
   description String?
   sortOrder  Int          @default(0)
 
-  template FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  items    FormItem[]
+  template  FormTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items     FormItem[]
+  reviewers SectionReviewer[]
+}
+
+// 二级审核章节分配：不同二级审核员负责不同章节（不交叉），全部章节审完则二级完成
+model SectionReviewer {
+  id         String   @id @default(cuid())
+  sectionId  String
+  reviewerId String
+  createdAt  DateTime @default(now())
+
+  section  FormSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  reviewer User        @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, reviewerId])
+  @@index([reviewerId])
+}
+
+// 申报项计分方式
+enum ScoreMode {
+  TIERS     // 档次单选/多选：选中即得对应分值（原有行为）
+  COUNTED   // 子项按次数计分：每个子项单价分值 × 次数，汇总后封顶 maxScore
 }
 
 model FormItem {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   sectionId         String
   title             String
   hint              String?
-  isRequired        Boolean  @default(false)
-  requireAttachment Boolean  @default(false)
-  maxSelections     Int      @default(1)
-  // [{ label: "省级刊物发表", score: 5 }, ...]
-  scoreOptions      Json     @default("[]")
-  sortOrder         Int      @default(0)
+  isRequired        Boolean   @default(false)
+  requireAttachment Boolean   @default(false)
+  maxSelections     Int       @default(1)
+  scoreMode         ScoreMode @default(TIERS)
+  // COUNTED 模式下该申报项的封顶分（汇总超过则按此计）；TIERS 模式可选
+  maxScore          Decimal?  @db.Decimal(10, 2)
+  // TIERS: [{ label, score, description }]
+  // COUNTED: [{ label, unitScore, description }]
+  scoreOptions      Json      @default("[]")
+  sortOrder         Int       @default(0)
 
   section          FormSection       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   submissionItems  SubmissionItem[]
+  optionReviewers  FormOptionReviewer[]
+}
+
+model FormOptionReviewer {
+  id           String   @id @default(cuid())
+  itemId       String
+  optionId     String
+  departmentId String
+  createdAt    DateTime @default(now())
+
+  item       FormItem   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id])
+
+  @@unique([itemId, optionId])
+  @@index([departmentId])
 }
 
 // ========== 申报 ==========
 enum SubmissionStatus {
   DRAFT
+  PRE_REVIEW_REJECTED // 自动预审未通过，员工修改固定表头后重提
   SUBMITTED
   L1_APPROVED
   L2_APPROVED         // 终审通过 → 生成 PerformanceRecord
@@ -220,11 +294,27 @@ enum ReviewAction {
   REJECT
 }
 
+enum OptionReviewStatus {
+  PENDING_L2
+  L2_APPROVED
+  REJECTED
+}
+
 model Submission {
   id          String           @id @default(cuid())
   userId      String
   templateId  String
   branchId    String?
+  workAreaName String?
+  hireDate    DateTime?
+  workYears   Int?
+  declarationLevelId String?
+  declarationLevelName String?
+  declarationSpecialtyId String?
+  declarationSpecialtyName String?
+  preReviewPassed Boolean?
+  preReviewMessages Json?
+  preReviewMatchedRules Json?
   status      SubmissionStatus @default(DRAFT)
   totalScore  Decimal          @default(0) @db.Decimal(10, 2)
   submittedAt DateTime?
@@ -238,6 +328,8 @@ model Submission {
   user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   template FormTemplate     @relation(fields: [templateId], references: [id])
   branch   Branch?          @relation(fields: [branchId], references: [id])
+  declarationLevel DeclarationLevel? @relation(fields: [declarationLevelId], references: [id])
+  declarationSpecialty DeclarationSpecialty? @relation(fields: [declarationSpecialtyId], references: [id])
   items    SubmissionItem[]
   logs     ReviewLog[]
 
@@ -263,8 +355,31 @@ model SubmissionItem {
   submission  Submission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
   item        FormItem     @relation(fields: [itemId], references: [id])
   attachments Attachment[]
+  optionReviews SubmissionOptionReview[]
 
   @@unique([submissionId, itemId])
+}
+
+model SubmissionOptionReview {
+  id               String             @id @default(cuid())
+  submissionItemId String
+  optionId         String
+  label            String
+  score            Decimal            @db.Decimal(10, 2)
+  count            Int?
+  departmentId     String
+  status           OptionReviewStatus @default(PENDING_L2)
+  rejectReason     String?            @db.Text
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  submissionItem SubmissionItem @relation(fields: [submissionItemId], references: [id], onDelete: Cascade)
+  department     Department     @relation(fields: [departmentId], references: [id])
+
+  @@unique([submissionItemId, optionId])
+  @@index([departmentId, status])
 }
 
 model Attachment {

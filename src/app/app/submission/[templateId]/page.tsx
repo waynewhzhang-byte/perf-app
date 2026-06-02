@@ -6,29 +6,59 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 
-interface ScoreOpt { label: string; score: number; description?: string }
+interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
   id: string; title: string; hint?: string;
   isRequired: boolean; requireAttachment: boolean; maxSelections: number;
+  scoreMode?: 'TIERS' | 'COUNTED';
+  maxScore?: number | null;
   scoreOptions: ScoreOpt[];
 }
 interface Section { id: string; title: string; description?: string; items: FormItem[] }
 interface Template { id: string; title: string; year: number; description?: string; sections: Section[] }
+interface SelectOption { id: string; name: string }
+interface HeaderOptions {
+  branches: SelectOption[];
+  declarationLevels: SelectOption[];
+  declarationSpecialties: SelectOption[];
+}
 
 interface Attachment { id: string; filename: string }
+interface Selected { index: number; optionId?: string; label: string; score: number; count?: number }
+interface OptionReview { optionId: string; status: string; label: string; rejectReason?: string | null }
 interface SubItem {
   id?: string; itemId: string;
-  selected: { index: number; label: string; score: number }[];
+  selected: Selected[];
   content?: string;
   status?: string; rejectReason?: string | null;
   attachments?: Attachment[];
+  optionReviews?: OptionReview[];
+}
+
+// 计算单个申报项得分：COUNTED 模式按 单价×次数 汇总并封顶，TIERS 模式累加选中分值
+function computeItemScore(it: FormItem, sel: Selected[]): number {
+  if (it.scoreMode === 'COUNTED') {
+    const raw = sel.reduce((sum, s) => sum + s.score * (s.count ?? 0), 0);
+    const cap = it.maxScore == null ? Infinity : Number(it.maxScore);
+    return Math.min(raw, cap);
+  }
+  return sel.reduce((sum, s) => sum + s.score, 0);
 }
 
 export default function SubmissionPage() {
   const { templateId } = useParams<{ templateId: string }>();
   const router = useRouter();
   const [tpl, setTpl] = useState<Template | null>(null);
-  const [sub, setSub] = useState<{ id?: string; status?: string } | null>(null);
+  const [sub, setSub] = useState<{
+    id?: string; status?: string; preReviewMessages?: string[] | null;
+  } | null>(null);
+  const [options, setOptions] = useState<HeaderOptions>({ branches: [], declarationLevels: [], declarationSpecialties: [] });
+  const [header, setHeader] = useState({
+    workAreaId: '',
+    hireDate: '',
+    declarationLevelId: '',
+    declarationSpecialtyId: '',
+  });
   const [answers, setAnswers] = useState<Record<string, SubItem>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -39,6 +69,13 @@ export default function SubmissionPage() {
         fetch(`/api/templates/${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json()),
       ]);
+      const orgRes = await fetch('/api/public/organization').then((r) => r.json()).catch(() => ({}));
+      const nextOptions: HeaderOptions = {
+        branches: orgRes.branches ?? [],
+        declarationLevels: orgRes.declarationLevels ?? [],
+        declarationSpecialties: orgRes.declarationSpecialties ?? [],
+      };
+      setOptions(nextOptions);
       const template: Template | null = tplRes?.template ?? null;
       let currentTemplate: Template | null = template;
       const existing = subRes.submissions?.[0];
@@ -52,6 +89,7 @@ export default function SubmissionPage() {
               id: si.item.id, title: si.item.title, hint: si.item.hint,
               isRequired: si.item.isRequired, requireAttachment: si.item.requireAttachment,
               maxSelections: si.item.maxSelections, scoreOptions: si.item.scoreOptions,
+              scoreMode: si.item.scoreMode, maxScore: si.item.maxScore,
             })),
           }],
         };
@@ -59,7 +97,17 @@ export default function SubmissionPage() {
 
       if (!currentTemplate) { setLoading(false); return; }
       setTpl(currentTemplate);
-      setSub(existing ? { id: existing.id, status: existing.status } : null);
+      setSub(existing ? {
+        id: existing.id,
+        status: existing.status,
+        preReviewMessages: Array.isArray(existing.preReviewMessages) ? existing.preReviewMessages : null,
+      } : null);
+      setHeader({
+        workAreaId: existing?.branchId ?? nextOptions.branches[0]?.id ?? '',
+        hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
+        declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
+        declarationSpecialtyId: existing?.declarationSpecialtyId ?? nextOptions.declarationSpecialties[0]?.id ?? '',
+      });
 
       const map: Record<string, SubItem> = {};
       currentTemplate.sections.forEach((s) => s.items.forEach((it) => {
@@ -67,6 +115,7 @@ export default function SubmissionPage() {
         map[it.id] = ex ? {
           id: ex.id, itemId: it.id, selected: ex.selected ?? [], content: ex.content ?? '',
           status: ex.status, rejectReason: ex.rejectReason, attachments: ex.attachments,
+          optionReviews: ex.optionReviews ?? [],
         } : { itemId: it.id, selected: [], content: '' };
       }));
       setAnswers(map);
@@ -74,26 +123,72 @@ export default function SubmissionPage() {
     })();
   }, [templateId]);
 
+  const itemById = useMemo(() => {
+    const m = new Map<string, FormItem>();
+    tpl?.sections.forEach((s) => s.items.forEach((it) => m.set(it.id, it)));
+    return m;
+  }, [tpl]);
+
   const total = useMemo(
-    () => Object.values(answers).reduce((s, a) => s + a.selected.reduce((x, y) => x + y.score, 0), 0),
-    [answers],
+    () => Object.values(answers).reduce((s, a) => {
+      const it = itemById.get(a.itemId);
+      return s + (it ? computeItemScore(it, a.selected) : a.selected.reduce((x, y) => x + y.score, 0));
+    }, 0),
+    [answers, itemById],
   );
+
+  const workYears = useMemo(() => {
+    if (!header.hireDate) return null;
+    const hire = new Date(`${header.hireDate}T00:00:00`);
+    const now = new Date();
+    let years = now.getFullYear() - hire.getFullYear();
+    const beforeAnniversary =
+      now.getMonth() < hire.getMonth() ||
+      (now.getMonth() === hire.getMonth() && now.getDate() < hire.getDate());
+    if (beforeAnniversary) years -= 1;
+    return Math.max(0, years);
+  }, [header.hireDate]);
 
   const isLocked = (itemId: string): boolean => {
     if (sub?.status !== 'REJECTED') return false;
     return !!(answers[itemId]?.status && answers[itemId]?.status !== 'REJECTED');
   };
+  const optionKey = (itemId: string, option: ScoreOpt, index: number) => option.optionId || `${itemId}:${index}`;
+  const isOptionLocked = (itemId: string, option: ScoreOpt, index: number): boolean => {
+    if (sub?.status !== 'REJECTED') return false;
+    const key = optionKey(itemId, option, index);
+    return !!answers[itemId]?.optionReviews?.some((review) => review.optionId === key && review.status === 'L2_APPROVED');
+  };
+  const isPreReviewRejected = sub?.status === 'PRE_REVIEW_REJECTED';
 
   const toggle = (it: FormItem, idx: number) => {
-    if (isLocked(it.id)) return;
+    if (isLocked(it.id) || isOptionLocked(it.id, it.scoreOptions[idx], idx)) return;
     setAnswers((prev) => {
       const cur = prev[it.id]; const has = cur.selected.find((s) => s.index === idx);
       let selected = cur.selected;
       if (has) selected = selected.filter((s) => s.index !== idx);
       else {
         const opt = it.scoreOptions[idx];
-        selected = it.maxSelections === 1 ? [{ index: idx, ...opt }] : [...selected, { index: idx, ...opt }];
-        if (selected.length > it.maxSelections) selected = selected.slice(-it.maxSelections);
+        const lockedSelected = cur.selected.filter((s) => isOptionLocked(it.id, it.scoreOptions[s.index], s.index));
+        if (lockedSelected.length >= it.maxSelections) return prev;
+        const next = { index: idx, optionId: optionKey(it.id, opt, idx), label: opt.label, score: opt.score };
+        const editableSelected = it.maxSelections === 1 ? [next] : [...selected.filter((s) => !isOptionLocked(it.id, it.scoreOptions[s.index], s.index)), next];
+        selected = [...lockedSelected, ...editableSelected.slice(-(it.maxSelections - lockedSelected.length))];
+      }
+      return { ...prev, [it.id]: { ...cur, selected } };
+    });
+  };
+
+  // COUNTED 模式：设置某个子项的次数（0 表示未选）
+  const setCount = (it: FormItem, idx: number, count: number) => {
+    if (isLocked(it.id) || isOptionLocked(it.id, it.scoreOptions[idx], idx)) return;
+    const safe = Math.max(0, Math.floor(count || 0));
+    setAnswers((prev) => {
+      const cur = prev[it.id];
+      const opt = it.scoreOptions[idx];
+      let selected = cur.selected.filter((s) => s.index !== idx);
+      if (safe > 0) {
+        selected = [...selected, { index: idx, optionId: optionKey(it.id, opt, idx), label: opt.label, score: opt.score, count: safe }];
       }
       return { ...prev, [it.id]: { ...cur, selected } };
     });
@@ -125,6 +220,10 @@ export default function SubmissionPage() {
     if (!tpl) return;
     if (submit) {
       const missing: string[] = [];
+      if (!header.workAreaId) missing.push('工区');
+      if (!header.hireDate) missing.push('入职时间');
+      if (!header.declarationLevelId) missing.push('能级评价等级');
+      if (!header.declarationSpecialtyId) missing.push('能级评价专业');
       tpl.sections.forEach((s) => s.items.forEach((it) => {
         if (isLocked(it.id)) return;
         const a = answers[it.id];
@@ -138,11 +237,18 @@ export default function SubmissionPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         templateId, submit,
+        ...header,
         items: Object.values(answers).map((a) => ({ itemId: a.itemId, selected: a.selected, content: a.content })),
       }),
     });
     setBusy(false);
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert('保存失败：' + (e.error || r.status)); return; }
+    const d = await r.json().catch(() => ({}));
+    if (submit && d.preReviewWarnings) {
+      alert('已提交一级审核。\n自动预审提示：\n' + (d.preReviewMessages ?? []).join('\n'));
+      router.push('/app');
+      return;
+    }
     if (submit) { alert('已提交，等待审核'); router.push('/app'); return; }
     alert('草稿已保存');
     location.reload();
@@ -169,9 +275,11 @@ export default function SubmissionPage() {
     </main>
   );
 
-  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED';
+  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED' || sub.status === 'PRE_REVIEW_REJECTED';
+  const itemEditable = editable && !isPreReviewRejected;
   const statusMap: Record<string, string> = {
     SUBMITTED: '待审核', L1_APPROVED: '一审通过', L2_APPROVED: '终审通过',
+    PRE_REVIEW_REJECTED: '自动预审未通过',
   };
 
   return (
@@ -196,6 +304,17 @@ export default function SubmissionPage() {
         </div>
       )}
 
+      {isPreReviewRejected && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <p className="font-medium">自动预审未通过，请修改固定表头后重新提交。</p>
+          {(sub?.preReviewMessages ?? []).length > 0 && (
+            <ul className="mt-1 list-inside list-disc text-xs">
+              {sub!.preReviewMessages!.map((msg, idx) => <li key={`${msg}-${idx}`}>{msg}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
       {sub?.status && sub.status !== 'DRAFT' && sub.status !== 'REJECTED' && (
         <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           当前状态：{statusMap[sub.status] ?? sub.status}，已不可编辑。
@@ -208,6 +327,55 @@ export default function SubmissionPage() {
           <span className="text-2xl font-bold tracking-tight tabular-nums">{total.toFixed(1)}</span>
         </div>
       </div>
+
+      <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="font-semibold">能级评价申报信息</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">工区</span>
+            <select value={header.workAreaId}
+              disabled={!editable || options.branches.length === 0}
+              onChange={(e) => setHeader((h) => ({ ...h, workAreaId: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+              {options.branches.length === 0 && <option value="">请先配置工区</option>}
+              {options.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">入职时间</span>
+            <input type="date" value={header.hireDate}
+              disabled={!editable}
+              onChange={(e) => setHeader((h) => ({ ...h, hireDate: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">工作年限</span>
+            <input value={workYears == null ? '请选择入职时间' : `${workYears} 年`}
+              readOnly
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600" />
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">能级评价等级</span>
+            <select value={header.declarationLevelId}
+              disabled={!editable || options.declarationLevels.length === 0}
+              onChange={(e) => setHeader((h) => ({ ...h, declarationLevelId: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+              {options.declarationLevels.length === 0 && <option value="">请先配置等级</option>}
+              {options.declarationLevels.map((lv) => <option key={lv.id} value={lv.id}>{lv.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm sm:col-span-2">
+            <span className="font-medium text-slate-600">能级评价专业</span>
+            <select value={header.declarationSpecialtyId}
+              disabled={!editable || options.declarationSpecialties.length === 0}
+              onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+              {options.declarationSpecialties.length === 0 && <option value="">请先配置专业</option>}
+              {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
 
       <div className="mt-5 space-y-6">
         {tpl.sections.map((sec) => (
@@ -229,7 +397,9 @@ export default function SubmissionPage() {
                         {locked && <span className="ml-2 text-xs text-slate-400">（已审核通过，锁定）</span>}
                       </p>
                       <span className="shrink-0 text-xs text-slate-400">
-                        {it.maxSelections > 1 ? `最多选择 ${it.maxSelections} 项` : '单项选择'}
+                        {it.scoreMode === 'COUNTED'
+                          ? `按次数计分 · 上限 ${it.maxScore ?? 0} 分`
+                          : it.maxSelections > 1 ? `最多选择 ${it.maxSelections} 项` : '单项选择'}
                       </span>
                     </div>
 
@@ -247,35 +417,79 @@ export default function SubmissionPage() {
                       </p>
                     )}
 
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {it.scoreOptions.map((o, idx) => {
-                        const on = a?.selected.some((s) => s.index === idx);
-                        return (
-                          <button key={idx} type="button" disabled={!editable || locked}
-                            onClick={() => toggle(it, idx)}
-                            className={`rounded-lg border px-4 py-3 text-left text-sm transition-all duration-200 ${
-                              on
-                                ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                                : 'bg-white hover:border-slate-400 hover:shadow-sm'
-                            } disabled:cursor-not-allowed disabled:opacity-60`}>
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">{o.label}</span>
-                              <span className={`text-sm ${on ? 'font-bold text-white' : 'font-medium text-slate-500'}`}>
-                                {o.score} 分
-                              </span>
+                    {it.scoreMode === 'COUNTED' ? (
+                      <div className="mt-3 space-y-2">
+                        {it.scoreOptions.map((o, idx) => {
+                          const cur = a?.selected.find((s) => s.index === idx);
+                          const cnt = cur?.count ?? 0;
+                          const optionLocked = isOptionLocked(it.id, o, idx);
+                          return (
+                            <div key={`${o.label}-${idx}`}
+                              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3 text-sm ${
+                                optionLocked ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'
+                              }`}>
+                              <div className="min-w-0">
+                                <span className="font-medium">{o.label}</span>
+                                <span className="ml-2 text-xs font-medium text-slate-500">{o.score} 分 / 次</span>
+                                {optionLocked && <span className="ml-2 text-xs font-medium text-emerald-600">已终审通过，锁定</span>}
+                                {o.description && (
+                                  <p className="mt-0.5 text-xs text-slate-400">{o.description}</p>
+                                )}
+                              </div>
+                              <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                                次数
+                                <input type="number" min={0} value={cnt}
+                                  disabled={!itemEditable || locked || optionLocked}
+                                  onChange={(e) => setCount(it, idx, +e.target.value)}
+                                  className="w-20 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
+                                <span className="text-slate-400">= {(o.score * cnt).toFixed(1)} 分</span>
+                              </label>
                             </div>
-                            {o.description && (
-                              <p className={`mt-1 text-xs leading-relaxed ${on ? 'text-slate-300' : 'text-slate-400'}`}>
-                                {o.description}
-                              </p>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                        <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
+                          <span>本项得分</span>
+                          <span className="text-sm font-bold tabular-nums text-slate-900">
+                            {computeItemScore(it, a?.selected ?? []).toFixed(1)} 分
+                          </span>
+                          <span>（上限 {it.maxScore ?? 0} 分）</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {it.scoreOptions.map((o, idx) => {
+                          const on = a?.selected.some((s) => s.index === idx);
+                          const optionLocked = isOptionLocked(it.id, o, idx);
+                          return (
+                            <button key={`${o.label}-${idx}`} type="button" disabled={!itemEditable || locked || optionLocked}
+                              onClick={() => toggle(it, idx)}
+                              className={`rounded-lg border px-4 py-3 text-left text-sm transition-all duration-200 ${
+                                on
+                                  ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                                  : 'bg-white hover:border-slate-400 hover:shadow-sm'
+                              } disabled:cursor-not-allowed disabled:opacity-60`}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium">
+                                  {o.label}
+                                  {optionLocked && <span className="ml-2 text-xs text-emerald-500">已锁定</span>}
+                                </span>
+                                <span className={`text-sm ${on ? 'font-bold text-white' : 'font-medium text-slate-500'}`}>
+                                  {o.score} 分
+                                </span>
+                              </div>
+                              {o.description && (
+                                <p className={`mt-1 text-xs leading-relaxed ${on ? 'text-slate-300' : 'text-slate-400'}`}>
+                                  {o.description}
+                                </p>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     <textarea value={a?.content ?? ''} onChange={(e) => setContent(it.id, e.target.value)}
-                      disabled={!editable || locked}
+                      disabled={!itemEditable || locked}
                       placeholder="备注说明（可选）"
                       rows={2}
                       className="mt-3 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
@@ -296,7 +510,7 @@ export default function SubmissionPage() {
                             <li className="text-xs text-slate-400">尚未上传</li>
                           )}
                         </ul>
-                        {editable && !locked && (
+                        {itemEditable && !locked && (
                           <div className="mt-2">
                             <p className="text-xs text-slate-400">
                               仅支持 PDF、图片、Word/Excel、TXT，单文件 ≤10MB
