@@ -1,6 +1,7 @@
-// 报表导出：按申报表汇总 CSV / 完整 ZIP / 单员工档案 ZIP（仅二审通过数据）
+// 报表导出：按条件筛选申报表，汇总/明细 CSV、完整 ZIP、单员工档案 ZIP（仅二审通过）
 import archiver from 'archiver';
 import { PassThrough } from 'stream';
+import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { getObjectStream } from './minio';
 import { csvField, safeSegment, BOM } from './csv-utils';
@@ -8,7 +9,53 @@ import { csvField, safeSegment, BOM } from './csv-utils';
 const ITEM_STATUS_L2 = 'L2_APPROVED' as const;
 const SUB_STATUS_L2 = 'L2_APPROVED' as const;
 
+export type ExportFilters = {
+  templateId: string;
+  branchId?: string;
+  declarationLevelId?: string;
+  declarationSpecialtyId?: string;
+};
+
 type SelectedOption = { label?: string; score?: number };
+
+/** 从 URL 解析导出筛选条件 */
+export function parseExportFilters(url: URL): ExportFilters | { error: string } {
+  const templateId = url.searchParams.get('templateId');
+  if (!templateId) return { error: '缺少 templateId' };
+  const branchId = url.searchParams.get('branchId') || undefined;
+  const declarationLevelId = url.searchParams.get('declarationLevelId') || undefined;
+  const declarationSpecialtyId = url.searchParams.get('declarationSpecialtyId') || undefined;
+  return { templateId, branchId, declarationLevelId, declarationSpecialtyId };
+}
+
+function submissionWhere(filters: ExportFilters): Prisma.SubmissionWhereInput {
+  const where: Prisma.SubmissionWhereInput = {
+    templateId: filters.templateId,
+    status: SUB_STATUS_L2,
+  };
+  if (filters.declarationLevelId) {
+    where.declarationLevelId = filters.declarationLevelId;
+  }
+  if (filters.declarationSpecialtyId) {
+    where.declarationSpecialtyId = filters.declarationSpecialtyId;
+  }
+  if (filters.branchId) {
+    where.OR = [
+      { branchId: filters.branchId },
+      { branchId: null, user: { branchId: filters.branchId } },
+    ];
+  }
+  return where;
+}
+
+/** 解析 Submission 上的工区显示名 */
+function branchDisplay(sub: {
+  workAreaName: string | null;
+  branch?: { name: string } | null;
+  user: { branch?: { name: string } | null };
+}): string {
+  return sub.workAreaName ?? sub.branch?.name ?? sub.user.branch?.name ?? '';
+}
 
 /** 解析 SubmissionItem.selected JSON，返回选项 label 列表 */
 function selectedLabels(selected: unknown): string[] {
@@ -55,40 +102,53 @@ async function getTemplateColumns(templateId: string) {
   return { template, columns };
 }
 
-/** 查询某模板下全部二审通过的 submission（含用户与已通过的申报项） */
-async function getApprovedSubmissions(templateId: string) {
-  return prisma.submission.findMany({
-    where: { templateId, status: SUB_STATUS_L2 },
-    include: {
-      user: {
-        select: {
-          id: true,
-          fullName: true,
-          employeeNo: true,
-          contact: true,
-          branch: { select: { name: true } },
-          department: { select: { name: true } },
-        },
-      },
-      items: {
-        where: { status: ITEM_STATUS_L2 },
-        include: { item: { select: { id: true, title: true, sectionId: true } } },
-      },
+const submissionInclude = {
+  user: {
+    select: {
+      id: true,
+      fullName: true,
+      employeeNo: true,
+      contact: true,
+      branch: { select: { name: true } },
+      department: { select: { name: true } },
     },
+  },
+  branch: { select: { name: true } },
+  items: {
+    where: { status: ITEM_STATUS_L2 },
+    include: { item: { select: { id: true, title: true, sectionId: true } } },
+  },
+} as const;
+
+/** 查询符合条件的二审通过申报 */
+async function getApprovedSubmissions(filters: ExportFilters) {
+  return prisma.submission.findMany({
+    where: submissionWhere(filters),
+    include: submissionInclude,
     orderBy: { totalScore: 'desc' },
   });
 }
 
 type ApprovedSubmission = Awaited<ReturnType<typeof getApprovedSubmissions>>[number];
 
-/** 构建汇总 CSV 字符串（含 UTF-8 BOM） */
-export async function buildTemplateSummaryCsv(templateId: string): Promise<string | null> {
-  const meta = await getTemplateColumns(templateId);
+/** 构建汇总 CSV（每人一行，各申报项得分列） */
+export async function buildTemplateSummaryCsv(filters: ExportFilters): Promise<string | null> {
+  const meta = await getTemplateColumns(filters.templateId);
   if (!meta) return null;
   const { columns } = meta;
-  const subs = await getApprovedSubmissions(templateId);
+  const subs = await getApprovedSubmissions(filters);
 
-  const headerCols = ['工号', '姓名', '联系方式', '工区', '部门', '总分', ...columns.map((c) => c.header)];
+  const headerCols = [
+    '工号',
+    '姓名',
+    '联系方式',
+    '工区',
+    '部门',
+    '能级评价等级',
+    '能级评价专业',
+    '总分',
+    ...columns.map((c) => c.header),
+  ];
   const lines: string[] = [headerCols.map(csvField).join(',')];
 
   for (const sub of subs) {
@@ -99,8 +159,10 @@ export async function buildTemplateSummaryCsv(templateId: string): Promise<strin
       sub.user.employeeNo ?? '',
       sub.user.fullName,
       sub.user.contact ?? '',
-      sub.user.branch?.name ?? '',
+      branchDisplay(sub),
       sub.user.department?.name ?? '',
+      sub.declarationLevelName ?? '',
+      sub.declarationSpecialtyName ?? '',
       Number(sub.totalScore).toString(),
       ...columns.map((c) => (scoreByItem.has(c.itemId) ? scoreByItem.get(c.itemId)!.toString() : '')),
     ];
@@ -110,11 +172,65 @@ export async function buildTemplateSummaryCsv(templateId: string): Promise<strin
   return BOM + lines.join('\r\n');
 }
 
+/** 构建明细汇总 CSV（每人每申报项一行） */
+export async function buildTemplateDetailSummaryCsv(filters: ExportFilters): Promise<string | null> {
+  const meta = await getTemplateColumns(filters.templateId);
+  if (!meta) return null;
+  const { template } = meta;
+  const subs = await getApprovedSubmissions(filters);
+
+  const sectionTitleById = new Map<string, string>();
+  for (const sec of template.sections) sectionTitleById.set(sec.id, sec.title);
+
+  const header = [
+    '工号',
+    '姓名',
+    '联系方式',
+    '工区',
+    '部门',
+    '能级评价等级',
+    '能级评价专业',
+    '总分',
+    '章节',
+    '申报项',
+    '所选项',
+    '得分',
+  ];
+  const lines: string[] = [header.map(csvField).join(',')];
+
+  for (const sub of subs) {
+    const sorted = [...sub.items].sort((a, b) => {
+      const sa = sectionTitleById.get(a.item.sectionId) ?? '';
+      const sb = sectionTitleById.get(b.item.sectionId) ?? '';
+      if (sa !== sb) return sa.localeCompare(sb);
+      return a.item.title.localeCompare(b.item.title);
+    });
+    for (const it of sorted) {
+      const row = [
+        sub.user.employeeNo ?? '',
+        sub.user.fullName,
+        sub.user.contact ?? '',
+        branchDisplay(sub),
+        sub.user.department?.name ?? '',
+        sub.declarationLevelName ?? '',
+        sub.declarationSpecialtyName ?? '',
+        Number(sub.totalScore).toString(),
+        sectionTitleById.get(it.item.sectionId) ?? '',
+        it.item.title,
+        selectedLabels(it.selected).join('、'),
+        Number(it.score).toString(),
+      ];
+      lines.push(row.map((v) => csvField(String(v))).join(','));
+    }
+  }
+
+  return BOM + lines.join('\r\n');
+}
+
 /** 构建单个 submission 的明细 CSV（章节、申报项、所选项、得分） */
 function buildDetailCsv(sub: ApprovedSubmission, sectionTitleById: Map<string, string>): string {
   const header = ['章节', '申报项', '所选项', '得分'];
   const lines: string[] = [header.map(csvField).join(',')];
-  // 按 section 再按 item 输出（items 已是 L2_APPROVED）
   const sorted = [...sub.items].sort((a, b) => {
     const sa = sectionTitleById.get(a.item.sectionId) ?? '';
     const sb = sectionTitleById.get(b.item.sectionId) ?? '';
@@ -150,9 +266,10 @@ async function appendSubmissionToArchive(
         const objStream = await getObjectStream(att.storageKey);
         const safeFilename = safeSegment(att.filename || 'attachment');
         archive.append(objStream, { name: `${folder}/attachments/${safeTitle}-${safeFilename}` });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[report-export] Failed to fetch attachment ${att.storageKey} for item "${it.item.title}": ${err?.message}`,
+          `[report-export] Failed to fetch attachment ${att.storageKey} for item "${it.item.title}": ${message}`,
         );
         archive.append(
           JSON.stringify(
@@ -160,7 +277,7 @@ async function appendSubmissionToArchive(
               error: 'Attachment unavailable',
               storageKey: att.storageKey,
               filename: att.filename,
-              reason: err?.message,
+              reason: message,
             },
             null,
             2,
@@ -186,9 +303,9 @@ function newArchiveStream() {
   return { stream, archive };
 }
 
-/** 按申报表导出完整 ZIP：汇总 CSV + 每位员工档案（明细 CSV + 附件） */
-export async function buildTemplateZip(templateId: string): Promise<PassThrough | null> {
-  const meta = await getTemplateColumns(templateId);
+/** 按条件导出完整 ZIP：汇总 CSV + 明细汇总 CSV + 每位员工档案 */
+export async function buildTemplateZip(filters: ExportFilters): Promise<PassThrough | null> {
+  const meta = await getTemplateColumns(filters.templateId);
   if (!meta) return null;
   const { template } = meta;
 
@@ -196,12 +313,15 @@ export async function buildTemplateZip(templateId: string): Promise<PassThrough 
 
   (async () => {
     try {
-      const subs = await getApprovedSubmissions(templateId);
+      const subs = await getApprovedSubmissions(filters);
       const sectionTitleById = new Map<string, string>();
       for (const sec of template.sections) sectionTitleById.set(sec.id, sec.title);
 
-      const summary = await buildTemplateSummaryCsv(templateId);
+      const summary = await buildTemplateSummaryCsv(filters);
       if (summary) archive.append(summary, { name: 'summary.csv' });
+
+      const detailSummary = await buildTemplateDetailSummaryCsv(filters);
+      if (detailSummary) archive.append(detailSummary, { name: 'detail-summary.csv' });
 
       archive.append(
         [
@@ -213,14 +333,15 @@ export async function buildTemplateZip(templateId: string): Promise<PassThrough 
           `通过人数: ${subs.length}`,
           '',
           '文件结构:',
-          '  summary.csv            — 全员汇总表（含各章节·各申报项得分）',
+          '  summary.csv            — 全员汇总表（各申报项得分列）',
+          '  detail-summary.csv     — 明细汇总表（每人每申报项一行）',
           '  {工号}-{姓名}/          — 每位员工档案目录',
-          '    detail.csv          — 申报明细（章节、申报项、所选项、得分）',
-          '    attachments/        — 证书等附件文件',
+          '    detail.csv          — 个人申报明细',
+          '    attachments/        — 证书等附件',
           '',
           '注意事项:',
-          '  - CSV 使用 UTF-8 BOM 编码，Excel 可直接打开中文不乱码',
-          '  - 个别附件可能因存储异常无法导出，目录中会有 _error_*.json 占位说明',
+          '  - CSV 使用 UTF-8 BOM 编码，Excel 可直接打开中文',
+          '  - 个别附件可能无法导出，目录中会有 _error_*.json 说明',
         ].join('\n'),
         { name: 'README.txt' },
       );
@@ -230,7 +351,6 @@ export async function buildTemplateZip(templateId: string): Promise<PassThrough 
         const empId = sub.user.employeeNo ?? sub.user.id;
         const empName = safeSegment(sub.user.fullName);
         let folder = `${safeSegment(empId)}-${empName}`;
-        // 避免同名目录冲突
         const seen = usedFolders.get(folder) ?? 0;
         usedFolders.set(folder, seen + 1);
         if (seen > 0) folder = `${folder}-${seen + 1}`;
@@ -238,7 +358,7 @@ export async function buildTemplateZip(templateId: string): Promise<PassThrough 
       }
 
       archive.finalize();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('[report-export] buildTemplateZip failed:', e);
       stream.destroy(e instanceof Error ? e : new Error(String(e)));
     }
@@ -247,7 +367,7 @@ export async function buildTemplateZip(templateId: string): Promise<PassThrough 
   return stream;
 }
 
-/** 单员工档案 ZIP：某员工某申报表的明细 CSV + 附件 */
+/** 单员工档案 ZIP：明细 CSV + 附件 */
 export async function buildEmployeeZip(submissionId: string): Promise<PassThrough | null> {
   const sub = await prisma.submission.findFirst({
     where: { id: submissionId, status: SUB_STATUS_L2 },
@@ -262,6 +382,7 @@ export async function buildEmployeeZip(submissionId: string): Promise<PassThroug
           department: { select: { name: true } },
         },
       },
+      branch: { select: { name: true } },
       template: { select: { id: true, title: true, year: true } },
       items: {
         where: { status: ITEM_STATUS_L2 },
@@ -271,7 +392,6 @@ export async function buildEmployeeZip(submissionId: string): Promise<PassThroug
   });
   if (!sub) return null;
 
-  // 章节标题映射
   const sections = await prisma.formSection.findMany({
     where: { templateId: sub.templateId },
     select: { id: true, title: true },
@@ -290,8 +410,10 @@ export async function buildEmployeeZip(submissionId: string): Promise<PassThroug
           `姓名: ${sub.user.fullName}`,
           `工号: ${sub.user.employeeNo ?? '-'}`,
           `联系方式: ${sub.user.contact ?? '-'}`,
-          `工区: ${sub.user.branch?.name ?? '-'}`,
+          `工区: ${branchDisplay(sub)}`,
           `部门: ${sub.user.department?.name ?? '-'}`,
+          `能级评价等级: ${sub.declarationLevelName ?? '-'}`,
+          `能级评价专业: ${sub.declarationSpecialtyName ?? '-'}`,
           `申报表: ${sub.template.title}（${sub.template.year}）`,
           `总分: ${Number(sub.totalScore)}`,
           `导出时间: ${new Date().toISOString()}`,
@@ -302,7 +424,7 @@ export async function buildEmployeeZip(submissionId: string): Promise<PassThroug
       await appendSubmissionToArchive(archive, sub as ApprovedSubmission, '.', sectionTitleById);
 
       archive.finalize();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('[report-export] buildEmployeeZip failed:', e);
       stream.destroy(e instanceof Error ? e : new Error(String(e)));
     }
@@ -311,7 +433,24 @@ export async function buildEmployeeZip(submissionId: string): Promise<PassThroug
   return stream;
 }
 
-/** 取申报表标题（用于文件名），不存在返回 null */
+/** 符合条件的员工列表（供单人选人与预览） */
+export async function listExportCandidates(filters: ExportFilters) {
+  const subs = await getApprovedSubmissions(filters);
+  return subs.map((sub) => ({
+    submissionId: sub.id,
+    userId: sub.user.id,
+    fullName: sub.user.fullName,
+    employeeNo: sub.user.employeeNo,
+    contact: sub.user.contact,
+    branch: branchDisplay(sub),
+    department: sub.user.department?.name ?? '',
+    declarationLevel: sub.declarationLevelName ?? '',
+    declarationSpecialty: sub.declarationSpecialtyName ?? '',
+    totalScore: Number(sub.totalScore),
+  }));
+}
+
+/** 取申报表标题（用于文件名） */
 export async function getTemplateLabel(templateId: string): Promise<{ title: string; year: number } | null> {
   const t = await prisma.formTemplate.findUnique({
     where: { id: templateId },
@@ -338,4 +477,13 @@ export async function getEmployeeLabel(
     templateTitle: s.template.title,
     year: s.template.year,
   };
+}
+
+/** 导出文件名后缀（反映筛选条件，便于区分） */
+export function exportFilenameSuffix(filters: ExportFilters): string {
+  const parts: string[] = [];
+  if (filters.branchId) parts.push('工区筛选');
+  if (filters.declarationLevelId) parts.push('等级筛选');
+  if (filters.declarationSpecialtyId) parts.push('专业筛选');
+  return parts.length > 0 ? `-${parts.join('-')}` : '';
 }

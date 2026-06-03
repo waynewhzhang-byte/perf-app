@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
+import { SectionRadarPanel } from '@/components/section-radar-panel';
 
 interface RecordItem {
   id: string;
@@ -133,6 +134,10 @@ export default function RecordsPage() {
                           归档时间：{new Date(detail.archivedData.finalizedAt).toLocaleString('zh-CN')}
                         </p>
                       </div>
+
+                      <SectionRadarPanel
+                        fetchUrl={expandedId ? `/api/records/${expandedId}/radar` : null}
+                      />
 
                       {/* 逐项明细 */}
                       {items.length > 0 ? (

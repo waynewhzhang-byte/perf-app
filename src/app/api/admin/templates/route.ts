@@ -9,6 +9,12 @@ import { ensureScoreOptionIds } from '@/lib/form-options';
 
 // ---- Validation schemas ----
 
+const HeaderFieldSchema = z.object({
+  key: z.enum(['workArea', 'hireDate', 'declarationLevel', 'declarationSpecialty']),
+  enabled: z.boolean(),
+  required: z.boolean(),
+});
+
 const ScoreOptionSchema = z.object({
   optionId: z.string().optional(),
   label: z.string().min(1, '分值档次名称不能为空'),
@@ -42,6 +48,7 @@ const TemplateSchema = z.object({
   year: z.number().int().min(2000, '年份无效').max(2100, '年份无效'),
   title: z.string().min(1),
   description: z.string().optional(),
+  headerFields: z.array(HeaderFieldSchema).optional(),
   sections: z.array(SectionSchema).min(1, '模板至少需要一个章节'),
 });
 
@@ -129,13 +136,15 @@ export async function POST(req: Request) {
 
     const parsed = TemplateSchema.safeParse(await req.json());
     if (!parsed.success) {
-      return NextResponse.json({ error: '参数无效' }, { status: 400 });
+      console.error('POST TemplateSchema validation failed:', JSON.stringify(parsed.error.issues, null, 2));
+      return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
     }
-    const { year, title, description, sections } = parsed.data;
+    const { year, title, description, sections, headerFields } = parsed.data;
 
     const tpl = await prisma.formTemplate.create({
       data: {
         year, title, description, createdBy: session.userId,
+        headerFields: headerFields as any,
         sections: {
           create: normalizeSectionsForWrite(sections),
         },
@@ -170,7 +179,8 @@ export async function PUT(req: Request) {
 
     const parsed = TemplateSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: '参数无效' }, { status: 400 });
+      console.error('PUT TemplateSchema validation failed:', JSON.stringify(parsed.error.issues, null, 2));
+      return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
     }
 
     // Verify existence before the update to produce a clean 404.
@@ -191,7 +201,7 @@ export async function PUT(req: Request) {
       }, { status: 409 });
     }
 
-    const { year, title, description, sections } = parsed.data;
+    const { year, title, description, sections, headerFields } = parsed.data;
 
     // Replace sections atomically: delete old tree, recreate from payload.
     await prisma.formSection.deleteMany({ where: { templateId: id } });
@@ -200,6 +210,7 @@ export async function PUT(req: Request) {
       where: { id },
       data: {
         year, title, description,
+        headerFields: headerFields as any,
         sections: {
           create: normalizeSectionsForWrite(sections),
         },

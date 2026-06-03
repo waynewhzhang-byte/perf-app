@@ -192,8 +192,11 @@ model FormTemplate {
   id          String         @id @default(cuid())
   year        Int
   title       String
-  description String?
-  status      TemplateStatus @default(DRAFT)
+  description  String?
+  // 表头字段配置：控制员工填报时需要填写哪些表头信息（工区、入职时间等）
+  // 格式：[{ key, enabled, required }]，默认全部启用且必填
+  headerFields Json         @default("[]")
+  status       TemplateStatus @default(DRAFT)
   publishedAt DateTime?
   createdBy   String?
   createdAt   DateTime       @default(now())

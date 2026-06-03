@@ -1,5 +1,8 @@
 'use client';
 
+import { type HeaderFieldConfig, type HeaderFieldKey, HEADER_FIELD_LABELS } from '@/lib/header-fields';
+import { computeTemplateMaxScore, sortScorableSections } from '@/lib/score-calculation';
+
 export interface ScoreOpt {
   optionId?: string;
   label: string;
@@ -30,42 +33,14 @@ export interface PreviewTemplate {
   year: number;
   title: string;
   description?: string;
+  headerFields?: HeaderFieldConfig[];
   sections: PreviewSection[];
 }
 
-function sortSections(sections: PreviewSection[]) {
-  return [...sections]
-    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    .map((s) => ({
-      ...s,
-      items: [...s.items].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
-    }));
-}
-
-function totalMaxScore(sections: PreviewSection[]) {
-  return sections.reduce(
-    (sum, sec) =>
-      sum +
-      sec.items.reduce((is, it) => {
-        if (it.scoreMode === 'COUNTED') {
-          return is + Number(it.maxScore ?? 0); // 封顶分即理论满分（Decimal 可能为字符串）
-        }
-        const scores = it.scoreOptions.map((o) => o.score);
-        if (scores.length === 0) return is;
-        const maxPerItem =
-          it.maxSelections === 1
-            ? Math.max(...scores)
-            : [...scores].sort((a, b) => b - a).slice(0, it.maxSelections).reduce((a, b) => a + b, 0);
-        return is + maxPerItem;
-      }, 0),
-    0,
-  );
-}
-
 export function TemplatePreviewBody({ template }: { template: PreviewTemplate }) {
-  const sections = sortSections(template.sections);
+  const sections = sortScorableSections(template.sections);
   const itemCount = sections.reduce((n, s) => n + s.items.length, 0);
-  const maxScore = totalMaxScore(sections);
+  const maxScore = computeTemplateMaxScore(sections);
 
   return (
     <div className="space-y-6">
@@ -80,6 +55,25 @@ export function TemplatePreviewBody({ template }: { template: PreviewTemplate })
           {maxScore > 0 && ` · 理论满分约 ${maxScore.toFixed(1)} 分`}
         </p>
       </header>
+
+      {template.headerFields && template.headerFields.filter((f) => f.enabled).length > 0 && (
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-slate-700">固定表头信息</h3>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {template.headerFields.filter((f) => f.enabled).map((hf) => (
+              <div key={hf.key} className="text-sm text-slate-600">
+                <span className="font-medium">
+                  {HEADER_FIELD_LABELS[hf.key as HeaderFieldKey] ?? hf.key}
+                </span>
+                {hf.required && <span className="ml-1 text-red-500">*</span>}
+                <span className="ml-2 text-xs text-slate-400">
+                  {hf.key === 'hireDate' ? '日期选择' : '下拉选择'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {sections.map((sec, sIdx) => (
         <section key={sIdx} className="rounded-lg border bg-white p-4 shadow-sm">

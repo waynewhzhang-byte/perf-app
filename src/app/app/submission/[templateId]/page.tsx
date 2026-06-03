@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
+import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
@@ -15,7 +16,7 @@ interface FormItem {
   scoreOptions: ScoreOpt[];
 }
 interface Section { id: string; title: string; description?: string; items: FormItem[] }
-interface Template { id: string; title: string; year: number; description?: string; sections: Section[] }
+interface Template { id: string; title: string; year: number; description?: string; headerFields?: HeaderFieldConfig[]; sections: Section[] }
 interface SelectOption { id: string; name: string }
 interface HeaderOptions {
   branches: SelectOption[];
@@ -129,6 +130,14 @@ export default function SubmissionPage() {
     return m;
   }, [tpl]);
 
+  const headerFields = useMemo(
+    () => resolveHeaderFields(tpl?.headerFields),
+    [tpl?.headerFields],
+  );
+
+  const showHeader = (key: HeaderFieldKey) => isFieldEnabled(headerFields, key);
+  const requireHeader = (key: HeaderFieldKey) => isFieldRequired(headerFields, key);
+
   const total = useMemo(
     () => Object.values(answers).reduce((s, a) => {
       const it = itemById.get(a.itemId);
@@ -220,10 +229,10 @@ export default function SubmissionPage() {
     if (!tpl) return;
     if (submit) {
       const missing: string[] = [];
-      if (!header.workAreaId) missing.push('工区');
-      if (!header.hireDate) missing.push('入职时间');
-      if (!header.declarationLevelId) missing.push('能级评价等级');
-      if (!header.declarationSpecialtyId) missing.push('能级评价专业');
+      if (requireHeader('workArea') && !header.workAreaId) missing.push('工区');
+      if (requireHeader('hireDate') && !header.hireDate) missing.push('入职时间');
+      if (requireHeader('declarationLevel') && !header.declarationLevelId) missing.push('能级评价等级');
+      if (requireHeader('declarationSpecialty') && !header.declarationSpecialtyId) missing.push('能级评价专业');
       tpl.sections.forEach((s) => s.items.forEach((it) => {
         if (isLocked(it.id)) return;
         const a = answers[it.id];
@@ -328,54 +337,82 @@ export default function SubmissionPage() {
         </div>
       </div>
 
-      <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="font-semibold">能级评价申报信息</h2>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="text-sm">
-            <span className="font-medium text-slate-600">工区</span>
-            <select value={header.workAreaId}
-              disabled={!editable || options.branches.length === 0}
-              onChange={(e) => setHeader((h) => ({ ...h, workAreaId: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
-              {options.branches.length === 0 && <option value="">请先配置工区</option>}
-              {options.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">
-            <span className="font-medium text-slate-600">入职时间</span>
-            <input type="date" value={header.hireDate}
-              disabled={!editable}
-              onChange={(e) => setHeader((h) => ({ ...h, hireDate: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
-          </label>
-          <label className="text-sm">
-            <span className="font-medium text-slate-600">工作年限</span>
-            <input value={workYears == null ? '请选择入职时间' : `${workYears} 年`}
-              readOnly
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600" />
-          </label>
-          <label className="text-sm">
-            <span className="font-medium text-slate-600">能级评价等级</span>
-            <select value={header.declarationLevelId}
-              disabled={!editable || options.declarationLevels.length === 0}
-              onChange={(e) => setHeader((h) => ({ ...h, declarationLevelId: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
-              {options.declarationLevels.length === 0 && <option value="">请先配置等级</option>}
-              {options.declarationLevels.map((lv) => <option key={lv.id} value={lv.id}>{lv.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm sm:col-span-2">
-            <span className="font-medium text-slate-600">能级评价专业</span>
-            <select value={header.declarationSpecialtyId}
-              disabled={!editable || options.declarationSpecialties.length === 0}
-              onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
-              {options.declarationSpecialties.length === 0 && <option value="">请先配置专业</option>}
-              {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
-            </select>
-          </label>
-        </div>
-      </section>
+      {headerFields.filter((f) => f.enabled).length > 0 && (
+        <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="font-semibold">能级评价申报信息</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {showHeader('workArea') && (
+              <label className="text-sm">
+                <span className="font-medium text-slate-600">
+                  工区
+                  {requireHeader('workArea') && <span className="ml-1 text-red-500">*</span>}
+                </span>
+                <select value={header.workAreaId}
+                  disabled={!editable || options.branches.length === 0}
+                  onChange={(e) => setHeader((h) => ({ ...h, workAreaId: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+                  {options.branches.length === 0 && <option value="">请先配置工区</option>}
+                  {options.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </label>
+            )}
+            {showHeader('hireDate') && (
+              <>
+                <label className="text-sm">
+                  <span className="font-medium text-slate-600">
+                    入职时间
+                    {requireHeader('hireDate') && <span className="ml-1 text-red-500">*</span>}
+                  </span>
+                  <input type="date" value={header.hireDate}
+                    disabled={!editable}
+                    onChange={(e) => setHeader((h) => ({ ...h, hireDate: e.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
+                </label>
+                <label className="text-sm">
+                  <span className="font-medium text-slate-600">工作年限（年）</span>
+                  <input type="number" min={0} max={60}
+                    key={`wy-${header.hireDate}`}
+                    defaultValue={workYears ?? undefined}
+                    disabled={!editable}
+                    placeholder="由入职时间自动计算，可手动修改"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
+                  <p className="mt-0.5 text-xs text-slate-400">提交时根据入职日期自动重算，手动填写仅用于预览参考</p>
+                </label>
+              </>
+            )}
+            {showHeader('declarationLevel') && (
+              <label className="text-sm">
+                <span className="font-medium text-slate-600">
+                  能级评价等级
+                  {requireHeader('declarationLevel') && <span className="ml-1 text-red-500">*</span>}
+                </span>
+                <select value={header.declarationLevelId}
+                  disabled={!editable || options.declarationLevels.length === 0}
+                  onChange={(e) => setHeader((h) => ({ ...h, declarationLevelId: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+                  {options.declarationLevels.length === 0 && <option value="">请先配置等级</option>}
+                  {options.declarationLevels.map((lv) => <option key={lv.id} value={lv.id}>{lv.name}</option>)}
+                </select>
+              </label>
+            )}
+            {showHeader('declarationSpecialty') && (
+              <label className="text-sm sm:col-span-2">
+                <span className="font-medium text-slate-600">
+                  能级评价专业
+                  {requireHeader('declarationSpecialty') && <span className="ml-1 text-red-500">*</span>}
+                </span>
+                <select value={header.declarationSpecialtyId}
+                  disabled={!editable || options.declarationSpecialties.length === 0}
+                  onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+                  {options.declarationSpecialties.length === 0 && <option value="">请先配置专业</option>}
+                  {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="mt-5 space-y-6">
         {tpl.sections.map((sec) => (

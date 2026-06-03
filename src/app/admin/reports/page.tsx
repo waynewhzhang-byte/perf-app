@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
+import { SectionRadarPanel } from '@/components/section-radar-panel';
 
 interface Template { id: string; title: string; year: number }
 interface Stats { count: number; avgScore: number; maxScore: number; minScore: number }
@@ -320,7 +321,10 @@ export default function ReportsPage() {
                         {expanded.has(rec.submissionId) && (
                           <tr key={`${rec.submissionId}-exp`}>
                             <td colSpan={6} className="bg-slate-50 px-5 py-3">
-                              <table className="w-full text-xs">
+                              <SectionRadarPanel
+                                fetchUrl={`/api/admin/submissions/${rec.submissionId}/radar`}
+                              />
+                              <table className="mt-4 w-full text-xs">
                                 <thead>
                                   <tr className="text-slate-400">
                                     <th className="py-1.5 text-left font-medium">申报项</th>

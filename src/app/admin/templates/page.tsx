@@ -7,6 +7,13 @@ import {
   type PreviewTemplate,
   type ScoreOpt,
 } from '@/components/template-preview';
+import {
+  type HeaderFieldConfig,
+  type HeaderFieldKey,
+  DEFAULT_HEADER_FIELDS,
+  HEADER_FIELD_LABELS,
+  resolveHeaderFields,
+} from '@/lib/header-fields';
 
 type ScoreMode = 'TIERS' | 'COUNTED';
 interface Item {
@@ -24,6 +31,7 @@ interface Template {
   id: string; year: number; title: string; description?: string;
   status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
   sections: Section[];
+  headerFields?: HeaderFieldConfig[];
   _count?: { submissions: number };
 }
 
@@ -32,6 +40,7 @@ type EditingState = {
   year: number;
   title: string;
   description: string;
+  headerFields: HeaderFieldConfig[];
   sections: Section[];
 };
 
@@ -93,6 +102,7 @@ function templateToEditing(t: Template | EditingState): EditingState {
     year: t.year,
     title: t.title,
     description: t.description ?? '',
+    headerFields: resolveHeaderFields((t as any).headerFields),
     sections,
   };
 }
@@ -102,6 +112,7 @@ function toPreviewTemplate(editing: EditingState): PreviewTemplate {
     year: editing.year,
     title: editing.title || '（未命名）',
     description: editing.description || undefined,
+    headerFields: editing.headerFields,
     sections: editing.sections.map((s, sIdx) => ({
       ...s,
       sortOrder: sIdx,
@@ -159,7 +170,8 @@ export default function TemplatesPage() {
     setTextMode(false);
     setEditing({
       year: new Date().getFullYear(), title: `${new Date().getFullYear()}年度员工绩效申报表`,
-      description: '请如实填写并上传对应证明材料', sections: [blankSection(0)],
+      description: '请如实填写并上传对应证明材料',
+      headerFields: [...DEFAULT_HEADER_FIELDS], sections: [blankSection(0)],
     });
   };
 
@@ -203,6 +215,22 @@ export default function TemplatesPage() {
   const save = async () => {
     if (!editing) return;
     if (!editing.title.trim()) { alert('请填写标题'); return; }
+    // 客户端预校验：避免提交明显不合法的数据
+    if (!textMode) {
+      for (const sec of editing.sections) {
+        if (!sec.title.trim()) { alert('请填写章节标题'); return; }
+        for (const it of sec.items) {
+          if (!it.title.trim()) { alert('请填写申报项标题'); return; }
+          if (it.scoreMode === 'COUNTED' && (it.maxScore == null || it.maxScore <= 0)) {
+            alert(`申报项「${it.title}」：按次数计分必须设置大于 0 的上限分`);
+            return;
+          }
+          for (const opt of it.scoreOptions) {
+            if (!opt.label.trim()) { alert(`申报项「${it.title}」：分值档次名称不能为空`); return; }
+          }
+        }
+      }
+    }
     setSaving(true);
     try {
       let method: string;
@@ -237,7 +265,12 @@ export default function TemplatesPage() {
       if (r.status === 401) { window.location.href = '/admin/login'; return; }
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
-        alert('保存失败：' + (e.error || r.statusText || `HTTP ${r.status}`));
+        if (Array.isArray(e.issues) && e.issues.length > 0) {
+          const msgs = e.issues.map((i: any) => i.message).join('\n');
+          alert('保存失败：\n' + msgs);
+        } else {
+          alert('保存失败：' + (e.error || r.statusText || `HTTP ${r.status}`));
+        }
         return;
       }
       const saved = await r.json().catch(() => ({}));
@@ -362,6 +395,55 @@ export default function TemplatesPage() {
               className={`mt-1 w-full ${textareaClass}`} rows={2} />
           </label>
         </div>
+
+        {!textMode && (
+          <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-slate-700">固定表头字段</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              选择员工填报时需要填写的固定表头信息，并设置是否必填。
+            </p>
+            <div className="mt-3 space-y-2">
+              {DEFAULT_HEADER_FIELDS.map((hf) => {
+                const idx = editing.headerFields.findIndex((f) => f.key === hf.key);
+                const cfg = idx !== -1 ? editing.headerFields[idx] : hf;
+                return (
+                  <div key={hf.key} className="flex flex-wrap items-center gap-3 text-sm">
+                    <span className="w-28 font-medium text-slate-600">
+                      {HEADER_FIELD_LABELS[hf.key as HeaderFieldKey]}
+                    </span>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cfg.enabled}
+                        onChange={(e) => {
+                          const hfCopy = [...editing.headerFields];
+                          hfCopy[idx] = { ...cfg, enabled: e.target.checked };
+                          setEditing({ ...editing, headerFields: hfCopy });
+                        }}
+                        className="rounded border-slate-300"
+                      />
+                      启用
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cfg.required}
+                        disabled={!cfg.enabled}
+                        onChange={(e) => {
+                          const hfCopy = [...editing.headerFields];
+                          hfCopy[idx] = { ...cfg, required: e.target.checked };
+                          setEditing({ ...editing, headerFields: hfCopy });
+                        }}
+                        className="rounded border-slate-300"
+                      />
+                      必填
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="mt-5 space-y-4">
           {editing.sections.map((sec, sIdx) => (

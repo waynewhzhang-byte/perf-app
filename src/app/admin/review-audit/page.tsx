@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AdminPageActions } from '@/components/admin-page-actions';
+import { SectionRadarPanel } from '@/components/section-radar-panel';
 
 interface BranchFilter { id: string; name: string }
 interface Stats { total: number; draft: number; preReviewRejected: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
@@ -223,6 +224,12 @@ export default function ReviewAuditPage() {
                           </div>
                         )}
                       </div>
+
+                      {detail?.status === 'L2_APPROVED' && (
+                        <SectionRadarPanel
+                          fetchUrl={`/api/admin/submissions/${detail.id}/radar`}
+                        />
+                      )}
 
                       {/* 逐项明细 */}
                       {(detail?.items ?? []).length > 0 && (

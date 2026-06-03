@@ -1,17 +1,19 @@
-// 管理员报表导出：汇总 CSV / 完整 ZIP / 单员工档案 ZIP（仅二审通过）
+// 管理员报表导出：汇总 CSV / 明细汇总 CSV / 完整 ZIP / 单员工档案 ZIP（仅二审通过，支持筛选）
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import {
   buildTemplateSummaryCsv,
+  buildTemplateDetailSummaryCsv,
   buildTemplateZip,
   buildEmployeeZip,
   getTemplateLabel,
   getEmployeeLabel,
+  parseExportFilters,
+  exportFilenameSuffix,
 } from '@/lib/report-export';
 
 function contentDisposition(filename: string): string {
-  // 同时提供 ASCII 回退与 UTF-8 文件名，兼容中文
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
@@ -23,10 +25,8 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const format = url.searchParams.get('format') || 'csv';
-    const templateId = url.searchParams.get('templateId');
     const submissionId = url.searchParams.get('submissionId');
 
-    // 单员工档案 ZIP
     if (format === 'employee') {
       if (!submissionId) return NextResponse.json({ error: '缺少 submissionId' }, { status: 400 });
       const label = await getEmployeeLabel(submissionId);
@@ -45,15 +45,32 @@ export async function GET(req: Request) {
       });
     }
 
-    // 以下均按申报表导出
-    if (!templateId) return NextResponse.json({ error: '缺少 templateId' }, { status: 400 });
-    const tpl = await getTemplateLabel(templateId);
+    const parsed = parseExportFilters(url);
+    if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
+    const filters = parsed;
+    const suffix = exportFilenameSuffix(filters);
+
+    const tpl = await getTemplateLabel(filters.templateId);
     if (!tpl) return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
 
     if (format === 'csv') {
-      const csv = await buildTemplateSummaryCsv(templateId);
+      const csv = await buildTemplateSummaryCsv(filters);
       if (csv == null) return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
-      const name = `${tpl.title}-${tpl.year}-汇总表.csv`;
+      const name = `${tpl.title}-${tpl.year}-汇总表${suffix}.csv`;
+      return new NextResponse(csv, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': contentDisposition(name),
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
+    }
+
+    if (format === 'detail') {
+      const csv = await buildTemplateDetailSummaryCsv(filters);
+      if (csv == null) return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
+      const name = `${tpl.title}-${tpl.year}-明细汇总表${suffix}.csv`;
       return new NextResponse(csv, {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
@@ -65,9 +82,9 @@ export async function GET(req: Request) {
     }
 
     if (format === 'zip') {
-      const stream = await buildTemplateZip(templateId);
+      const stream = await buildTemplateZip(filters);
       if (!stream) return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
-      const name = `${tpl.title}-${tpl.year}-完整档案.zip`;
+      const name = `${tpl.title}-${tpl.year}-完整档案${suffix}.zip`;
       return new NextResponse(stream as unknown as ReadableStream, {
         headers: {
           'Content-Type': 'application/zip',

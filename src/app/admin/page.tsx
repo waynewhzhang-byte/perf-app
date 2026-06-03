@@ -52,7 +52,7 @@ export default async function AdminHome() {
         <NavCard href="/admin/users" title="用户与角色" desc="审核员分配、角色管理" />
         <NavCard href="/admin/review-audit" title="审核审计" desc="审核进度、结果与评价报告" />
         <NavCard href="/admin/reports" title="报表分析" desc="已通过员工分值按表单统计" />
-        <NavCard href="/admin/export" title="数据导出" desc="按工区+年度打包 ZIP" />
+        <NavCard href="/admin/export" title="数据导出" desc="条件筛选 CSV / 单人 ZIP / 归档" />
       </nav>
     </main>
   );

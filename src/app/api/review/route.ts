@@ -6,6 +6,11 @@ import { prisma } from '@/lib/prisma';
 import { getSession, getUserRoles } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
+import {
+  computeSectionScores,
+  computeTemplateMaxScore,
+  type ScorableSection,
+} from '@/lib/score-calculation';
 
 const DecisionSchema = z.object({
   submissionItemId: z.string().optional(),
@@ -37,6 +42,42 @@ function includeFor(level: 1 | 2, departmentId?: string | null) {
   };
 }
 
+async function loadSectionsForArchive(tx: typeof prisma, templateId: string): Promise<ScorableSection[]> {
+  const sections = await tx.formSection.findMany({
+    where: { templateId },
+    orderBy: { sortOrder: 'asc' },
+    select: {
+      id: true,
+      title: true,
+      sortOrder: true,
+      items: {
+        orderBy: { sortOrder: 'asc' },
+        select: {
+          id: true,
+          scoreMode: true,
+          maxScore: true,
+          maxSelections: true,
+          scoreOptions: true,
+          sortOrder: true,
+        },
+      },
+    },
+  });
+  return sections.map((sec) => ({
+    id: sec.id,
+    title: sec.title,
+    sortOrder: sec.sortOrder,
+    items: sec.items.map((it) => ({
+      id: it.id,
+      scoreMode: it.scoreMode,
+      maxScore: it.maxScore != null ? Number(it.maxScore) : null,
+      maxSelections: it.maxSelections,
+      scoreOptions: it.scoreOptions,
+      sortOrder: it.sortOrder,
+    })),
+  }));
+}
+
 async function archiveSubmission(tx: typeof prisma, submissionId: string, reviewerId: string) {
   const sub = await tx.submission.findUnique({
     where: { id: submissionId },
@@ -47,6 +88,10 @@ async function archiveSubmission(tx: typeof prisma, submissionId: string, review
   });
   if (!sub) return 0;
   const total = sub.items.reduce((sum, item) => sum + Number(item.score), 0);
+  const templateSections = await loadSectionsForArchive(tx, sub.templateId);
+  const scoreByItemId = new Map(sub.items.map((it) => [it.itemId, Number(it.score)]));
+  const sectionRows = computeSectionScores(templateSections, scoreByItemId);
+  const templateMaxScore = computeTemplateMaxScore(templateSections);
   const archived = {
     submissionId: sub.id,
     userId: sub.userId,
@@ -89,6 +134,8 @@ async function archiveSubmission(tx: typeof prisma, submissionId: string, review
         mimeType: att.mimeType,
       })),
     })),
+    sections: sectionRows,
+    templateMaxScore,
     finalizedAt: new Date(),
   };
   await tx.submission.update({
@@ -303,7 +350,7 @@ export async function POST(req: Request) {
         });
         for (const row of selected) {
           const assignment = item.item.optionReviewers.find((reviewer) => reviewer.optionId === row.optionId);
-          if (!assignment) throw new ReviewError(`「${item.item.title} / ${row.label}」尚未配置二级审核部门`);
+          if (!assignment) throw new ReviewError(`「${item.item.title} / ${row.label}」尚未配置二级审核部门，请联系管理员在「申报表配置 → 二级子项分配」中补全`);
           const existing = item.optionReviews.find((review) => review.optionId === row.optionId);
           if (existing?.status === 'L2_APPROVED') continue;
           await tx.submissionOptionReview.upsert({

@@ -8,6 +8,7 @@ import { getSession, AuthError } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
+import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 
 async function me() {
   const s = await getSession(false);
@@ -95,6 +96,10 @@ export async function POST(req: Request) {
   if (!template) return NextResponse.json({ error: '模板不存在' }, { status: 404 });
   if (template.status !== 'PUBLISHED') return NextResponse.json({ error: '该表单未发布，暂不可申报' }, { status: 400 });
 
+  const hfConfig = resolveHeaderFields((template as any).headerFields);
+  const hfEnabled = (key: HeaderFieldKey) => isFieldEnabled(hfConfig, key);
+  const hfRequired = (key: HeaderFieldKey) => isFieldRequired(hfConfig, key);
+
   // 验证 items 都属于该模板
   const validItemIds = new Set<string>();
   for (const sec of template.sections) {
@@ -126,10 +131,10 @@ export async function POST(req: Request) {
 
   const parsedHireDate = parseDateOnly(hireDate);
   if (submit) {
-    if (!workAreaId) return NextResponse.json({ error: '请选择工区' }, { status: 400 });
-    if (!parsedHireDate) return NextResponse.json({ error: '请选择有效的入职时间' }, { status: 400 });
-    if (!declarationLevelId) return NextResponse.json({ error: '请选择能级评价等级' }, { status: 400 });
-    if (!declarationSpecialtyId) return NextResponse.json({ error: '请选择能级评价专业' }, { status: 400 });
+    if (hfRequired('workArea') && !workAreaId) return NextResponse.json({ error: '请选择工区' }, { status: 400 });
+    if (hfRequired('hireDate') && !parsedHireDate) return NextResponse.json({ error: '请选择有效的入职时间' }, { status: 400 });
+    if (hfRequired('declarationLevel') && !declarationLevelId) return NextResponse.json({ error: '请选择能级评价等级' }, { status: 400 });
+    if (hfRequired('declarationSpecialty') && !declarationSpecialtyId) return NextResponse.json({ error: '请选择能级评价专业' }, { status: 400 });
   }
 
   // 全部操作放在一个事务里，避免 TOCTOU 和部分完成
@@ -148,9 +153,9 @@ export async function POST(req: Request) {
       ]);
 
       if (submit) {
-        if (!workArea) throw new EditableError('请选择有效的工区');
-        if (!declarationLevel) throw new EditableError('请选择有效的能级评价等级');
-        if (!declarationSpecialty) throw new EditableError('请选择有效的能级评价专业');
+        if (hfEnabled('workArea') && !workArea) throw new EditableError('请选择有效的工区');
+        if (hfEnabled('declarationLevel') && !declarationLevel) throw new EditableError('请选择有效的能级评价等级');
+        if (hfEnabled('declarationSpecialty') && !declarationSpecialty) throw new EditableError('请选择有效的能级评价专业');
       }
 
       const workYears = parsedHireDate ? calculateFullWorkYears(parsedHireDate, new Date()) : null;
