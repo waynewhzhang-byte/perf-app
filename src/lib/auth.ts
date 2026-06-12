@@ -19,6 +19,23 @@ function getSecretKey(): Uint8Array {
 const COOKIE_NAME = 'perf_session';
 const COOKIE_NAME_ADMIN = 'perf_session_admin';   // 双入口独立 cookie
 
+function shouldUseSecureCookies() {
+  const explicit = process.env.COOKIE_SECURE?.toLowerCase();
+  if (explicit === 'true') return true;
+  if (explicit === 'false') return false;
+
+  const appBaseUrl = process.env.APP_BASE_URL;
+  if (appBaseUrl) {
+    try {
+      return new URL(appBaseUrl).protocol === 'https:';
+    } catch {
+      // Fall through to the production default if APP_BASE_URL is malformed.
+    }
+  }
+
+  return process.env.NODE_ENV === 'production';
+}
+
 // ---- Session payload with runtime validation ----
 
 const sessionPayloadSchema = z.object({
@@ -59,7 +76,7 @@ export async function setSessionCookie(token: string, isAdmin = false) {
   cookies().set(isAdmin ? COOKIE_NAME_ADMIN : COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: shouldUseSecureCookies(),
     path: '/',
     maxAge: 60 * 60 * 24 * 7,
   });

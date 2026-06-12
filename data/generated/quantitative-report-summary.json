@@ -1,0 +1,133 @@
+{
+  "outputPath": "/Users/Zhuanz/perf-app/data/generated/超高压变电--量化积分表积分报送表.（变电检修中心）-自动生成.xlsx",
+  "rosterPath": "/Users/Zhuanz/perf-app/data/generated/employee-roster-auto.csv",
+  "year": 2024,
+  "unit": "变电检修中心",
+  "dimension": {
+    "code": "worksite.defect-governance",
+    "title": "缺陷治理",
+    "maxScore": 12,
+    "ownerDepartment": "运检部",
+    "evidenceSource": "运检部认定缺陷库缺陷（500kV变电站缺陷库消缺名单）",
+    "scoringSummary": "危急：第一发现/处理人各3分，共同发现/处理人各1分；严重：各1/0.5分；一般：第一发现/处理人各0.5分；同人兼发现与处理按高分计"
+  },
+  "ticketDimension": {
+    "code": "worksite.ticket-execution",
+    "title": "两票执行",
+    "maxScore": 30,
+    "ownerDepartment": "安监部",
+    "evidenceSource": "各专业两票公示汇总（安监部审核）",
+    "scoringSummary": "操作票0.01分/项；工作负责人/许可人/班成员按票种计分，全年按比例折算"
+  },
+  "safetyDimension": {
+    "code": "performance.safety-contribution",
+    "title": "安全贡献",
+    "maxScore": 12,
+    "ownerDepartment": "安监部",
+    "evidenceSource": "安全工作奖惩实施细则、安全突出贡献签字审批单",
+    "scoringSummary": "第一发现人3分/次；其他发现人合计3分/次"
+  },
+  "ticketScalingNote": "两票执行：读取统计表「分数」列为原始分；在同一能级（一级/二级/三级）内，该能级最高分折算为 30 分，其余人员按比例折算。",
+  "safetyFilterNote": "评价年度 2024：按「申报时间」年份过滤；人员范围：所在单位含「变电检修中心」。计分按申报编号分组：第一发现人 3 分/次（事由含 N 处故障时按 N 次，仅计本单位第一发现人）；本单位其他发现人合计 3 分/次并在本单位其他发现人之间均分；子项封顶 12 分。",
+  "filterNote": "评价年度 2024：发现类事实按「发现时间」年份过滤；处理类事实按「消缺时间」年份过滤。本表为 2024 年消缺名单，处理类事实覆盖全部 375 条；发现类事实仅 73 条发现时间在 2024 年。",
+  "employeeCount": 105,
+  "factCount": 499,
+  "safetyFactCount": 9,
+  "tiers": {
+    "一级": 72,
+    "二级": 10,
+    "三级": 23
+  },
+  "topEmployees": [
+    {
+      "employeeNo": "SX-RND-0035-5543",
+      "fullName": "何艳虎",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 21.4,
+      "rawTicketScore": 42.5,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0064-6996",
+      "fullName": "李倧",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0073-7AA7",
+      "fullName": "刘涛",
+      "defectGovernance": 12,
+      "safetyContribution": 6,
+      "ticketExecution": 18.9,
+      "rawTicketScore": 37.5,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0099-FD8A",
+      "fullName": "任文琳",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0111-464C",
+      "fullName": "田琨",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0115-FEB4",
+      "fullName": "王峰",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0121-BB72",
+      "fullName": "王立",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 30,
+      "rawTicketScore": 59.5,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0180-5DA0",
+      "fullName": "张一玮",
+      "defectGovernance": 12,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0169-ED14",
+      "fullName": "张本宇",
+      "defectGovernance": 11,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    },
+    {
+      "employeeNo": "SX-RND-0196-EE1B",
+      "fullName": "郑慧龙",
+      "defectGovernance": 10.5,
+      "safetyContribution": 0,
+      "ticketExecution": 0,
+      "rawTicketScore": 0,
+      "tier": "二级"
+    }
+  ]
+}

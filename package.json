@@ -10,7 +10,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "npx tsx prisma/seed.ts"
+    "prisma:seed": "npx tsx prisma/seed.ts",
+    "import:defect-facts": "npx tsx scripts/import-defect-facts-2024.ts",
+    "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -38,9 +40,11 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.18",
+    "exceljs": "^4.4.0",
     "postcss": "^8.4.49",
     "prisma": "^5.22.0",
     "tailwindcss": "^3.4.15",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "xlsx": "^0.18.5"
   }
 }

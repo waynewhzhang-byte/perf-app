@@ -82,6 +82,7 @@ model User {
   submissions      Submission[]
   records          PerformanceRecord[]
   sectionReviews   SectionReviewer[]
+  performanceFacts PerformanceFact[]
 }
 
 enum AppRole {
@@ -412,6 +413,44 @@ model ReviewLog {
   submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@index([submissionId])
+}
+
+// ========== 量化积分事实（部门认定台账导入） ==========
+enum PerformanceFactRole {
+  FIRST_DISCOVERER
+  CO_DISCOVERER
+  FIRST_HANDLER
+  CO_HANDLER
+}
+
+enum PerformanceFactEventType {
+  DISCOVERY
+  REMEDIATION
+}
+
+model PerformanceFact {
+  id             String                   @id @default(cuid())
+  year           Int
+  employeeNo     String
+  employeeName   String
+  userId         String?
+  dimensionCode  String
+  dimensionTitle String
+  role           PerformanceFactRole
+  eventType      PerformanceFactEventType
+  score          Decimal                  @db.Decimal(10, 2)
+  defectRef      String
+  defectLevel    String
+  eventDate      String?
+  sourceFile     String
+  metadata       Json                     @default("{}")
+  createdAt      DateTime                 @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([year, employeeNo, dimensionCode, defectRef, role, eventType])
+  @@index([year, employeeNo, dimensionCode])
+  @@index([userId, year])
 }
 
 // ========== 年度绩效档案 ==========

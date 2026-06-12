@@ -167,6 +167,7 @@ NOTIFY_SECRET_KEY     — AES-256-GCM 加密密钥（32 字节 hex）
 MINIO_ENDPOINT/PORT/USE_SSL/ACCESS_KEY/SECRET_KEY/BUCKET  — MinIO 服务端（同机用 127.0.0.1）
 MINIO_PUBLIC_ENDPOINT/PORT/USE_SSL  — 预签名 URL 对外地址（可选）
 APP_BASE_URL          — 应用 base URL（通知链接用）
+COOKIE_SECURE         — 会话 Cookie Secure 覆盖；默认按 APP_BASE_URL 协议判断
 ```
 
 ## 编码约定
