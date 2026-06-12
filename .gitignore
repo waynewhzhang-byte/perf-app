@@ -8,3 +8,4 @@ node_modules
 .cursor/
 .zencoder/
 *.tsbuildinfo
+deploy-packages/
