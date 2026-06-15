@@ -1,0 +1,11 @@
+{
+  "prd_file": "docs/prd.md",
+  "output_dir": "docs/design/",
+  "context_files": [
+    "CLAUDE.md",
+    "docs/superpowers/specs/2026-06-13-architecture-decisions.md"
+  ],
+  "terminology_file": "CONTEXT.md",
+  "existing_openapi_dir": null,
+  "output_language": "zh"
+}

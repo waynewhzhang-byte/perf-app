@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "prd_file": "docs/prd.md",
+  "prd_content_hash": "sha256:385243947221a8136c4487fa070a9b5fb54b24e08f5e165c5282f04cb357375e",
+  "steps": {
+    "usecase": {
+      "status": "locked",
+      "output": "02-用例分析.md",
+      "locked_at": "2026-06-16T08:05:00Z",
+      "hash_at_lock": "sha256:385243947221a8136c4487fa070a9b5fb54b24e08f5e165c5282f04cb357375e"
+    },
+    "domain": {
+      "status": "locked",
+      "output": "03-领域建模.md",
+      "locked_at": "2026-06-16T08:15:00Z",
+      "hash_at_lock": "sha256:385243947221a8136c4487fa070a9b5fb54b24e08f5e165c5282f04cb357375e"
+    },
+    "sequence": {
+      "status": "locked",
+      "output": "04-关键场景时序图.md",
+      "locked_at": "2026-06-16T08:25:00Z",
+      "hash_at_lock": "sha256:385243947221a8136c4487fa070a9b5fb54b24e08f5e165c5282f04cb357375e"
+    },
+    "icd": {
+      "status": "pending",
+      "output": "05-ICD/"
+    },
+    "sow": {
+      "status": "pending",
+      "output": "06-SOW.md"
+    },
+    "uat": {
+      "status": "pending",
+      "output": "07-UAT/"
+    }
+  }
+}
