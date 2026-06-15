@@ -14,6 +14,7 @@ import {
   HEADER_FIELD_LABELS,
   resolveHeaderFields,
 } from '@/lib/header-fields';
+import { DIMENSION_DEFS } from '@/lib/dimension-codes';
 
 type ScoreMode = 'TIERS' | 'COUNTED';
 interface Item {
@@ -25,6 +26,7 @@ interface Item {
   maxScore?: number | null;
   scoreOptions: ScoreOpt[];
   sortOrder: number;
+  dimensionCode?: string | null;
 }
 interface Section { id?: string; title: string; description?: string; sortOrder: number; items: Item[] }
 interface Template {
@@ -95,6 +97,7 @@ function templateToEditing(t: Template | EditingState): EditingState {
           maxScore: it.maxScore == null ? null : Number(it.maxScore),
           scoreOptions: parseScoreOptions(it.scoreOptions),
           sortOrder: it.sortOrder ?? iIdx,
+          dimensionCode: (it as any).dimensionCode ?? null,
         })),
     }));
   return {
@@ -127,7 +130,7 @@ function toPreviewTemplate(editing: EditingState): PreviewTemplate {
 
 const blankItem = (i = 0): Item => ({
   title: '', hint: '', isRequired: true, requireAttachment: true, maxSelections: 1, sortOrder: i,
-  scoreMode: 'TIERS', maxScore: null,
+  scoreMode: 'TIERS', maxScore: null, dimensionCode: null,
   scoreOptions: [
     { optionId: newOptionId(), label: '国家级', score: 10, description: '获得国家级奖项、荣誉或认定' },
     { optionId: newOptionId(), label: '省级', score: 6, description: '获得省部级奖项、荣誉或认定' },
@@ -669,6 +672,17 @@ function ItemEditor({ item, onChange, onDelete, textMode = false }: Readonly<{ i
               分
             </label>
           )}
+          <label className="flex items-center gap-1.5">
+            系统维度
+            <select value={item.dimensionCode ?? ''}
+              onChange={(e) => onChange({ ...item, dimensionCode: e.target.value || null })}
+              className="rounded border border-slate-300 px-1.5 py-0.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 max-w-[180px]">
+              <option value="">手工填写</option>
+              {DIMENSION_DEFS.map((d) => (
+                <option key={d.code} value={d.code}>{d.name}（{d.category}）</option>
+              ))}
+            </select>
+          </label>
         </div>
       )}
 

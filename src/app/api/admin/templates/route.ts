@@ -32,6 +32,7 @@ const ItemSchema = z.object({
   maxScore: z.number().min(0).max(1000).optional().nullable(),
   scoreOptions: z.array(ScoreOptionSchema).min(1, '申报项至少需要一个分值档次'),
   sortOrder: z.number().int().default(0),
+  dimensionCode: z.string().optional().nullable(),
 }).refine((it) => it.scoreMode !== 'COUNTED' || (it.maxScore != null && it.maxScore > 0), {
   message: '按次数计分的申报项必须设置大于 0 的上限分',
   path: ['maxScore'],
