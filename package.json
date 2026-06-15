@@ -11,6 +11,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "npx tsx prisma/seed.ts",
+    "test": "npx tsx --test src/lib/*.test.ts",
     "import:defect-facts": "npx tsx scripts/import-defect-facts-2024.ts",
     "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts"
   },
@@ -37,6 +38,7 @@
     "@types/nodemailer": "^6.4.16",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/xlsx": "^0.0.36",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.18",
