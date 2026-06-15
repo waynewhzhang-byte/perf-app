@@ -10,7 +10,7 @@
  */
 import { mkdirSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
-import { Prisma } from '@prisma/client';
+import { PerformanceFactRole, Prisma } from '@prisma/client';
 import { prisma } from '../src/lib/prisma';
 import { readXlsxFirstSheet } from '../src/lib/xlsx-reader';
 import { importDefectGovernanceFacts, type DefectRow } from '../src/lib/defect-governance';
@@ -65,7 +65,7 @@ async function importFactsToDb(
     employeeName: string;
     dimensionCode: string;
     dimensionTitle: string;
-    role: string;
+    role: PerformanceFactRole;
     score: number;
     eventType?: 'DISCOVERY' | 'REMEDIATION';
     defectRef: string | null;
@@ -91,11 +91,11 @@ async function importFactsToDb(
         role: fact.role,
         eventType: fact.eventType ?? 'DISCOVERY',
         score: new Prisma.Decimal(fact.score),
-        defectRef: fact.defectRef,
-        defectLevel: fact.defectLevel,
+        defectRef: fact.defectRef ?? '',
+        defectLevel: fact.defectLevel ?? '',
         eventDate: fact.eventDate,
         sourceFile: filePath,
-        metadata: fact.metadata,
+        metadata: fact.metadata as Prisma.InputJsonValue,
       },
     });
   }
@@ -291,7 +291,7 @@ async function main() {
           eventType: 'DISCOVERY',
           score: fact.score,
           defectRef: fact.incidentRef,
-          defectLevel: fact.defectLevel ?? '',
+          defectLevel: '',
           eventDate: fact.eventDate,
           metadata: fact.metadata as Record<string, unknown>,
         })),

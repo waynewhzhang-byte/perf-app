@@ -153,7 +153,7 @@ export function buildFactsFromDefectRows(
   rows: DefectRow[],
   year: number,
   resolveName: NameResolver,
-): Omit<DefectImportResult, 'dimension' | 'filterNote'> & {
+): Omit<DefectImportResult, 'dimension' | 'filterNote' | 'unmatchedNames'> & {
   unmatchedNameMap: Map<string, { count: number; refs: Set<string> }>;
 } {
   const facts: DefectFactLine[] = [];
@@ -223,7 +223,7 @@ export function buildFactsFromDefectRows(
         defectRef,
         defectLevel: level,
         eventType: line.eventType,
-        eventDate: line.eventDate,
+        eventDate: null,
         metadata: {
           substation: row.变电站 != null ? String(row.变电站) : null,
           description: row.问题描述 != null ? String(row.问题描述) : null,
