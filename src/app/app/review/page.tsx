@@ -20,6 +20,16 @@ interface SubItem {
   status: string;
   attachments: Att[];
   optionReviews: OptionReview[];
+  // 系统填充项 + 申诉
+  isSystemFilled?: boolean;
+  confirmationStatus?: 'CONFIRMED' | 'DISPUTED' | null;
+  disputeReason?: string | null;
+  disputeL1Result?: 'APPROVED' | 'REJECTED' | null;
+  disputeL1Note?: string | null;
+  disputeL2Result?: 'APPROVED' | 'REJECTED' | null;
+  disputeL2Note?: string | null;
+  overrideScore?: number | string | null;
+  overrideReason?: string | null;
 }
 interface OptionReview {
   id: string;
@@ -57,12 +67,10 @@ export default function ReviewPage() {
   const [level, setLevel] = useState<number>(1);
   const [list, setList] = useState<Submission[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [decisions, setDecisions] = useState<Record<string, { action: 'APPROVE' | 'REJECT'; note?: string }>>({});
+  const [decisions, setDecisions] = useState<Record<string, { action: 'APPROVE' | 'REJECT'; note?: string; disputeAction?: 'APPROVE' | 'REJECT'; disputeNote?: string }>>({});
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<AttachmentPreview | null>(null);
   const [openingAttId, setOpeningAttId] = useState<string | null>(null);
-  const [overallAction, setOverallAction] = useState<'APPROVE' | 'REJECT'>('APPROVE');
-  const [overallNote, setOverallNote] = useState('');
 
   const openAttachment = async (attId: string) => {
     setOpeningAttId(attId);
@@ -90,15 +98,13 @@ export default function ReviewPage() {
   const switchTab = (t: Tab) => {
     setTab(t);
     setDecisions({});
-    setOverallAction('APPROVE');
-    setOverallNote('');
     if (t === 'completed') load('completed'); else load();
   };
 
   const active = list.find((s) => s.id === activeId) || null;
 
-  const setDec = (itemId: string, patch: Partial<{ action: 'APPROVE' | 'REJECT'; note: string }>) =>
-    setDecisions((prev) => ({ ...prev, [itemId]: { ...(prev[itemId] ?? { action: 'APPROVE' }), ...patch } }));
+  const setDec = (key: string, patch: Partial<{ action: 'APPROVE' | 'REJECT'; note: string; disputeAction: 'APPROVE' | 'REJECT'; disputeNote: string }>) =>
+    setDecisions((prev) => ({ ...prev, [key]: { ...(prev[key] ?? { action: 'APPROVE' }), ...patch } }));
 
   const pendingOptionReviews = (submission: Submission) =>
     submission.items.flatMap((item) =>
@@ -107,46 +113,54 @@ export default function ReviewPage() {
         .map((review) => ({ ...review, submissionItemId: item.id, item })),
     );
 
-  const setAll = (action: 'APPROVE' | 'REJECT') => {
-    if (!active) return;
-    const next: typeof decisions = { ...decisions };
-    if (level === 1) {
-      active.items.forEach((it) => { if (it.status === 'PENDING_L1') next[it.id] = { action, note: next[it.id]?.note }; });
-    } else {
-      pendingOptionReviews(active).forEach((review) => { next[review.id] = { action, note: next[review.id]?.note }; });
-    }
-    setDecisions(next);
-  };
-
   const submit = async () => {
     if (!active) return;
     const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
     const pendingOptions = pendingOptionReviews(active);
     if (level === 1 && pendingItems.length === 0) { alert('当前没有待审申报项'); return; }
     if (level === 2 && pendingOptions.length === 0) { alert('当前没有属于您部门的待审子项'); return; }
-    if (level === 1 && overallAction === 'REJECT' && !overallNote.trim()) { alert('整表驳回必须填写原因'); return; }
     const decs = level === 1
-      ? pendingItems.map((it) => ({
-          submissionItemId: it.id,
-          action: decisions[it.id]?.action ?? 'APPROVE',
-          note: decisions[it.id]?.note,
-        }))
-      : pendingOptions.map((review) => ({
-          optionReviewId: review.id,
-          action: decisions[review.id]?.action ?? 'APPROVE',
-          note: decisions[review.id]?.note,
-        }));
+      ? pendingItems.map((it) => {
+          const d = decisions[it.id];
+          const base = {
+            submissionItemId: it.id,
+            action: d?.action ?? 'APPROVE',
+            note: d?.note,
+          };
+          // 申诉判断：对系统填充+申诉中的项附加 disputeAction
+          if (it.isSystemFilled && it.confirmationStatus === 'DISPUTED') {
+            return { ...base, disputeAction: d?.disputeAction ?? 'APPROVE', disputeNote: d?.disputeNote };
+          }
+          return base;
+        })
+      : [
+          // L2 普通审核：按 optionReviewId
+          ...pendingOptions.map((review) => ({
+            optionReviewId: review.id,
+            action: decisions[review.id]?.action ?? 'APPROVE',
+            note: decisions[review.id]?.note,
+          })),
+          // L2 申诉确认：按 submissionItemId
+          ...active.items
+            .filter((it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED' && !it.disputeL2Result)
+            .map((it) => ({
+              submissionItemId: it.id,
+              action: 'APPROVE' as const,
+              disputeAction: decisions[it.id]?.disputeAction ?? 'APPROVE',
+              disputeNote: decisions[it.id]?.disputeNote,
+            })),
+        ];
     const missingNote = decs.find((d) => d.action === 'REJECT' && !d.note?.trim());
     if (missingNote) { alert('驳回的项必须填写原因'); return; }
     setBusy(true);
     const r = await fetch('/api/review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: active.id, overallAction: level === 1 ? overallAction : undefined, overallNote: level === 1 ? overallNote : undefined, decisions: decs }),
+      body: JSON.stringify({ submissionId: active.id, decisions: decs }),
     });
     setBusy(false);
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
-    setDecisions({}); setOverallAction('APPROVE'); setOverallNote(''); load();
+    setDecisions({}); load();
   };
 
   const reviewTimeline = useMemo(() => {
@@ -271,14 +285,6 @@ export default function ReviewPage() {
 	                  <h2 className="font-semibold">{active.user.fullName}（{active.user.contact}）</h2>
 	                  <p className="mt-0.5 text-xs text-slate-400">总分 {String(active.totalScore)}</p>
 	                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setAll('APPROVE')} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-slate-50 cursor-pointer">
-                    全部通过
-                  </button>
-                  <button onClick={() => setAll('REJECT')} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 cursor-pointer">
-                    全部驳回
-                  </button>
-                </div>
 	              </div>
 
 	              <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-5">
@@ -300,34 +306,10 @@ export default function ReviewPage() {
                   </div>
                 )}
 
-                {level === 1 && (
-                  <div className={`mt-3 rounded-lg border p-3 text-sm ${
-                    overallAction === 'REJECT' ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'
-                  }`}>
-                    <div className="flex flex-wrap items-center gap-4">
-                      <span className="text-xs font-semibold text-slate-600">整表/表头结论</span>
-                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                        <input type="radio" checked={overallAction === 'APPROVE'} onChange={() => setOverallAction('APPROVE')} />
-                        通过，进入二级子项审核
-                      </label>
-                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                        <input type="radio" checked={overallAction === 'REJECT'} onChange={() => setOverallAction('REJECT')} />
-                        整表驳回
-                      </label>
-                    </div>
-                    {overallAction === 'REJECT' && (
-                      <input
-                        value={overallNote}
-                        onChange={(e) => setOverallNote(e.target.value)}
-                        placeholder="请填写整表/表头驳回原因（员工可见）"
-                        className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                      />
-                    )}
-                  </div>
-                )}
 
 	              <ul className="mt-3 space-y-3">
-                {level === 2 ? pendingOptionReviews(active).map((review) => {
+                {level === 2 ? <>
+                  {pendingOptionReviews(active).map((review) => {
                   const d = decisions[review.id] ?? { action: 'APPROVE' as const };
                   const it = review.item;
                   return (
@@ -387,7 +369,70 @@ export default function ReviewPage() {
                       )}
                     </li>
                   );
-                }) : active.items.map((it) => {
+                  })}
+                  {/* L2 申诉确认：对 L1 已认定合理的申诉项 */}
+                  {active.items
+                    .filter((it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED')
+                    .map((it) => {
+                      const d = decisions[it.id];
+                      return (
+                        <li key={`dispute-${it.id}`} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium text-sm">申诉：{it.item.title}</p>
+                                <span className="shrink-0 rounded-full bg-amber-500 px-2 py-px text-[10px] font-semibold text-white">待确认</span>
+                              </div>
+                              {it.disputeReason && (
+                                <p className="mt-1 text-xs text-amber-700">员工申诉理由：{it.disputeReason}</p>
+                              )}
+                              <p className="mt-1 text-xs text-amber-700">
+                                L1 判断：已认定合理{it.disputeL1Note ? ` — ${it.disputeL1Note}` : ''}
+                              </p>
+                              {it.disputeL2Result ? (
+                                <p className="mt-1 text-xs font-medium text-amber-700">
+                                  申诉确认：{it.disputeL2Result === 'APPROVED' ? '已确认有效' : '已认定无效'}
+                                  {it.disputeL2Note ? ` — ${it.disputeL2Note}` : ''}
+                                </p>
+                              ) : (
+                                <div className="mt-2">
+                                  <p className="text-xs font-medium text-amber-700 mb-1">对申诉做出确认：</p>
+                                  <div className="flex gap-3 mb-1">
+                                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        checked={(d?.disputeAction ?? 'APPROVE') === 'APPROVE'}
+                                        onChange={() => setDec(it.id, { disputeAction: 'APPROVE' })}
+                                        className="text-amber-600"
+                                      />
+                                      确认有效
+                                    </label>
+                                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        checked={d?.disputeAction === 'REJECT'}
+                                        onChange={() => setDec(it.id, { disputeAction: 'REJECT' })}
+                                        className="text-red-600"
+                                      />
+                                      认定无效
+                                    </label>
+                                  </div>
+                                  {d?.disputeAction === 'REJECT' && (
+                                    <input
+                                      value={d.disputeNote ?? ''}
+                                      onChange={(e) => setDec(it.id, { disputeNote: e.target.value })}
+                                      placeholder="请填写驳回申诉原因"
+                                      className="w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                                    />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                </> : active.items.map((it) => {
                   const d = decisions[it.id] ?? { action: 'APPROVE' as const };
                   const isPreviouslyApproved =
                     it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED';
@@ -472,6 +517,54 @@ export default function ReviewPage() {
                           className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
                         />
                       )}
+
+                      {/* 申诉判断：员工申诉的系统填充项 */}
+                      {(it as SubItem).isSystemFilled && (it as SubItem).confirmationStatus === 'DISPUTED' && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                          <p className="text-xs font-semibold text-amber-800">员工申诉中</p>
+                          {(it as SubItem).disputeReason && (
+                            <p className="mt-1 text-xs text-amber-700">申诉理由：{(it as SubItem).disputeReason}</p>
+                          )}
+                          {(it as SubItem).disputeL1Result ? (
+                            <p className="mt-1 text-xs font-medium text-amber-700">
+                              申诉判断：{(it as SubItem).disputeL1Result === 'APPROVED' ? '已认定合理' : '已驳回'}
+                              {(it as SubItem).disputeL1Note && ` — ${(it as SubItem).disputeL1Note}`}
+                            </p>
+                          ) : (
+                            <div className="mt-2">
+                              <p className="text-xs font-medium text-amber-700 mb-1">对申诉做出判断：</p>
+                              <div className="flex gap-3 mb-1">
+                                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    checked={(d.disputeAction ?? 'APPROVE') === 'APPROVE'}
+                                    onChange={() => setDec(it.id, { disputeAction: 'APPROVE' })}
+                                    className="text-amber-600"
+                                  />
+                                  申诉合理
+                                </label>
+                                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    checked={d.disputeAction === 'REJECT'}
+                                    onChange={() => setDec(it.id, { disputeAction: 'REJECT' })}
+                                    className="text-red-600"
+                                  />
+                                  申诉驳回
+                                </label>
+                              </div>
+                              {d.disputeAction === 'REJECT' && (
+                                <input
+                                  value={d.disputeNote ?? ''}
+                                  onChange={(e) => setDec(it.id, { disputeNote: e.target.value })}
+                                  placeholder="请填写驳回申诉原因"
+                                  className="w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                                />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </li>
                   );
                 })}
@@ -554,17 +647,19 @@ export default function ReviewPage() {
                       <div key={i} className="flex gap-3 text-sm">
                         <div className="flex flex-col items-center">
                           <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${
+                            entry.level === 3 ? 'bg-amber-500' :
                             entry.action === 'APPROVE' ? 'bg-emerald-500' : 'bg-red-500'
                           }`} />
                           {i < reviewTimeline.length - 1 && <div className="w-px flex-1 bg-slate-200" />}
                         </div>
                         <div className="pb-2">
                           <p className="font-medium">
-                            {entry.level === 1 ? '一级审核' : '二级终审'}
+                            {entry.level === 0 ? '提交/预审' : entry.level === 1 ? '一级审核' : entry.level === 2 ? '二级终审' : '管理员覆盖分'}
                             <span className={`ml-2 text-xs font-medium ${
+                              entry.level === 3 ? 'text-amber-600' :
                               entry.action === 'APPROVE' ? 'text-emerald-600' : 'text-red-600'
                             }`}>
-                              {entry.action === 'APPROVE' ? '通过' : '驳回'}
+                              {entry.level === 3 ? '已覆盖' : entry.action === 'APPROVE' ? '通过' : '驳回'}
                             </span>
                           </p>
                           <p className="text-xs text-slate-500">

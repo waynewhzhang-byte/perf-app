@@ -17,12 +17,13 @@ const DecisionSchema = z.object({
   optionReviewId: z.string().optional(),
   action: z.enum(['APPROVE', 'REJECT']),
   note: z.string().optional(),
+  // 申诉判断：仅对员工申诉（DISPUTED）的系统填充项生效
+  disputeAction: z.enum(['APPROVE', 'REJECT']).optional(),
+  disputeNote: z.string().optional(),
 });
 
 const Schema = z.object({
   submissionId: z.string(),
-  overallAction: z.enum(['APPROVE', 'REJECT']).optional(),
-  overallNote: z.string().optional(),
   decisions: z.array(DecisionSchema),
 });
 
@@ -263,39 +264,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '该申报不在您的审核范围内' }, { status: 403 });
     }
 
-    const overallAction = parsed.data.overallAction ?? 'APPROVE';
-    if (overallAction === 'REJECT' && !parsed.data.overallNote?.trim()) {
-      return NextResponse.json({ error: '整表驳回必须填写原因' }, { status: 400 });
-    }
     const pendingItems = sub.items.filter((item) => item.status === 'PENDING_L1');
     const decisionMap = new Map(parsed.data.decisions.map((d) => [d.submissionItemId, d]));
-    if (overallAction === 'APPROVE') {
-      const uncovered = pendingItems.filter((item) => !decisionMap.has(item.id));
-      if (uncovered.length > 0) {
-        return NextResponse.json({ error: `以下申报项未做出审核决定：${uncovered.map((item) => item.item.title).join('、')}` }, { status: 400 });
-      }
+    const uncovered = pendingItems.filter((item) => !decisionMap.has(item.id));
+    if (uncovered.length > 0) {
+      return NextResponse.json({ error: `以下申报项未做出审核决定：${uncovered.map((item) => item.item.title).join('、')}` }, { status: 400 });
     }
     const itemReject = parsed.data.decisions.find((d) => d.action === 'REJECT' && !d.note?.trim());
     if (itemReject) return NextResponse.json({ error: '驳回的项必须填写原因' }, { status: 400 });
 
-    let rejected = overallAction === 'REJECT';
+    let rejected = false;
     let finalized = false;
     try {
       await prisma.$transaction(async (tx) => {
-        if (overallAction === 'REJECT') {
-          await tx.submissionItem.updateMany({
-            where: { submissionId: sub.id, status: 'PENDING_L1' },
-            data: { status: 'REJECTED', rejectReason: parsed.data.overallNote },
-          });
-          await tx.reviewLog.create({
-            data: { submissionId: sub.id, reviewerId: s.userId, level: 1, action: 'REJECT', note: `整表/表头驳回：${parsed.data.overallNote}` },
-          });
-          await tx.submission.update({
-            where: { id: sub.id },
-            data: { status: 'REJECTED', l1ReviewerId: s.userId, l1ReviewedAt: new Date() },
-          });
-          return;
-        }
 
       for (const item of pendingItems) {
         const decision = decisionMap.get(item.id)!;
@@ -319,6 +300,36 @@ export async function POST(req: Request) {
             note: decision.note,
           },
         });
+
+        // 申诉判断：对员工申诉的系统填充项，L1 必须给出判断
+        if ((item as any).isSystemFilled && (item as any).confirmationStatus === 'DISPUTED') {
+          if (!decision.disputeAction) {
+            throw new ReviewError(`「${item.item.title}」存在员工申诉，请对申诉做出判断（申诉合理/申诉驳回）`);
+          }
+          if (decision.disputeAction === 'REJECT' && !decision.disputeNote?.trim()) {
+            throw new ReviewError('驳回申诉请填写原因');
+          }
+          const disputeResult: 'APPROVED' | 'REJECTED' = decision.disputeAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+          await tx.submissionItem.update({
+            where: { id: item.id },
+            data: {
+              disputeL1Result: disputeResult,
+              disputeL1Note: decision.disputeNote ?? null,
+              disputeL1ReviewerId: s.userId,
+              disputeL1ReviewedAt: new Date(),
+            },
+          });
+          await tx.reviewLog.create({
+            data: {
+              submissionId: sub.id,
+              submissionItemId: item.id,
+              reviewerId: s.userId,
+              level: 1,
+              action: decision.disputeAction,
+              note: `申诉判断：${decision.disputeAction === 'APPROVE' ? '认定合理' : '驳回'}${decision.disputeNote ? `。${decision.disputeNote}` : ''}`,
+            },
+          });
+        }
       }
 
       if (rejected) {
@@ -484,6 +495,48 @@ export async function POST(req: Request) {
           data: { status: 'L2_APPROVED', reviewedBy: s.userId, reviewedAt: new Date(), rejectReason: null },
         });
       }
+    }
+
+    // 申诉确认：对 L1 认定合理的申诉项，L2 必须给出确认判断
+    const disputeDecisionMap = new Map(
+      parsed.data.decisions
+        .filter((d) => d.submissionItemId && d.disputeAction)
+        .map((d) => [d.submissionItemId!, d]),
+    );
+    for (const itemId of affectedItemIds) {
+      const item = await tx.submissionItem.findUnique({ where: { id: itemId }, include: { item: true } });
+      if (!item || !(item as any).isSystemFilled || (item as any).confirmationStatus !== 'DISPUTED') continue;
+      if ((item as any).disputeL1Result !== 'APPROVED') continue;
+      if ((item as any).disputeL2Result) continue; // already processed
+
+      const disputeDecision = disputeDecisionMap.get(itemId);
+      if (!disputeDecision || !disputeDecision.disputeAction) {
+        throw new ReviewError(`「${(item as any).item?.title ?? item.itemId}」存在申诉（一级已认定合理），请对申诉做出确认判断`);
+      }
+      if (disputeDecision.disputeAction === 'REJECT' && !disputeDecision.disputeNote?.trim()) {
+        throw new ReviewError('驳回申诉请填写原因');
+      }
+
+      const disputeResult: 'APPROVED' | 'REJECTED' = disputeDecision.disputeAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+      await tx.submissionItem.update({
+        where: { id: itemId },
+        data: {
+          disputeL2Result: disputeResult,
+          disputeL2Note: disputeDecision.disputeNote ?? null,
+          disputeL2ReviewerId: s.userId,
+          disputeL2ReviewedAt: new Date(),
+        },
+      });
+      await tx.reviewLog.create({
+        data: {
+          submissionId: sub.id,
+          submissionItemId: itemId,
+          reviewerId: s.userId,
+          level: 2,
+          action: disputeDecision.disputeAction,
+          note: `申诉确认：${disputeDecision.disputeAction === 'APPROVE' ? '确认有效' : '认定无效'}${disputeDecision.disputeNote ? `。${disputeDecision.disputeNote}` : ''}`,
+        },
+      });
     }
 
     const remaining = await tx.submissionOptionReview.count({

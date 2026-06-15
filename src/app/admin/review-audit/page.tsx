@@ -13,6 +13,16 @@ interface SubItem {
   id: string; item: { title: string }; selected: { label: string; score: number }[];
   content?: string | null; score: number; status: string; rejectReason?: string | null;
   attachments: { id: string; filename: string; storageKey: string; mimeType?: string | null }[];
+  // 系统填充项 + 申诉 + 覆盖
+  isSystemFilled?: boolean;
+  confirmationStatus?: 'CONFIRMED' | 'DISPUTED' | null;
+  disputeReason?: string | null;
+  disputeL1Result?: 'APPROVED' | 'REJECTED' | null;
+  disputeL1Note?: string | null;
+  disputeL2Result?: 'APPROVED' | 'REJECTED' | null;
+  disputeL2Note?: string | null;
+  overrideScore?: number | null;
+  overrideReason?: string | null;
 }
 interface ReviewLogEntry { id: string; reviewerId: string; level: number; action: string; note?: string | null; createdAt: string; submissionItemId?: string | null }
 interface AuditSubmission {
@@ -44,6 +54,33 @@ export default function ReviewAuditPage() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [overrideItemId, setOverrideItemId] = useState<string | null>(null);
+  const [overrideScore, setOverrideScore] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideBusy, setOverrideBusy] = useState(false);
+
+  const submitOverride = async () => {
+    if (!overrideItemId || !overrideScore.trim() || !overrideReason.trim()) {
+      alert('请填写覆盖分数和原因');
+      return;
+    }
+    const score = parseFloat(overrideScore);
+    if (isNaN(score) || score < 0) { alert('请输入有效的分数'); return; }
+    setOverrideBusy(true);
+    try {
+      const r = await fetch('/api/admin/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissionItemId: overrideItemId, overrideScore: score, overrideReason: overrideReason.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) { alert(d.error || '覆盖失败'); return; }
+      alert('覆盖成功');
+      setOverrideItemId(null); setOverrideScore(''); setOverrideReason('');
+      // 刷新详情
+      if (detail) openDetail(detail.id);
+    } finally { setOverrideBusy(false); }
+  };
 
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
@@ -237,24 +274,112 @@ export default function ReviewAuditPage() {
                           <h4 className="text-xs font-semibold text-slate-500">申报项明细</h4>
                           <ul className="mt-2 space-y-1.5">
                             {detail!.items.map((it) => (
-                              <li key={it.id} className="flex items-start justify-between rounded border bg-white p-2.5">
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-sm font-medium">{it.item.title}</p>
-                                    {itemStatusBadge(it.status)}
+                              <li key={it.id} className={`rounded border bg-white p-2.5 ${it.isSystemFilled && it.confirmationStatus === 'DISPUTED' ? 'border-amber-200' : ''}`}>
+                                <div className="flex items-start justify-between">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-sm font-medium">{it.item.title}</p>
+                                      {itemStatusBadge(it.status)}
+                                      {it.isSystemFilled && (
+                                        <span className="rounded-full bg-purple-50 px-2 py-px text-[10px] font-medium text-purple-600">系统填充</span>
+                                      )}
+                                      {it.confirmationStatus === 'CONFIRMED' && (
+                                        <span className="rounded-full bg-emerald-50 px-2 py-px text-[10px] font-medium text-emerald-600">员工已确认</span>
+                                      )}
+                                      {it.confirmationStatus === 'DISPUTED' && (
+                                        <span className="rounded-full bg-amber-50 px-2 py-px text-[10px] font-medium text-amber-600">员工申诉中</span>
+                                      )}
+                                      {it.overrideScore != null && (
+                                        <span className="rounded-full bg-orange-50 px-2 py-px text-[10px] font-medium text-orange-600">管理员已覆盖</span>
+                                      )}
+                                    </div>
+                                    <p className="mt-0.5 text-xs text-slate-500">
+                                      {it.selected?.map((s) => `${s.label}(${s.score}分)`).join('、') || '—'}
+                                    </p>
+                                    {it.content && <p className="mt-0.5 text-xs text-slate-600">备注：{it.content}</p>}
+                                    {it.rejectReason && <p className="mt-0.5 text-xs text-red-600">驳回原因：{it.rejectReason}</p>}
+                                    {/* 申诉历史 */}
+                                    {it.disputeReason && (
+                                      <p className="mt-0.5 text-xs text-amber-700">员工申诉理由：{it.disputeReason}</p>
+                                    )}
+                                    {it.disputeL1Result && (
+                                      <p className="mt-0.5 text-xs text-amber-700">
+                                        L1 判断：{it.disputeL1Result === 'APPROVED' ? '认定合理' : '驳回'}
+                                        {it.disputeL1Note ? ` — ${it.disputeL1Note}` : ''}
+                                      </p>
+                                    )}
+                                    {it.disputeL2Result && (
+                                      <p className="mt-0.5 text-xs text-amber-700">
+                                        L2 确认：{it.disputeL2Result === 'APPROVED' ? '确认有效' : '认定无效'}
+                                        {it.disputeL2Note ? ` — ${it.disputeL2Note}` : ''}
+                                      </p>
+                                    )}
+                                    {it.overrideScore != null && (
+                                      <p className="mt-0.5 text-xs text-orange-700">
+                                        管理员覆盖：{Number(it.score).toFixed(1)} 分（原因：{it.overrideReason || '—'}）
+                                      </p>
+                                    )}
+                                    {it.attachments.length > 0 && (
+                                      <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
+                                    )}
+                                    {/* 管理员覆盖表单 */}
+                                    {it.disputeL2Result === 'APPROVED' && it.overrideScore == null && (
+                                      <div className="mt-2 rounded border border-orange-200 bg-orange-50 p-3">
+                                        <p className="text-xs font-semibold text-orange-700 mb-2">申诉已确认有效，可覆盖分数</p>
+                                        {overrideItemId === it.id ? (
+                                          <div className="space-y-2">
+                                            <div>
+                                              <label className="text-xs font-medium text-orange-700">覆盖分数（当前 {Number(it.score).toFixed(1)} 分）</label>
+                                              <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                value={overrideScore}
+                                                onChange={(e) => setOverrideScore(e.target.value)}
+                                                className="mt-0.5 w-32 rounded border border-orange-300 px-2 py-1 text-sm"
+                                                placeholder="新分数"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="text-xs font-medium text-orange-700">覆盖原因</label>
+                                              <input
+                                                value={overrideReason}
+                                                onChange={(e) => setOverrideReason(e.target.value)}
+                                                className="mt-0.5 w-full rounded border border-orange-300 px-2 py-1 text-sm"
+                                                placeholder="请填写覆盖原因（审计用）"
+                                              />
+                                            </div>
+                                            <div className="flex gap-2">
+                                              <button
+                                                onClick={submitOverride}
+                                                disabled={overrideBusy}
+                                                className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+                                              >
+                                                {overrideBusy ? '提交中…' : '确认覆盖'}
+                                              </button>
+                                              <button
+                                                onClick={() => { setOverrideItemId(null); setOverrideScore(''); setOverrideReason(''); }}
+                                                className="rounded border border-orange-300 px-3 py-1 text-xs text-orange-700 hover:bg-orange-100"
+                                              >
+                                                取消
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            onClick={() => { setOverrideItemId(it.id); setOverrideScore(''); setOverrideReason(''); }}
+                                            className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
+                                          >
+                                            覆盖分数
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
-                                  <p className="mt-0.5 text-xs text-slate-500">
-                                    {it.selected?.map((s) => `${s.label}(${s.score}分)`).join('、') || '—'}
-                                  </p>
-                                  {it.content && <p className="mt-0.5 text-xs text-slate-600">备注：{it.content}</p>}
-                                  {it.rejectReason && <p className="mt-0.5 text-xs text-red-600">驳回原因：{it.rejectReason}</p>}
-                                  {it.attachments.length > 0 && (
-                                    <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
-                                  )}
+                                  <span className="ml-3 shrink-0 rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
+                                    {Number(it.score).toFixed(1)} 分
+                                  </span>
                                 </div>
-                                <span className="ml-3 shrink-0 rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-                                  {Number(it.score).toFixed(1)} 分
-                                </span>
                               </li>
                             ))}
                           </ul>
@@ -271,14 +396,16 @@ export default function ReviewAuditPage() {
                               return (
                                 <div key={log.id || i} className="flex gap-3 text-sm">
                                   <div className="flex flex-col items-center">
-                                    <div className={`mt-1.5 h-2 w-2 rounded-full ${log.action === 'APPROVE' ? 'bg-green-500' : 'bg-red-500'}`} />
+                                    <div className={`mt-1.5 h-2 w-2 rounded-full ${
+                                      log.level === 3 ? 'bg-amber-500' : log.action === 'APPROVE' ? 'bg-green-500' : 'bg-red-500'
+                                    }`} />
                                     {i < detail!.logs.length - 1 && <div className="w-px flex-1 bg-slate-200" />}
                                   </div>
                                   <div className="pb-2">
                                     <p className="text-xs">
-                                      <span className="font-medium">{log.level === 0 ? '提交/预审' : log.level === 1 ? '一级审核' : '二级终审'}</span>
-                                      <span className={`ml-2 ${log.action === 'APPROVE' ? 'text-green-600' : 'text-red-600'}`}>
-                                        {log.action === 'APPROVE' ? '通过' : '驳回'}
+                                      <span className="font-medium">{log.level === 0 ? '提交/预审' : log.level === 1 ? '一级审核' : log.level === 2 ? '二级终审' : '管理员覆盖分'}</span>
+                                      <span className={`ml-2 ${log.level === 3 ? 'text-amber-600' : log.action === 'APPROVE' ? 'text-green-600' : 'text-red-600'}`}>
+                                        {log.level === 3 ? '已覆盖' : log.action === 'APPROVE' ? '通过' : '驳回'}
                                       </span>
                                       {itemTitle && <span className="ml-1 text-slate-400">· {itemTitle}</span>}
                                     </p>

@@ -61,6 +61,11 @@ export default function SubmissionPage() {
     declarationSpecialtyId: '',
   });
   const [answers, setAnswers] = useState<Record<string, SubItem>>({});
+  const [factsData, setFactsData] = useState<{
+    items: { itemId: string; itemTitle: string; dimensionCode?: string; totalScore: number; facts: { id: string; role: string; eventType: string; score: number; defectRef: string; defectLevel?: string; eventDate?: string | null }[] }[];
+  } | null>(null);
+  const [factsConfirmations, setFactsConfirmations] = useState<Record<string, 'CONFIRMED' | 'DISPUTED'>>({});
+  const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -120,6 +125,24 @@ export default function SubmissionPage() {
         } : { itemId: it.id, selected: [], content: '' };
       }));
       setAnswers(map);
+      // 加载系统填充事实数据
+      const factsRes = await fetch(`/api/facts?templateId=${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null);
+      if (factsRes?.items?.length) {
+        setFactsData(factsRes);
+        // 从已有 submission item 恢复确认/申诉状态
+        const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
+        const disps: Record<string, string> = {};
+        if (existing?.items) {
+          for (const si of existing.items) {
+            if ((si as any).isSystemFilled && (si as any).confirmationStatus) {
+              confs[si.itemId] = (si as any).confirmationStatus;
+              if ((si as any).disputeReason) disps[si.itemId] = (si as any).disputeReason;
+            }
+          }
+        }
+        setFactsConfirmations(confs);
+        setFactsDisputes(disps);
+      }
       setLoading(false);
     })();
   }, [templateId]);
@@ -240,6 +263,14 @@ export default function SubmissionPage() {
         else if (a.selected.length && it.requireAttachment && !(a.attachments?.length)) missing.push(`${it.title}（缺附件）`);
       }));
       if (missing.length) { alert('请补全：\n' + missing.join('\n')); return; }
+      // 校验：申诉项必须填写原因
+      const missingDisputeReason = (factsData?.items ?? []).filter(
+        (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsDisputes[fi.itemId] ?? '').trim(),
+      );
+      if (missingDisputeReason.length > 0) {
+        alert('请为以下申诉项填写原因：\n' + missingDisputeReason.map((fi) => fi.itemTitle).join('\n'));
+        return;
+      }
     }
     setBusy(true);
     const r = await fetch('/api/submissions', {
@@ -247,7 +278,22 @@ export default function SubmissionPage() {
       body: JSON.stringify({
         templateId, submit,
         ...header,
-        items: Object.values(answers).map((a) => ({ itemId: a.itemId, selected: a.selected, content: a.content })),
+        items: [
+          ...Object.values(answers).map((a) => ({
+            itemId: a.itemId, selected: a.selected, content: a.content,
+            confirmationStatus: (a as any).confirmationStatus,
+            disputeReason: (a as any).disputeReason,
+            isSystemFilled: (a as any).isSystemFilled ?? false,
+          })),
+          // 系统填充项：根据确认/申诉状态构建 payload
+          ...(factsData?.items ?? []).map((fi) => ({
+            itemId: fi.itemId,
+            selected: fi.facts.map((f) => ({ label: `${f.defectLevel || f.role} ${f.defectRef}`, score: f.score })),
+            isSystemFilled: true as any,
+            confirmationStatus: factsConfirmations[fi.itemId] || undefined,
+            disputeReason: factsDisputes[fi.itemId] || undefined,
+          })),
+        ],
       }),
     });
     setBusy(false);
@@ -412,6 +458,78 @@ export default function SubmissionPage() {
             )}
           </div>
         </section>
+      )}
+
+      {/* 系统自动填充项 */}
+      {factsData && factsData.items.length > 0 && (
+        <div className="mt-5 space-y-4">
+          <h2 className="text-sm font-semibold text-slate-500">系统自动填充（来自部门台账）</h2>
+          {factsData.items.map((fi) => {
+            const confirmed = factsConfirmations[fi.itemId] === 'CONFIRMED';
+            const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
+            return (
+              <section key={fi.itemId} className={`rounded-xl border p-5 ${
+                confirmed ? 'border-emerald-200 bg-emerald-50' :
+                disputed ? 'border-amber-200 bg-amber-50' :
+                'border-slate-200 bg-white'
+              }`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-sm">{fi.itemTitle}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      系统计算得分：<b className="text-emerald-700">{fi.totalScore.toFixed(1)} 分</b>
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {fi.facts.map((f) => (
+                        <p key={f.id} className="text-xs text-slate-500">
+                          {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
+                          {' · '}{f.role === 'FIRST_DISCOVERER' ? '第一发现人' : f.role === 'CO_DISCOVERER' ? '共同发现人' : f.role === 'FIRST_HANDLER' ? '第一处理人' : '共同处理人'}
+                          {' · '}{f.defectRef}
+                          {f.eventDate && ` · ${String(f.eventDate).slice(0, 10)}`}
+                          {' → '}<b>{f.score} 分</b>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                  {!confirmed && !disputed && (
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button"
+                        onClick={() => setFactsConfirmations((p) => ({ ...p, [fi.itemId]: 'CONFIRMED' }))}
+                        className="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 cursor-pointer">
+                        确认
+                      </button>
+                      <button type="button"
+                        onClick={() => setFactsConfirmations((p) => ({ ...p, [fi.itemId]: 'DISPUTED' }))}
+                        className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 cursor-pointer">
+                        申诉
+                      </button>
+                    </div>
+                  )}
+                  {confirmed && (
+                    <span className="shrink-0 rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">
+                      已确认（锁定）
+                    </span>
+                  )}
+                  {disputed && (
+                    <span className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
+                      申诉中
+                    </span>
+                  )}
+                </div>
+                {disputed && (
+                  <div className="mt-3">
+                    <textarea
+                      value={factsDisputes[fi.itemId] ?? ''}
+                      onChange={(e) => setFactsDisputes((p) => ({ ...p, [fi.itemId]: e.target.value }))}
+                      placeholder="请说明申诉原因（必填，审核员可见）"
+                      rows={3}
+                      className="w-full rounded-lg border border-amber-300 px-3 py-2 text-xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
       )}
 
       <div className="mt-5 space-y-6">

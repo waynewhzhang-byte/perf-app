@@ -44,9 +44,12 @@ const UpsertSchema = z.object({
       optionId: z.string().optional(),
       label: z.string().optional(),
       score: z.number().optional(),
-      count: z.number().int().min(0).optional(),  // COUNTED 模式：该子项次数
+      count: z.number().int().min(0).optional(),
     })),
     content: z.string().optional(),
+    confirmationStatus: z.enum(['CONFIRMED', 'DISPUTED']).optional(),
+    disputeReason: z.string().optional(),
+    isSystemFilled: z.boolean().optional(),
   })),
   submit: z.boolean().default(false),     // true 表示从草稿 → 提交
 });
@@ -220,6 +223,10 @@ export async function POST(req: Request) {
         if (it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED') {
           lockedItemIds.add(it.itemId);
         }
+        // 系统填充已确认项视为锁定 — 员工已确认的分数不可修改
+        if ((it as any).isSystemFilled && (it as any).confirmationStatus === 'CONFIRMED') {
+          lockedItemIds.add(it.itemId);
+        }
       }
 
       // 收集未被本次 payload 覆盖的驳回项（submit 硬错误，draft 软警告）
@@ -303,12 +310,22 @@ export async function POST(req: Request) {
         }
 
         const newStatus = submit ? 'PENDING_L1' : 'DRAFT';
-        await tx.submissionItem.upsert({
+        const confStatus = (it as any).confirmationStatus as string | undefined;
+        const isSystem = !!(it as any).isSystemFilled;
+        await (tx as any).submissionItem.upsert({
           where: { submissionId_itemId: { submissionId: sub.id, itemId: it.itemId } },
-          update: { selected: normalizedSelected as any, content: it.content, score, status: newStatus, rejectReason: null },
+          update: {
+            selected: normalizedSelected as any, content: it.content, score, status: newStatus, rejectReason: null,
+            ...(confStatus ? { confirmationStatus: confStatus } : {}),
+            disputeReason: (it as any).disputeReason ?? null,
+            isSystemFilled: isSystem,
+          },
           create: {
             submissionId: sub.id, itemId: it.itemId,
             selected: normalizedSelected as any, content: it.content, score, status: newStatus,
+            ...(confStatus ? { confirmationStatus: confStatus } : {}),
+            disputeReason: (it as any).disputeReason ?? null,
+            isSystemFilled: isSystem,
           },
         });
         totalScore += score;
