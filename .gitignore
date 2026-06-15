@@ -9,3 +9,7 @@ node_modules
 .zencoder/
 *.tsbuildinfo
 deploy-packages/
+
+# OS / tool artifacts
+.DS_Store
+test-results/
