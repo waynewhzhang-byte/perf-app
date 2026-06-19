@@ -33,6 +33,8 @@ export interface FactInput {
   rawScore?: number;
   /** 所属能级（NORMALIZE 型按此分组找最高分） */
   declarationLevel?: string;
+  /** 所属档位值（BASIC_TIER 型按此查表） */
+  tierValue?: string;
   /** 来源文件名（写入 metadata） */
   sourceFile: string;
   /** 事件日期 */
@@ -49,7 +51,7 @@ export type FactRole =
 
 export type FactEventType = 'DISCOVERY' | 'REMEDIATION';
 
-export type RuleType = 'MATRIX' | 'SHARE' | 'NORMALIZE';
+export type RuleType = 'MATRIX' | 'SHARE' | 'NORMALIZE' | 'BASIC_TIER';
 
 // ── Rule Config ──────────────────────────────────────────────────
 
@@ -67,6 +69,10 @@ export interface ScoringRule {
   roles?: Record<string, ShareRoleConfig>;
   /** SHARE 型：按哪个字段分组 */
   groupBy?: string;
+  /** BASIC_TIER 型：档位值 → 分数 */
+  tiers?: Record<string, number>;
+  /** BASIC_TIER 型：档位未命中时的默认分 */
+  defaultScore?: number;
   /** NORMALIZE 型 */
   targetMaxScore?: number;
   sourceKey?: string;
@@ -126,6 +132,9 @@ export function computeFactScores(
         break;
       case 'NORMALIZE':
         results.push(...processNormalize(dimFacts, rule));
+        break;
+      case 'BASIC_TIER':
+        results.push(...processBasicTier(dimFacts, rule));
         break;
     }
   }
@@ -262,4 +271,24 @@ function processNormalize(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
   }
 
   return results;
+}
+
+
+// ── BASIC_TIER: 基础素质档位 ─────────────────────────────────────
+// 档位值 → 固定分数，未命中取 defaultScore，受 cap 限制
+
+function processBasicTier(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
+  const tiers = rule.tiers ?? {};
+  const def = rule.defaultScore ?? 0;
+  return facts.map((f) => {
+    const tierValue = String(f.tierValue ?? '');
+    const raw = Object.prototype.hasOwnProperty.call(tiers, tierValue)
+      ? tiers[tierValue]
+      : def;
+    return {
+      ...f,
+      score: Math.min(raw, rule.cap),
+      rawScore: raw,
+    };
+  });
 }

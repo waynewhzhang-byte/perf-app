@@ -7,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { DIMENSION_DEFS } from '@/lib/dimension-codes';
 
-const RULE_TYPES = ['MATRIX', 'SHARE', 'NORMALIZE'] as const;
+const RULE_TYPES = ['MATRIX', 'SHARE', 'NORMALIZE', 'BASIC_TIER'] as const;
 
 // ── Config sub-schemas per rule type ────────────────────────────────
 
@@ -32,10 +32,16 @@ const NormalizeConfigSchema = z.object({
   normalizeWithin: z.string().optional(),
 });
 
+const BasicTierConfigSchema = z.object({
+  tiers: z.record(z.string(), z.number()),
+  defaultScore: z.number().optional(),
+});
+
 const ConfigByType: Record<string, z.ZodTypeAny> = {
   MATRIX: MatrixConfigSchema,
   SHARE: ShareConfigSchema,
   NORMALIZE: NormalizeConfigSchema,
+  BASIC_TIER: BasicTierConfigSchema,
 };
 
 // ── Full schemas ────────────────────────────────────────────────────

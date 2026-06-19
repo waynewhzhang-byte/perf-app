@@ -346,3 +346,75 @@ describe('边界情况', () => {
     assert.equal(results[0].score, 3);
   });
 });
+
+// ── BASIC_TIER 测试 ────────────────────────────────────────────
+
+describe('BASIC_TIER (档位映射)', () => {
+  function basicTierRule(overrides: Partial<ScoringRule> = {}): ScoringRule {
+    return {
+      id: 'r-basic',
+      dimensionCode: 'basic.skill-level',
+      ruleType: 'BASIC_TIER',
+      cap: 6,
+      enabled: true,
+      tiers: { '高级技师': 4, '技师': 3 },
+      defaultScore: 1,
+      ...overrides,
+    };
+  }
+
+  it('命中档位 → 取 tier 值', () => {
+    const facts = [
+      fact({
+        dimensionCode: 'basic.skill-level',
+        employeeNo: '001',
+        tierValue: '高级技师',
+      }),
+      fact({
+        dimensionCode: 'basic.skill-level',
+        employeeNo: '002',
+        tierValue: '技师',
+      }),
+    ];
+    const scored = computeFactScores(facts, [basicTierRule()]);
+    assert.equal(scored.find((r) => r.employeeNo === '001')!.score, 4);
+    assert.equal(scored.find((r) => r.employeeNo === '002')!.score, 3);
+  });
+
+  it('档位未配置 → 取 defaultScore', () => {
+    const facts = [
+      fact({
+        dimensionCode: 'basic.skill-level',
+        employeeNo: '003',
+        tierValue: '未知',
+      }),
+    ];
+    const scored = computeFactScores(facts, [basicTierRule()]);
+    assert.equal(scored.find((r) => r.employeeNo === '003')!.score, 1);
+  });
+
+  it('受 cap 限制', () => {
+    const rule = basicTierRule({ cap: 2 });
+    const facts = [
+      fact({
+        dimensionCode: 'basic.skill-level',
+        employeeNo: '001',
+        tierValue: '高级技师',
+      }),
+    ];
+    const scored = computeFactScores(facts, [rule]);
+    assert.equal(scored.find((r) => r.employeeNo === '001')!.score, 2);
+  });
+
+  it('档位显式映射为 0 时取 0，而非 defaultScore', () => {
+    // 区分「档位存在且值为 0」与「档位缺失」——回归 hasOwnProperty 实现
+    const rule = basicTierRule({ tiers: { '无': 0 }, defaultScore: 1 });
+    const facts = [
+      fact({ dimensionCode: 'basic.skill-level', employeeNo: 'mapped-zero', tierValue: '无' }),
+      fact({ dimensionCode: 'basic.skill-level', employeeNo: 'absent', tierValue: '不存在' }),
+    ];
+    const scored = computeFactScores(facts, [rule]);
+    assert.equal(scored.find((r) => r.employeeNo === 'mapped-zero')!.score, 0);
+    assert.equal(scored.find((r) => r.employeeNo === 'absent')!.score, 1);
+  });
+});
