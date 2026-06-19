@@ -346,9 +346,9 @@ export function importSafetyContributionFacts(
     'entries' | 'sourceFile' | 'sheetName' | 'unit' | 'filterNote'
   >,
   year: number,
-  resolveName: NameResolver,
+  configOrResolver?: SafetyScoreConfig | NameResolver,
 ): SafetyContributionImportResult {
-  const scored = scoreSafetyContributionEntries(parsed.entries, year, resolveName);
+  const scored = scoreSafetyContributionEntries(parsed.entries, year, configOrResolver);
   return {
     dimension: SAFETY_CONTRIBUTION_DIMENSION,
     year,

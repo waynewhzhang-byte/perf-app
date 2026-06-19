@@ -7,12 +7,19 @@ import { importBasicQualityData, parseBasicQualityFile } from '@/lib/basic-quali
 import { importDefectGovernanceFacts, DEFAULT_DEFECT_SCORE_MATRIX, type DefectRow, type DefectScoreMatrix } from '@/lib/defect-governance';
 import { aggregateTicketExecutionFromFile, DEFAULT_TICKET_PRICES, type TicketPriceConfig } from '@/lib/ticket-execution-import';
 import {
+  loadSafetyContributionFromFile,
+  importSafetyContributionFacts,
+  DEFAULT_SAFETY_SCORE_CONFIG,
+  type SafetyScoreConfig,
+} from '@/lib/safety-contribution';
+import {
   loadUserIdByEmployeeNo,
   persistDefectFacts,
   persistTicketAggregates,
+  persistSafetyFacts,
   readXlsxSheetRows,
 } from '@/lib/fact-import-persistence';
-import { DEFECT_LIBRARY_DIMENSION } from '@/lib/evaluation-dimensions';
+import { DEFECT_LIBRARY_DIMENSION, SAFETY_CONTRIBUTION_DIMENSION } from '@/lib/evaluation-dimensions';
 import { defaultScoringRuleConfigs } from '@/lib/scoring-standards';
 import {
   classifyUnmatchedNames,
@@ -67,10 +74,24 @@ export async function loadTicketPrices(prisma: PrismaClient): Promise<TicketPric
   };
 }
 
+/** 读安全贡献计分参数（DB 优先，回退默认种子） */
+export async function loadSafetyScoreConfig(prisma: PrismaClient): Promise<SafetyScoreConfig> {
+  const config = await loadRuleConfig(prisma, SAFETY_CONTRIBUTION_DIMENSION.code);
+  const roles = (config.roles ?? {}) as SafetyScoreConfig['roles'];
+  const first = roles.FIRST_DISCOVERER ?? DEFAULT_SAFETY_SCORE_CONFIG.roles.FIRST_DISCOVERER;
+  const co = roles.CO_DISCOVERER ?? DEFAULT_SAFETY_SCORE_CONFIG.roles.CO_DISCOVERER;
+  return {
+    cap: typeof config.cap === 'number' ? config.cap : DEFAULT_SAFETY_SCORE_CONFIG.cap,
+    groupBy: 'incidentId',
+    roles: { FIRST_DISCOVERER: first, CO_DISCOVERER: co },
+  };
+}
+
 export const DEFAULT_IMPORT_FILES = {
   basic: '《基本素质信息》.xlsx',
   tickets: '《工作现场-两票执行》.xlsx',
   defects: '《工作现场-缺陷治理》.xlsx',
+  safety: '2024年突出贡献奖明细表.xlsx',
 } as const;
 
 export interface ImportPipelineOptions {
@@ -78,11 +99,13 @@ export interface ImportPipelineOptions {
   basicFile?: string;
   ticketFile?: string;
   defectFile?: string;
+  safetyFile?: string;
   unitFilter?: string;
   dryRun?: boolean;
   skipBasic?: boolean;
   skipTickets?: boolean;
   skipDefects?: boolean;
+  skipSafety?: boolean;
   createdBy?: string;
 }
 
@@ -113,10 +136,21 @@ export interface ImportPipelineResult {
     filterNote: string;
     unmatchedTotal: number;
   };
+  safety?: {
+    entries: number;
+    factCount: number;
+    employeeCount: number;
+    firstDiscoverers: number;
+    coDiscoverers: number;
+    factsWritten: number;
+    filterNote: string;
+    unmatchedTotal: number;
+  };
   coverage?: {
     basic: number;
     tickets: number;
     defects: number;
+    safety: number;
   };
   unmatched: {
     inRoster: ClassifiedUnmatched[];
@@ -137,13 +171,14 @@ export async function runImportPipeline(
   const basicFile = resolveProjectPath(options.basicFile ?? DEFAULT_IMPORT_FILES.basic, cwd);
   const ticketFile = resolveProjectPath(options.ticketFile ?? DEFAULT_IMPORT_FILES.tickets, cwd);
   const defectFile = resolveProjectPath(options.defectFile ?? DEFAULT_IMPORT_FILES.defects, cwd);
-  const { year, dryRun = false, skipBasic, skipTickets, skipDefects, unitFilter, createdBy } = options;
+  const safetyFile = resolveProjectPath(options.safetyFile ?? DEFAULT_IMPORT_FILES.safety, cwd);
+  const { year, dryRun = false, skipBasic, skipTickets, skipDefects, skipSafety, unitFilter, createdBy } = options;
 
   const result: ImportPipelineResult = {
     year,
     dryRun,
     unmatched: { inRoster: [], external: [] },
-    sourceFiles: { basic: basicFile, tickets: ticketFile, defects: defectFile },
+    sourceFiles: { basic: basicFile, tickets: ticketFile, defects: defectFile, safety: safetyFile },
   };
 
   if (!skipBasic) {
@@ -184,7 +219,7 @@ export async function runImportPipeline(
   const allNos = rosterUsers.map((u) => u.employeeNo);
   const userIdByNo = dryRun ? new Map<string, string>() : await loadUserIdByEmployeeNo(prisma, allNos);
 
-  const unmatchedEntries: { name: string; source: 'tickets' | 'defects'; occurrences?: number }[] = [];
+  const unmatchedEntries: { name: string; source: 'tickets' | 'defects' | 'safety'; occurrences?: number }[] = [];
 
   if (!skipTickets) {
     const ticketResult = aggregateTicketExecutionFromFile(ticketFile, resolver, { unitFilter }, await loadTicketPrices(prisma));
@@ -239,11 +274,45 @@ export async function runImportPipeline(
     }
   }
 
+  if (!skipSafety) {
+    const safetyConfig = await loadSafetyScoreConfig(prisma);
+    const parsed = loadSafetyContributionFromFile(safetyFile, { year });
+    // 工号已在 col[5]，无需姓名 resolver；importSafetyContributionFacts 负责计分 + 聚合
+    const safetyImport = importSafetyContributionFacts(
+      { sourceFile: safetyFile, sheetName: parsed.sheetName, unit: parsed.unit, filterNote: parsed.filterNote, entries: parsed.entries },
+      year,
+      safetyConfig,
+    );
+    for (const u of safetyImport.unmatchedNames) {
+      unmatchedEntries.push({ name: u.name, source: 'safety', occurrences: u.occurrences });
+    }
+    result.safety = {
+      entries: safetyImport.entries.length,
+      factCount: safetyImport.facts.length,
+      employeeCount: safetyImport.byEmployee.length,
+      firstDiscoverers: safetyImport.facts.filter((f) => f.role === 'FIRST_DISCOVERER').length,
+      coDiscoverers: safetyImport.facts.filter((f) => f.role === 'CO_DISCOVERER').length,
+      factsWritten: 0,
+      filterNote: safetyImport.filterNote,
+      unmatchedTotal: safetyImport.unmatchedNames.length,
+    };
+    if (!dryRun) {
+      const persisted = await persistSafetyFacts(
+        prisma,
+        year,
+        safetyFile,
+        safetyImport.facts,
+        userIdByNo,
+      );
+      result.safety.factsWritten = persisted.created;
+    }
+  }
+
   const classified = classifyUnmatchedNames(unmatchedEntries, resolver, rosterUsers);
   result.unmatched = classified;
 
   if (!dryRun) {
-    const [basicCount, ticketCount, defectCount] = await Promise.all([
+    const [basicCount, ticketCount, defectCount, safetyCount] = await Promise.all([
       prisma.employeeBasicFact.groupBy({ by: ['employeeNo'], where: { year } }),
       prisma.performanceFact.groupBy({
         by: ['employeeNo'],
@@ -253,11 +322,16 @@ export async function runImportPipeline(
         by: ['employeeNo'],
         where: { year, dimensionCode: 'worksite.defect-governance' },
       }),
+      prisma.performanceFact.groupBy({
+        by: ['employeeNo'],
+        where: { year, dimensionCode: SAFETY_CONTRIBUTION_DIMENSION.code },
+      }),
     ]);
     result.coverage = {
       basic: basicCount.length,
       tickets: ticketCount.length,
       defects: defectCount.length,
+      safety: safetyCount.length,
     };
 
     await prisma.factImportLog.create({
