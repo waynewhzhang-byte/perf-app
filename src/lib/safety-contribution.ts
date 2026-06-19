@@ -73,8 +73,29 @@ export interface SafetyContributionImportResult {
 const DETAIL_SHEET_NAMES = ['申报奖励明细', '申报明细'];
 const DIMENSION_CODE = SAFETY_CONTRIBUTION_DIMENSION.code;
 const DIMENSION_TITLE = SAFETY_CONTRIBUTION_DIMENSION.title;
-const DIMENSION_CAP = SAFETY_CONTRIBUTION_DIMENSION.maxScore;
-const BASE_POINTS = 3;
+
+/** 安全贡献计分参数（来自 ScoringRule.config；DB 无配置时回退默认） */
+export interface SafetyScoreConfig {
+  /** 子项封顶分 */
+  cap: number;
+  /** 分组键字段名（固定 incidentId，即申报编号） */
+  groupBy: 'incidentId';
+  /** 各角色计分规则 */
+  roles: {
+    FIRST_DISCOVERER: { perIncident: number; multiplyByFaultCount: boolean };
+    CO_DISCOVERER: { totalShare: number; multiplyByFaultCount: boolean; splitAmong: string };
+  };
+}
+
+/** 默认计分参数（与《2025量化积分表》及 defaultScoringRuleConfigs 同源） */
+export const DEFAULT_SAFETY_SCORE_CONFIG: SafetyScoreConfig = {
+  cap: SAFETY_CONTRIBUTION_DIMENSION.maxScore,
+  groupBy: 'incidentId',
+  roles: {
+    FIRST_DISCOVERER: { perIncident: 3, multiplyByFaultCount: true },
+    CO_DISCOVERER: { totalShare: 3, multiplyByFaultCount: true, splitAmong: 'CO_DISCOVERER' },
+  },
+};
 
 function cellString(value: unknown): string {
   if (value == null) return '';
@@ -90,15 +111,6 @@ function cellNumber(value: unknown): number {
 
 function roundScore(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-function normalizeUnit(value: string): string {
-  return value.replace(/\s+/g, '').trim();
-}
-
-function belongsToUnit(row: SafetyContributionRow, unit: string): boolean {
-  const target = normalizeUnit(unit);
-  return normalizeUnit(row.unit).includes(target);
 }
 
 /** 事由中「N处故障」按 N 次计分（与报送表示例一致，如刘涛 2 处 → 6 分） */
@@ -136,7 +148,9 @@ export function parseSafetyContributionMatrix(
   options: { year?: number; unit?: string; sourceFile?: string; sheetName?: string } = {},
 ): Omit<SafetyContributionImportResult, 'dimension'> {
   const year = options.year ?? 2024;
-  const unit = options.unit ?? '变电检修中心';
+  // 不再按单位过滤（工号已在 col[5]，员工基本信息表提供部门映射）。
+  // unit 仅作为记录字段保留在返回结构里（向后兼容），不再影响导入范围。
+  const unit = options.unit ?? '';
   const headerIdx = findHeaderRow(matrix);
   const entries: SafetyContributionRow[] = [];
 
@@ -150,7 +164,7 @@ export function parseSafetyContributionMatrix(
     const rowYear = parseYear(declareDate);
     if (rowYear !== year) continue;
 
-    const entry: SafetyContributionRow = {
+    entries.push({
       ref,
       declareUnit: cellString(row[2]),
       reason: cellString(row[3]),
@@ -161,8 +175,7 @@ export function parseSafetyContributionMatrix(
       team: cellString(row[8]),
       amount: cellNumber(row[9]),
       isFirstDiscoverer: cellString(row[10]) === '是',
-    };
-    if (belongsToUnit(entry, unit)) entries.push(entry);
+    });
   }
 
   return {
@@ -171,11 +184,11 @@ export function parseSafetyContributionMatrix(
     unit,
     year,
     filterNote:
-      `评价年度 ${year}：按「申报时间」年份过滤；` +
-      `人员范围：所在单位含「${unit}」。` +
+      `评价年度 ${year}：按「申报时间」年份过滤；全量导入（不按单位过滤）。` +
+      `人员匹配走工号（col[5] 员工编号），部门信息取自员工基本信息表。` +
       `计分按申报编号分组：` +
-      `第一发现人 3 分/次（事由含 N 处故障时按 N 次，仅计本单位第一发现人）；` +
-      `本单位其他发现人合计 3 分/次并在本单位其他发现人之间均分；子项封顶 ${DIMENSION_CAP} 分。`,
+      `第一发现人 ${DEFAULT_SAFETY_SCORE_CONFIG.roles.FIRST_DISCOVERER.perIncident} 分/次（事由含 N 处故障时按 N 次）；` +
+      `其他发现人合计 ${DEFAULT_SAFETY_SCORE_CONFIG.roles.CO_DISCOVERER.totalShare} 分/次并在其他发现人之间均分；子项封顶 ${DEFAULT_SAFETY_SCORE_CONFIG.cap} 分。`,
     entries,
     facts: [],
     byEmployee: [],
@@ -187,8 +200,24 @@ export function parseSafetyContributionMatrix(
 export function scoreSafetyContributionEntries(
   entries: SafetyContributionRow[],
   year: number,
-  resolveName: NameResolver,
+  configOrResolver?: SafetyScoreConfig | NameResolver,
+  resolverMaybe?: NameResolver,
 ): Pick<SafetyContributionImportResult, 'facts' | 'byEmployee' | 'byName' | 'unmatchedNames'> {
+  // 兼容两种调用：scoreSafetyContributionEntries(entries, year, config?, resolver?)
+  // 也兼容旧签名 scoreSafetyContributionEntries(entries, year, resolver)
+  let config: SafetyScoreConfig;
+  let resolver: NameResolver | null;
+  if (configOrResolver && typeof configOrResolver === 'object' && 'roles' in configOrResolver) {
+    config = configOrResolver;
+    resolver = resolverMaybe ?? null;
+  } else if (configOrResolver && typeof configOrResolver === 'object' && 'resolve' in configOrResolver) {
+    config = DEFAULT_SAFETY_SCORE_CONFIG;
+    resolver = configOrResolver;
+  } else {
+    config = DEFAULT_SAFETY_SCORE_CONFIG;
+    resolver = null;
+  }
+
   const byRef = new Map<string, SafetyContributionRow[]>();
   for (const entry of entries) {
     const list = byRef.get(entry.ref) ?? [];
@@ -202,12 +231,16 @@ export function scoreSafetyContributionEntries(
   for (const [incidentRef, people] of byRef) {
     const reason = people[0]?.reason ?? '';
     const faultCount = parseFaultCountFromReason(reason);
-    const firstPoints = BASE_POINTS * faultCount;
-    const otherShareBase = BASE_POINTS;
+    const firstBase = config.roles.FIRST_DISCOVERER.perIncident;
+    const firstMul = config.roles.FIRST_DISCOVERER.multiplyByFaultCount ? faultCount : 1;
+    const firstPoints = firstBase * firstMul;
+    const coBase = config.roles.CO_DISCOVERER.totalShare;
+    const coMul = config.roles.CO_DISCOVERER.multiplyByFaultCount ? faultCount : 1;
+    const coShareBase = coBase * coMul;
 
     const firstPeople = people.filter((p) => p.isFirstDiscoverer);
     const otherPeople = people.filter((p) => !p.isFirstDiscoverer);
-    const otherShare = otherPeople.length > 0 ? otherShareBase / otherPeople.length : 0;
+    const otherShare = otherPeople.length > 0 ? coShareBase / otherPeople.length : 0;
 
     const lines: { row: SafetyContributionRow; role: SafetyContributionRole; score: number }[] = [
       ...firstPeople.map((row) => ({ row, role: 'FIRST_DISCOVERER' as const, score: firstPoints })),
@@ -215,8 +248,22 @@ export function scoreSafetyContributionEntries(
     ];
 
     for (const line of lines) {
-      const resolved = resolveName.resolve(line.row.fullName);
-      if (!resolved) {
+      // 工号优先（col[5] 已携带）；若调用方传入 resolver 且工号缺失则回退姓名匹配
+      let employeeNo = line.row.employeeNo;
+      let employeeName = line.row.fullName;
+      if (!employeeNo && resolver) {
+        const resolved = resolver.resolve(line.row.fullName);
+        if (!resolved) {
+          const bucket = unmatchedMap.get(line.row.fullName) ?? { count: 0, refs: new Set<string>() };
+          bucket.count += 1;
+          bucket.refs.add(incidentRef);
+          unmatchedMap.set(line.row.fullName, bucket);
+          continue;
+        }
+        employeeNo = resolved.employeeNo;
+        employeeName = resolved.employeeName;
+      }
+      if (!employeeNo) {
         const bucket = unmatchedMap.get(line.row.fullName) ?? { count: 0, refs: new Set<string>() };
         bucket.count += 1;
         bucket.refs.add(incidentRef);
@@ -228,8 +275,8 @@ export function scoreSafetyContributionEntries(
         dimensionCode: DIMENSION_CODE,
         dimensionTitle: DIMENSION_TITLE,
         year,
-        employeeNo: resolved.employeeNo,
-        employeeName: resolved.employeeName,
+        employeeNo,
+        employeeName,
         role: line.role,
         score: roundScore(line.score),
         incidentRef,
@@ -272,7 +319,7 @@ export function scoreSafetyContributionEntries(
     .map((agg) => ({
       ...agg,
       rawScore: roundScore(agg.rawScore),
-      cappedScore: roundScore(Math.min(agg.rawScore, DIMENSION_CAP)),
+      cappedScore: roundScore(Math.min(agg.rawScore, config.cap)),
       facts: agg.facts.sort((a, b) => a.incidentRef.localeCompare(b.incidentRef)),
     }))
     .sort((a, b) => b.cappedScore - a.cappedScore || a.employeeName.localeCompare(b.employeeName, 'zh-CN'));
@@ -319,7 +366,7 @@ export function loadSafetyContributionFromFile(
   options: { year?: number; unit?: string } = {},
 ): SafetyContributionImportResult {
   const year = options.year ?? 2024;
-  const unit = options.unit ?? '变电检修中心';
+  const unit = options.unit ?? '';
   const buf = readFileSync(filePath);
   const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
   const { name, matrix } = findDetailSheet(wb);
