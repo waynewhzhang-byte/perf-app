@@ -5,7 +5,7 @@ import { resolve } from 'path';
 import type { PrismaClient } from '@prisma/client';
 import { importBasicQualityData, parseBasicQualityFile } from '@/lib/basic-quality-import';
 import { importDefectGovernanceFacts, DEFAULT_DEFECT_SCORE_MATRIX, type DefectRow, type DefectScoreMatrix } from '@/lib/defect-governance';
-import { aggregateTicketExecutionFromFile } from '@/lib/ticket-execution-import';
+import { aggregateTicketExecutionFromFile, DEFAULT_TICKET_PRICES, type TicketPriceConfig } from '@/lib/ticket-execution-import';
 import {
   loadUserIdByEmployeeNo,
   persistDefectFacts,
@@ -50,6 +50,21 @@ export async function loadDefectScoreMatrix(
     };
   }
   return merged;
+}
+
+/** 读两票单价表（DB 优先，回退默认种子） */
+export async function loadTicketPrices(prisma: PrismaClient): Promise<TicketPriceConfig> {
+  const config = await loadRuleConfig(prisma, 'worksite.ticket-execution');
+  const cfg = config as Partial<TicketPriceConfig> & { operationStepPrice?: number; ticketPrices?: Record<string, Record<string, number>> };
+  // DB 存储形如 { operationStepPrice, ticketPrices: { workLeader, workPermitter, workMember } }
+  const ticketPrices = cfg.ticketPrices ?? {};
+  const operationStepPrice = cfg.operationStepPrice ?? DEFAULT_TICKET_PRICES.operationStepPrice;
+  return {
+    operationStepPrice,
+    workLeader: ticketPrices.workLeader ?? DEFAULT_TICKET_PRICES.workLeader,
+    workPermitter: ticketPrices.workPermitter ?? DEFAULT_TICKET_PRICES.workPermitter,
+    workMember: ticketPrices.workMember ?? DEFAULT_TICKET_PRICES.workMember,
+  };
 }
 
 export const DEFAULT_IMPORT_FILES = {
@@ -172,7 +187,7 @@ export async function runImportPipeline(
   const unmatchedEntries: { name: string; source: 'tickets' | 'defects'; occurrences?: number }[] = [];
 
   if (!skipTickets) {
-    const ticketResult = aggregateTicketExecutionFromFile(ticketFile, resolver, { unitFilter });
+    const ticketResult = aggregateTicketExecutionFromFile(ticketFile, resolver, { unitFilter }, await loadTicketPrices(prisma));
     for (const name of ticketResult.unmatchedNames) {
       unmatchedEntries.push({ name, source: 'tickets' });
     }
