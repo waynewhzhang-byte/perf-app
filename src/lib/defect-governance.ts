@@ -18,11 +18,20 @@ export interface DefectRow {
   消缺人?: string | number | null;
   发现时间?: string | number | null;
   消缺时间?: string | number | null;
+  消除时间?: string | number | null;
   问题状态?: string | number | null;
+  所属类别?: string | number | null;
   变电站?: string | number | null;
   问题描述?: string | number | null;
   责任单位?: string | number | null;
   [key: string]: string | number | null | undefined;
+}
+
+export interface DefectImportOptions {
+  /** 仅导入所属类别为「缺陷」的记录（默认 true，符合评分标准） */
+  requireDefectCategory?: boolean;
+  /** 视为已消缺的状态（默认 已消除 + 已闭环） */
+  remediatedStatuses?: string[];
 }
 
 export interface DefectFactLine {
@@ -42,6 +51,13 @@ export interface DefectFactLine {
     description: string | null;
     responsibleUnit: string | null;
     status: string | null;
+    /** 是否为共同发现/共同处理（限 1 人） */
+    isCollaborative: boolean;
+    /** 原始人员字段（分拆前） */
+    rawPersonField: string | null;
+    /** 分拆序号：0=第一人，1=共同人 */
+    personIndex: number;
+    category: string | null;
   };
 }
 
@@ -69,13 +85,17 @@ export interface DefectImportResult {
   unmatchedNames: { name: string; occurrences: number; sampleDefectRefs: string[] }[];
 }
 
-const LEVEL_SCORES: Record<
+/** 角色 × 缺陷等级 → 单价（来自 ScoringRule.config.matrix，默认值与《2025量化积分表》一致） */
+export type DefectScoreMatrix = Record<
   DefectLevel,
-  { firstDiscoverer: number; coDiscoverer: number; firstHandler: number; coHandler: number; maxCo: number }
-> = {
-  危急: { firstDiscoverer: 3, coDiscoverer: 1, firstHandler: 3, coHandler: 1, maxCo: 1 },
-  严重: { firstDiscoverer: 1, coDiscoverer: 0.5, firstHandler: 1, coHandler: 0.5, maxCo: 1 },
-  一般: { firstDiscoverer: 0.5, coDiscoverer: 0, firstHandler: 0.5, coHandler: 0, maxCo: 0 },
+  Partial<Record<DefectFactRole, number>>
+>;
+
+/** 默认矩阵（DB 无规则时回退；与 defaultScoringRuleConfigs 的 defect 配置一致） */
+export const DEFAULT_DEFECT_SCORE_MATRIX: DefectScoreMatrix = {
+  危急: { FIRST_DISCOVERER: 3, CO_DISCOVERER: 1, FIRST_HANDLER: 3, CO_HANDLER: 1 },
+  严重: { FIRST_DISCOVERER: 1, CO_DISCOVERER: 0.5, FIRST_HANDLER: 1, CO_HANDLER: 0.5 },
+  一般: { FIRST_DISCOVERER: 0.5, FIRST_HANDLER: 0.5 },
 };
 
 const DIMENSION_CODE = DEFECT_LIBRARY_DIMENSION.code;
@@ -113,30 +133,82 @@ function roleLines(
   people: string[],
   level: DefectLevel,
   kind: 'discover' | 'handle',
-): { role: DefectFactRole; name: string; score: number }[] {
+  matrix: DefectScoreMatrix,
+): { role: DefectFactRole; name: string; score: number; personIndex: number; isCollaborative: boolean }[] {
   if (people.length === 0) return [];
-  const rule = LEVEL_SCORES[level];
+  const levelMatrix = matrix[level] ?? {};
+  // 共同人是否计分：该等级为共同发现/处理人配置了正分才产出
+  const coDiscovererScore = levelMatrix.CO_DISCOVERER ?? 0;
+  const coHandlerScore = levelMatrix.CO_HANDLER ?? 0;
   const [first, ...rest] = people;
-  const lines: { role: DefectFactRole; name: string; score: number }[] = [];
+  const lines: ReturnType<typeof roleLines> = [];
 
   if (kind === 'discover') {
-    lines.push({ role: 'FIRST_DISCOVERER', name: first, score: rule.firstDiscoverer });
-    if (rule.maxCo > 0 && rest[0]) {
-      lines.push({ role: 'CO_DISCOVERER', name: rest[0], score: rule.coDiscoverer });
+    lines.push({
+      role: 'FIRST_DISCOVERER',
+      name: first,
+      score: levelMatrix.FIRST_DISCOVERER ?? 0,
+      personIndex: 0,
+      isCollaborative: false,
+    });
+    if (coDiscovererScore > 0 && rest[0]) {
+      lines.push({
+        role: 'CO_DISCOVERER',
+        name: rest[0],
+        score: coDiscovererScore,
+        personIndex: 1,
+        isCollaborative: true,
+      });
     }
   } else {
-    lines.push({ role: 'FIRST_HANDLER', name: first, score: rule.firstHandler });
-    if (rule.maxCo > 0 && rest[0]) {
-      lines.push({ role: 'CO_HANDLER', name: rest[0], score: rule.coHandler });
+    lines.push({
+      role: 'FIRST_HANDLER',
+      name: first,
+      score: levelMatrix.FIRST_HANDLER ?? 0,
+      personIndex: 0,
+      isCollaborative: false,
+    });
+    if (coHandlerScore > 0 && rest[0]) {
+      lines.push({
+        role: 'CO_HANDLER',
+        name: rest[0],
+        score: coHandlerScore,
+        personIndex: 1,
+        isCollaborative: true,
+      });
     }
   }
   return lines;
 }
 
+function isDefectCategory(row: DefectRow, requireDefectCategory: boolean): boolean {
+  if (!requireDefectCategory) return true;
+  const cat = String(row.所属类别 ?? '').trim();
+  return cat === '缺陷';
+}
+
+function remediationTime(row: DefectRow): string | number | null | undefined {
+  return row.消缺时间 ?? row.消除时间;
+}
+
+function isRemediated(status: string | number | null | undefined, allowed: string[]): boolean {
+  const s = String(status ?? '').trim();
+  return allowed.includes(s);
+}
+
+type ProvisionalDefectLine = {
+  role: DefectFactRole;
+  name: string;
+  score: number;
+  eventType: 'DISCOVERY' | 'REMEDIATION';
+  eventDate: string | null;
+  personIndex: number;
+  isCollaborative: boolean;
+  rawPersonField: string;
+};
+
 /** 同一缺陷、同一人兼发现与处理：只保留较高分的一条事实 */
-function dedupeSamePersonOnDefect(
-  lines: { role: DefectFactRole; name: string; score: number; eventType: 'DISCOVERY' | 'REMEDIATION' }[],
-): typeof lines {
+function dedupeSamePersonOnDefect(lines: ProvisionalDefectLine[]): ProvisionalDefectLine[] {
   const byName = new Map<string, (typeof lines)[number]>();
   for (const line of lines) {
     const prev = byName.get(line.name);
@@ -153,50 +225,64 @@ export function buildFactsFromDefectRows(
   rows: DefectRow[],
   year: number,
   resolveName: NameResolver,
+  options: DefectImportOptions = {},
+  scoreMatrix: DefectScoreMatrix = DEFAULT_DEFECT_SCORE_MATRIX,
 ): Omit<DefectImportResult, 'dimension' | 'filterNote' | 'unmatchedNames'> & {
   unmatchedNameMap: Map<string, { count: number; refs: Set<string> }>;
+  rowsSkippedCategory: number;
 } {
+  const requireDefectCategory = options.requireDefectCategory !== false;
+  const remediatedStatuses = options.remediatedStatuses ?? ['已消除', '已闭环'];
+
   const facts: DefectFactLine[] = [];
   const unmatchedNameMap = new Map<string, { count: number; refs: Set<string> }>();
   let rowsWithDiscoveryCredit = 0;
   let rowsWithRemediationCredit = 0;
+  let rowsSkippedCategory = 0;
 
   for (const row of rows) {
+    if (!isDefectCategory(row, requireDefectCategory)) {
+      rowsSkippedCategory += 1;
+      continue;
+    }
+
     const level = normalizeLevel(row.等级);
     const defectRef = String(row.编号 ?? '').trim();
     if (!level || !defectRef) continue;
 
     const discoveryYear = parseYear(row.发现时间);
-    const remediationYear = parseYear(row.消缺时间);
+    const remediationYear = parseYear(remediationTime(row));
     const discoverers = parsePersonList(row.发现人);
     const handlers = parsePersonList(row.消缺人);
+    const discoverRaw = row.发现人 != null ? String(row.发现人) : '';
+    const handlerRaw = row.消缺人 != null ? String(row.消缺人) : '';
 
-    const provisional: {
-      role: DefectFactRole;
-      name: string;
-      score: number;
-      eventType: 'DISCOVERY' | 'REMEDIATION';
-      eventDate: string | null;
-    }[] = [];
+    const provisional: ProvisionalDefectLine[] = [];
 
     if (discoveryYear === year && discoverers.length > 0) {
       rowsWithDiscoveryCredit += 1;
-      for (const line of roleLines(discoverers, level, 'discover')) {
+      for (const line of roleLines(discoverers, level, 'discover', scoreMatrix)) {
         provisional.push({
           ...line,
           eventType: 'DISCOVERY',
           eventDate: row.发现时间 != null ? String(row.发现时间) : null,
+          rawPersonField: discoverRaw,
         });
       }
     }
 
-    if (remediationYear === year && handlers.length > 0) {
+    if (
+      remediationYear === year &&
+      handlers.length > 0 &&
+      isRemediated(row.问题状态, remediatedStatuses)
+    ) {
       rowsWithRemediationCredit += 1;
-      for (const line of roleLines(handlers, level, 'handle')) {
+      for (const line of roleLines(handlers, level, 'handle', scoreMatrix)) {
         provisional.push({
           ...line,
           eventType: 'REMEDIATION',
-          eventDate: row.消缺时间 != null ? String(row.消缺时间) : null,
+          eventDate: remediationTime(row) != null ? String(remediationTime(row)) : null,
+          rawPersonField: handlerRaw,
         });
       }
     }
@@ -223,12 +309,16 @@ export function buildFactsFromDefectRows(
         defectRef,
         defectLevel: level,
         eventType: line.eventType,
-        eventDate: null,
+        eventDate: line.eventDate,
         metadata: {
           substation: row.变电站 != null ? String(row.变电站) : null,
           description: row.问题描述 != null ? String(row.问题描述) : null,
           responsibleUnit: row.责任单位 != null ? String(row.责任单位) : null,
           status: row.问题状态 != null ? String(row.问题状态) : null,
+          isCollaborative: line.isCollaborative,
+          rawPersonField: line.rawPersonField || null,
+          personIndex: line.personIndex,
+          category: row.所属类别 != null ? String(row.所属类别) : null,
         },
       });
     }
@@ -273,6 +363,7 @@ export function buildFactsFromDefectRows(
     facts,
     byEmployee,
     unmatchedNameMap,
+    rowsSkippedCategory,
   };
 }
 
@@ -280,8 +371,10 @@ export function importDefectGovernanceFacts(
   rows: DefectRow[],
   year: number,
   resolveName: NameResolver,
+  options: DefectImportOptions = {},
+  scoreMatrix: DefectScoreMatrix = DEFAULT_DEFECT_SCORE_MATRIX,
 ): DefectImportResult {
-  const partial = buildFactsFromDefectRows(rows, year, resolveName);
+  const partial = buildFactsFromDefectRows(rows, year, resolveName, options, scoreMatrix);
   const unmatchedNames = [...partial.unmatchedNameMap.entries()]
     .map(([name, v]) => ({
       name,
@@ -290,13 +383,18 @@ export function importDefectGovernanceFacts(
     }))
     .sort((a, b) => b.occurrences - a.occurrences);
 
+  const categoryNote = options.requireDefectCategory !== false
+    ? `仅导入所属类别=「缺陷」的记录（跳过 ${partial.rowsSkippedCategory} 条）。`
+    : '';
+
   return {
     dimension: DEFECT_LIBRARY_DIMENSION,
     year,
     filterNote:
-      `评价年度 ${year}：发现类事实按「发现时间」年份过滤；处理类事实按「消缺时间」年份过滤。` +
-      `本表为 2024 年消缺名单，处理类事实覆盖全部 ${partial.totalDefectRows} 条；` +
-      `发现类事实仅 ${partial.rowsWithDiscoveryCredit} 条发现时间在 ${year} 年。`,
+      `评价年度 ${year}：发现类按「发现时间」年份；处理类按「消除/消缺时间」年份且状态为已消除/已闭环。` +
+      categoryNote +
+      `发现 ${partial.rowsWithDiscoveryCredit} 条、处理 ${partial.rowsWithRemediationCredit} 条计入 ${year} 年。` +
+      `人员字段含多人时用逗号/顿号分拆，共同发现/处理限 1 人并标记 isCollaborative。`,
     totalDefectRows: partial.totalDefectRows,
     rowsWithDiscoveryCredit: partial.rowsWithDiscoveryCredit,
     rowsWithRemediationCredit: partial.rowsWithRemediationCredit,
