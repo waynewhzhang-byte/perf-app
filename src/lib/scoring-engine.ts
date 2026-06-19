@@ -35,6 +35,14 @@ export interface FactInput {
   declarationLevel?: string;
   /** 所属档位值（BASIC_TIER 型按此查表） */
   tierValue?: string;
+  /** NORMALIZE 两票型：票种类（operation=操作票，work=工作票） */
+  ticketKind?: 'operation' | 'work';
+  /** NORMALIZE 两票型-操作票：操作步数（× operationStepPrice） */
+  steps?: number;
+  /** NORMALIZE 两票型-工作票：票面类型，如「总工作票」 */
+  ticketType?: string;
+  /** NORMALIZE 两票型-工作票：工作角色 */
+  workRole?: 'workLeader' | 'workPermitter' | 'workMember';
   /** 来源文件名（写入 metadata） */
   sourceFile: string;
   /** 事件日期 */
@@ -77,6 +85,10 @@ export interface ScoringRule {
   targetMaxScore?: number;
   sourceKey?: string;
   normalizeWithin?: string;
+  /** NORMALIZE 两票型-操作票：每操作步单价 */
+  operationStepPrice?: number;
+  /** NORMALIZE 两票型-工作票：角色 × 票类型 → 单价 */
+  ticketPrices?: TicketPriceTable;
 }
 
 export interface ShareRoleConfig {
@@ -85,6 +97,13 @@ export interface ShareRoleConfig {
   multiplyByFaultCount?: boolean;
   /** 总份额在哪些角色间均分 */
   splitAmong?: string;
+}
+
+/** NORMALIZE 两票型-工作票：角色 × 票类型 → 单价表 */
+export interface TicketPriceTable {
+  workLeader?: Record<string, number>;
+  workPermitter?: Record<string, number>;
+  workMember?: Record<string, number>;
 }
 
 /** 计算结果：一条 PerformanceFact 的得分 */
@@ -239,34 +258,54 @@ function processShare(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
 }
 
 // ── NORMALIZE: 两票执行 ─────────────────────────────────────────
-// 原始分 ÷ 能级最高分 × 目标满分
+// 两层：单价聚合（操作票 steps×单价 / 工作票 ticketPrices[role][type]）→ rawScore；
+//       再折算（rawScore ÷ 同能级最高 × 目标满分）。无单价配置时退化为读 fact.rawScore。
+
+function computeTicketRawScore(f: FactInput, rule: ScoringRule): number {
+  // 操作票
+  if (f.ticketKind === 'operation' && rule.operationStepPrice != null && typeof f.steps === 'number') {
+    return rule.operationStepPrice * f.steps;
+  }
+  // 工作票
+  if (f.ticketKind === 'work' && rule.ticketPrices && f.workRole && f.ticketType) {
+    const table = rule.ticketPrices[f.workRole];
+    return table?.[String(f.ticketType)] ?? 0;
+  }
+  // 无单价信息 → 退化为 fact.rawScore（向后兼容）
+  return f.rawScore ?? 0;
+}
 
 function processNormalize(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
   const targetMax = rule.targetMaxScore ?? 30;
   const within = rule.normalizeWithin ?? 'declarationLevel';
+  const hasUnitPrices = rule.operationStepPrice != null || rule.ticketPrices != null;
 
-  // 按能级分组，找各能级的最高原始分
-  const byLevel = new Map<string, FactInput[]>();
-  for (const f of facts) {
-    const level = within === 'declarationLevel' ? (f.declarationLevel ?? '_all') : '_all';
+  // 1. 算每条事实的 rawScore
+  const withRaw = facts.map((f) => ({
+    f,
+    raw: hasUnitPrices ? computeTicketRawScore(f, rule) : (f.rawScore ?? 0),
+  }));
+
+  // 2. 按 declarationLevel 分组
+  const byLevel = new Map<string, { f: FactInput; raw: number }[]>();
+  for (const item of withRaw) {
+    const level = within === 'declarationLevel' ? (item.f.declarationLevel ?? '_all') : '_all';
     const list = byLevel.get(level) ?? [];
-    list.push(f);
+    list.push(item);
     byLevel.set(level, list);
   }
 
+  // 3. 组内折算
   const results: ScoredFact[] = [];
-
   for (const [, levelFacts] of byLevel) {
-    const maxRaw = Math.max(...levelFacts.map((f) => f.rawScore ?? 0));
+    const maxRaw = Math.max(...levelFacts.map((x) => x.raw));
     if (maxRaw === 0) {
-      for (const f of levelFacts) results.push({ ...f, score: 0 });
+      for (const x of levelFacts) results.push({ ...x.f, score: 0, rawScore: x.raw });
       continue;
     }
-
-    for (const f of levelFacts) {
-      const raw = f.rawScore ?? 0;
-      const normalized = (raw / maxRaw) * targetMax;
-      results.push({ ...f, score: Math.min(normalized, rule.cap) });
+    for (const x of levelFacts) {
+      const normalized = (x.raw / maxRaw) * targetMax;
+      results.push({ ...x.f, score: Math.min(normalized, rule.cap), rawScore: x.raw });
     }
   }
 

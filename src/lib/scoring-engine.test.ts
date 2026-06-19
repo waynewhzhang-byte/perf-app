@@ -294,6 +294,71 @@ describe('NORMALIZE (两票执行)', () => {
   });
 });
 
+// ── NORMALIZE: 两票单价表 ─────────────────────────────────────
+
+describe('NORMALIZE (两票单价表)', () => {
+  const rule: ScoringRule = {
+    id: 'r-ticket',
+    dimensionCode: 'worksite.ticket-execution',
+    ruleType: 'NORMALIZE',
+    cap: 30,
+    enabled: true,
+    operationStepPrice: 0.01,
+    ticketPrices: {
+      workLeader: { '总工作票': 5 },
+      workPermitter: { '总工作票': 1.5 },
+      workMember: {},
+    },
+    targetMaxScore: 30,
+    normalizeWithin: 'declarationLevel',
+  };
+  const tk = (over: Partial<FactInput> & Record<string, unknown>) => ({
+    ...fact({ dimensionCode: 'worksite.ticket-execution', employeeNo: 'x' }),
+    ...over,
+  });
+
+  it('操作票：steps × operationStepPrice 算 rawScore', () => {
+    const scored = computeFactScores(
+      [tk({ employeeNo: '001', ticketKind: 'operation', steps: 100, declarationLevel: 'L2' })],
+      [rule],
+    );
+    assert.equal(scored.find((r) => r.employeeNo === '001')!.rawScore, 1);
+  });
+
+  it('工作票：ticketPrices[workRole][ticketType] 算 rawScore', () => {
+    const scored = computeFactScores(
+      [tk({ employeeNo: '002', ticketKind: 'work', ticketType: '总工作票', workRole: 'workLeader', declarationLevel: 'L2' })],
+      [rule],
+    );
+    assert.equal(scored.find((r) => r.employeeNo === '002')!.rawScore, 5);
+  });
+
+  it('折算：rawScore ÷ 组内最高 × targetMaxScore', () => {
+    const scored = computeFactScores(
+      [
+        tk({ employeeNo: 'hi', ticketKind: 'work', ticketType: '总工作票', workRole: 'workLeader', declarationLevel: 'L2' }), // raw 5
+        tk({ employeeNo: 'lo', ticketKind: 'operation', steps: 50, declarationLevel: 'L2' }), // raw 0.5
+      ],
+      [rule],
+    );
+    // lo: 0.5/5*30 = 3
+    assert.equal(scored.find((r) => r.employeeNo === 'lo')!.score, 3);
+    assert.equal(scored.find((r) => r.employeeNo === 'hi')!.score, 30); // 5/5*30
+  });
+
+  it('无单价配置时退化为旧 NORMALIZE（用 fact.rawScore）', () => {
+    const legacy = { ...rule };
+    delete (legacy as Partial<typeof rule>).operationStepPrice;
+    delete (legacy as Partial<typeof rule>).ticketPrices;
+    const scored = computeFactScores(
+      [tk({ employeeNo: '009', rawScore: 10, declarationLevel: 'L2' })],
+      [legacy],
+    );
+    // 10/10*30 = 30
+    assert.equal(scored.find((r) => r.employeeNo === '009')!.score, 30);
+  });
+});
+
 // ── 边界情况 ────────────────────────────────────────────────────
 
 describe('边界情况', () => {

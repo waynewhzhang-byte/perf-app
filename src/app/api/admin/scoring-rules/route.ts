@@ -30,6 +30,12 @@ const NormalizeConfigSchema = z.object({
   targetMaxScore: z.number().min(1),
   sourceKey: z.string().optional(),
   normalizeWithin: z.string().optional(),
+  operationStepPrice: z.number().optional(),
+  ticketPrices: z.object({
+    workLeader: z.record(z.string(), z.number()).optional(),
+    workPermitter: z.record(z.string(), z.number()).optional(),
+    workMember: z.record(z.string(), z.number()).optional(),
+  }).optional(),
 });
 
 const BasicTierConfigSchema = z.object({
