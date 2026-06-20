@@ -42,7 +42,7 @@ export async function POST(req: Request) {
       total: result.total,
       created: result.usersCreated,
       updated: result.usersUpdated,
-      skipped: 0,
+      skipped: result.skipped,
     });
   } catch (e) {
     console.error('POST /api/admin/import/employees:', e);

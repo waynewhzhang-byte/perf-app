@@ -91,6 +91,8 @@ export interface EmployeeImportResult {
   total: number;
   usersCreated: number;
   usersUpdated: number;
+  /** 因工号/姓名缺失而跳过的行数 */
+  skipped: number;
   orgPlan: ReturnType<typeof buildThreeTierOrgPlan>;
 }
 
@@ -157,5 +159,5 @@ export async function importEmployees(
   // sourceFile 保留参数供 FactImportLog 记录（路由层使用），此处不直接落库
   void sourceFile;
 
-  return { total: drafts.length, usersCreated, usersUpdated, orgPlan };
+  return { total: drafts.length, usersCreated, usersUpdated, skipped: rows.length - drafts.length, orgPlan };
 }
