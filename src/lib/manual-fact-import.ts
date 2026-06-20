@@ -5,7 +5,6 @@
  * 本模块只负责：行 → FactInput 构造 → 调引擎 → 写 PerformanceFact。
  */
 import type { FactInput, FactRole, FactEventType } from './scoring-engine';
-
 /** 评分事实字段映射（联合类型，按维度用到不同子集） */
 export interface FactFieldMapping {
   employeeNo: string;
@@ -70,4 +69,92 @@ export function rowsToFactInputs(
     });
   }
   return inputs;
+}
+
+import type { PrismaClient } from '@prisma/client';
+import { computeFactScores, type ScoringRule } from './scoring-engine';
+
+/** 从 DB 读维度 ScoringRule（无配置报错） */
+async function loadScoringRule(
+  prisma: PrismaClient,
+  dimensionCode: string,
+): Promise<ScoringRule> {
+  const row = await prisma.scoringRule.findUnique({ where: { dimensionCode } });
+  if (!row) throw new Error(`未找到维度「${dimensionCode}」的评分规则`);
+  return {
+    id: row.id,
+    dimensionCode: row.dimensionCode,
+    ruleType: row.ruleType as ScoringRule['ruleType'],
+    cap: Number(row.cap),
+    enabled: row.enabled,
+    ...(row.config as Record<string, unknown>),
+  };
+}
+
+export interface ScoreFactImportResult {
+  total: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  unmatched: { name: string; reason: string }[];
+}
+
+/**
+ * 导入评分事实：行 → FactInput → computeFactScores → PerformanceFact upsert。
+ * @param dimensionCode worksite.ticket-execution | worksite.defect-governance | performance.safety-contribution
+ */
+export async function importScoreFacts(
+  prisma: PrismaClient,
+  dimensionCode: string,
+  dimensionTitle: string,
+  year: number,
+  mapping: FactFieldMapping,
+  rows: Record<string, string>[],
+  sourceFile: string,
+): Promise<ScoreFactImportResult> {
+  const rule = await loadScoringRule(prisma, dimensionCode);
+  if (!rule.enabled) throw new Error('该维度评分规则已禁用');
+
+  const inputs = rowsToFactInputs(dimensionCode, mapping, rows, sourceFile);
+  if (inputs.length === 0) throw new Error('没有可导入的有效数据行');
+
+  const scored = computeFactScores(inputs, [rule]);
+
+  let created = 0;
+  let updated = 0;
+  const skipped = 0;
+
+  for (const f of scored) {
+    const user = await prisma.user.findFirst({
+      where: { employeeNo: f.employeeNo },
+      select: { id: true },
+    });
+
+    const existing = await prisma.performanceFact.findFirst({
+      where: {
+        year, employeeNo: f.employeeNo, dimensionCode,
+        defectRef: f.defectRef || f.employeeNo,
+        role: f.role as never, eventType: f.eventType as never,
+      },
+    });
+
+    const data = {
+      year, employeeNo: f.employeeNo, employeeName: f.employeeName,
+      userId: user?.id ?? null, dimensionCode, dimensionTitle,
+      role: f.role as never, eventType: f.eventType as never,
+      score: f.score, defectRef: f.defectRef || f.employeeNo,
+      defectLevel: f.defectLevel ?? '', eventDate: f.eventDate ?? null,
+      sourceFile, metadata: (f.metadata ?? {}) as object,
+    };
+
+    if (existing) {
+      await prisma.performanceFact.update({ where: { id: existing.id }, data });
+      updated++;
+    } else {
+      await prisma.performanceFact.create({ data });
+      created++;
+    }
+  }
+
+  return { total: scored.length, created, updated, skipped, unmatched: [] };
 }
