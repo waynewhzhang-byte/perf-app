@@ -149,29 +149,29 @@ export async function importBasicFacts(
       where: { employeeNo: f.employeeNo },
       select: { id: true },
     });
-    const result = await prisma.employeeBasicFact.upsert({
+    // EmployeeBasicFact 无 updatedAt，用 findFirst 区分 create/update（与其它导入一致）
+    const existing = await prisma.employeeBasicFact.findUnique({
       where: {
         year_employeeNo_dimension: {
           year: evalYear, employeeNo: f.employeeNo, dimension: f.dimension,
         },
       },
-      create: {
-        year: evalYear, employeeNo: f.employeeNo, employeeName: f.employeeName,
-        userId: user?.id ?? null, dimension: f.dimension,
-        tierValue: f.tierValue,
-        yearBreakdown: f.yearBreakdown ?? undefined,
-        score: f.score, sourceFile,
-      },
-      update: {
-        employeeName: f.employeeName, userId: user?.id ?? null,
-        tierValue: f.tierValue,
-        yearBreakdown: f.yearBreakdown ?? undefined,
-        score: f.score, sourceFile,
-      },
+      select: { id: true },
     });
-    // upsert 无法直接区分 create/update，用 createdAt 与 updatedAt 比较
-    if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
-    else updated++;
+    const data = {
+      year: evalYear, employeeNo: f.employeeNo, employeeName: f.employeeName,
+      userId: user?.id ?? null, dimension: f.dimension,
+      tierValue: f.tierValue,
+      yearBreakdown: f.yearBreakdown ?? undefined,
+      score: f.score, sourceFile,
+    };
+    if (existing) {
+      await prisma.employeeBasicFact.update({ where: { id: existing.id }, data });
+      updated++;
+    } else {
+      await prisma.employeeBasicFact.create({ data });
+      created++;
+    }
   }
 
   return { total: employeeNos.size, created, updated };
