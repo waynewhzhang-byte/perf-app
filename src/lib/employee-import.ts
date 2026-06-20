@@ -63,3 +63,99 @@ export function buildEmployeeDrafts(
   }
   return drafts;
 }
+
+import type { PrismaClient } from '@prisma/client';
+import {
+  buildThreeTierOrgPlan,
+  ensureThreeTierOrg,
+  deptKey,
+  teamKey,
+} from './team-org';
+
+/** 位置缓存（避免逐行 findFirst） */
+async function ensurePosition(
+  prisma: PrismaClient,
+  name: string,
+  cache: Map<string, string>,
+): Promise<string | null> {
+  if (!name) return null;
+  const hit = cache.get(name);
+  if (hit) return hit;
+  const existing = await prisma.position.findFirst({ where: { name } });
+  const pos = existing ?? (await prisma.position.create({ data: { name } }));
+  cache.set(name, pos.id);
+  return pos.id;
+}
+
+export interface EmployeeImportResult {
+  total: number;
+  usersCreated: number;
+  usersUpdated: number;
+  orgPlan: ReturnType<typeof buildThreeTierOrgPlan>;
+}
+
+/**
+ * 导入员工档案：先 ensure 三层组织，再逐行 User upsert。
+ * @param prisma  PrismaClient
+ * @param mapping 字段映射
+ * @param rows    原始行
+ * @param sourceFile 源文件名（保留供日志，由路由层使用）
+ */
+export async function importEmployees(
+  prisma: PrismaClient,
+  mapping: EmployeeFieldMapping,
+  rows: Record<string, string>[],
+  sourceFile: string,
+): Promise<EmployeeImportResult> {
+  const drafts = buildEmployeeDrafts(mapping, rows);
+  const orgPlan = buildThreeTierOrgPlan(drafts);
+  const lookup = await ensureThreeTierOrg(prisma, orgPlan);
+  const positionCache = new Map<string, string>();
+
+  let usersCreated = 0;
+  let usersUpdated = 0;
+
+  for (const d of drafts) {
+    const branchId = d.workArea ? lookup.branchIdByWorkArea.get(d.workArea) ?? null : null;
+    let departmentId: string | null = null;
+    if (d.workArea && d.department) {
+      departmentId = lookup.departmentIdByKey.get(deptKey(d.workArea, d.department)) ?? null;
+    }
+    let teamId: string | null = null;
+    if (d.workArea && d.department && d.team) {
+      teamId = lookup.teamIdByKey.get(teamKey(d.workArea, d.department, d.team)) ?? null;
+    }
+    const positionId = await ensurePosition(prisma, d.position, positionCache);
+
+    const existing = await prisma.user.findFirst({
+      where: { employeeNo: d.employeeNo },
+      select: { id: true },
+    });
+
+    const userData = {
+      fullName: d.fullName,
+      employeeNo: d.employeeNo,
+      gender: d.gender || null,
+      branchId,
+      departmentId,
+      teamId,
+      positionId,
+      profile: d.profile as object,
+    };
+
+    if (existing) {
+      await prisma.user.update({ where: { id: existing.id }, data: userData });
+      usersUpdated++;
+    } else {
+      await prisma.user.create({
+        data: { contact: d.employeeNo, passwordHash: '', ...userData },
+      });
+      usersCreated++;
+    }
+  }
+
+  // sourceFile 保留参数供 FactImportLog 记录（路由层使用），此处不直接落库
+  void sourceFile;
+
+  return { total: drafts.length, usersCreated, usersUpdated, orgPlan };
+}
