@@ -17,7 +17,7 @@ interface ScoringRuleRecord {
   id: string;
   dimensionCode: string;
   dimensionName: string;
-  ruleType: 'MATRIX' | 'SHARE' | 'NORMALIZE';
+  ruleType: 'MATRIX' | 'SHARE' | 'NORMALIZE' | 'BASIC_TIER';
   cap: number;
   enabled: boolean;
   config: Record<string, unknown>;
@@ -26,7 +26,7 @@ interface ScoringRuleRecord {
 type RuleForm = {
   id?: string;
   dimensionCode: string;
-  ruleType: 'MATRIX' | 'SHARE' | 'NORMALIZE';
+  ruleType: 'MATRIX' | 'SHARE' | 'NORMALIZE' | 'BASIC_TIER';
   cap: number;
   enabled: boolean;
   config: Record<string, unknown>;
@@ -45,6 +45,7 @@ const RULE_TYPES = [
   { key: 'MATRIX' as const, label: '矩阵映射', desc: '角色 × 缺陷等级 → 固定分数' },
   { key: 'SHARE' as const, label: '聚合均分', desc: '按事件分组，角色份额分配' },
   { key: 'NORMALIZE' as const, label: '折算归一', desc: '原始分 ÷ 最高分 × 目标满分' },
+  { key: 'BASIC_TIER' as const, label: '档位映射', desc: '基本素质档位值 → 固定分数' },
 ];
 
 const DEFAULT_DEFECT_LEVELS = ['危急', '严重', '一般'];
@@ -54,6 +55,91 @@ const DEFAULT_DEFECT_LEVELS = ['危急', '严重', '一般'];
 interface ConfigEditorProps {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+}
+
+function BasicTierEditor({ config, onChange }: ConfigEditorProps) {
+  const tiers = (config.tiers as Record<string, number>) ?? {};
+  const defaultScore = (config.defaultScore as number) ?? 0;
+  const entries = Object.entries(tiers);
+
+  const setTier = (oldKey: string, newKey: string, value: number) => {
+    const next: Record<string, number> = {};
+    for (const [k, v] of entries) {
+      if (k === oldKey) next[newKey.trim() || k] = value;
+      else next[k] = v;
+    }
+    onChange({ ...config, tiers: next });
+  };
+
+  const addTier = () => {
+    const name = prompt('档位名称（如：高级技师）');
+    if (!name?.trim()) return;
+    if (Object.prototype.hasOwnProperty.call(tiers, name.trim())) return;
+    onChange({ ...config, tiers: { ...tiers, [name.trim()]: 0 } });
+  };
+
+  const removeTier = (key: string) => {
+    const next = { ...tiers };
+    delete next[key];
+    onChange({ ...config, tiers: next });
+  };
+
+  return (
+    <div>
+      <p className="text-xs text-slate-500 mb-2">
+        基本素质档位值 → 固定分数。解析器把原始数据归一成档位码（如「技师」「2A1B」），引擎查此表得分；未列出的档位取「默认分」。
+      </p>
+      <div className="space-y-1.5">
+        {entries.map(([key, val]) => (
+          <div key={key} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={key}
+              onChange={(e) => setTier(key, e.target.value, val)}
+              className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+            />
+            <span className="text-xs text-slate-400">→</span>
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={val}
+              onChange={(e) => setTier(key, key, parseFloat(e.target.value) || 0)}
+              className="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-center"
+            />
+            <button
+              onClick={() => removeTier(key)}
+              className="text-red-400 hover:text-red-600 text-xs px-1"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        {entries.length === 0 && (
+          <p className="text-xs text-slate-400 italic">尚无档位，点击下方添加。</p>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          onClick={addTier}
+          className="rounded border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-700"
+        >
+          + 添加档位
+        </button>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          默认分（未列出档位）
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={defaultScore}
+            onChange={(e) => onChange({ ...config, defaultScore: parseFloat(e.target.value) || 0 })}
+            className="w-20 rounded border border-slate-300 px-2 py-1 text-center"
+          />
+        </label>
+      </div>
+    </div>
+  );
 }
 
 function MatrixEditor({ config, onChange }: ConfigEditorProps) {
@@ -230,14 +316,44 @@ function ShareEditor({ config, onChange }: ConfigEditorProps) {
   );
 }
 
+const TICKET_WORK_ROLES = [
+  { key: 'workLeader', label: '工作负责人' },
+  { key: 'workPermitter', label: '许可人' },
+  { key: 'workMember', label: '工作班成员' },
+];
+
 function NormalizeEditor({ config, onChange }: ConfigEditorProps) {
   const targetMaxScore = (config.targetMaxScore as number) ?? 30;
   const normalizeWithin = (config.normalizeWithin as string) ?? 'declarationLevel';
+  const operationStepPrice = config.operationStepPrice as number | undefined;
+  const ticketPrices = (config.ticketPrices as Record<string, Record<string, number>>) ?? undefined;
+
+  const setPrice = (role: string, type: string, value: number) => {
+    const next = { ...(ticketPrices ?? {}) };
+    if (!next[role]) next[role] = {};
+    next[role] = { ...next[role], [type]: value };
+    onChange({ ...config, ticketPrices: next });
+  };
+
+  const removePrice = (role: string, type: string) => {
+    const next = { ...(ticketPrices ?? {}) };
+    if (next[role]) {
+      delete next[role][type];
+      if (Object.keys(next[role]).length === 0) delete next[role];
+    }
+    onChange({ ...config, ticketPrices: next });
+  };
+
+  const addPrice = (role: string) => {
+    const type = prompt('票种类名称（如：总工作票）');
+    if (!type?.trim()) return;
+    setPrice(role, type.trim(), 0);
+  };
 
   return (
     <div>
       <p className="text-xs text-slate-500 mb-2">
-        员工原始分 ÷ 同能级最高分 × 目标满分，超出 cap 截断。
+        两层计分：(1) 操作票步数×单价 + 工作票按票种×角色单价 → 原始分；(2) 原始分 ÷ 同能级最高 × 目标满分。单价表可不配（退化为读事实原始分）。
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
@@ -263,6 +379,75 @@ function NormalizeEditor({ config, onChange }: ConfigEditorProps) {
           </select>
         </label>
       </div>
+
+      {/* 操作票单价 */}
+      <label className="mt-4 flex items-center gap-2 text-sm">
+        <span className="font-medium text-slate-600">操作票每步单价</span>
+        <input
+          type="number"
+          min={0}
+          step={0.001}
+          value={operationStepPrice ?? ''}
+          placeholder="留空=不启用"
+          onChange={(e) => {
+            const v = e.target.value;
+            const next = { ...config };
+            if (v === '') delete next.operationStepPrice;
+            else next.operationStepPrice = parseFloat(v) || 0;
+            onChange(next);
+          }}
+          className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+        />
+      </label>
+
+      {/* 工作票单价表 */}
+      {operationStepPrice != null && (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-slate-600 mb-2">工作票单价表（角色 × 票种类）</p>
+          <div className="space-y-3">
+            {TICKET_WORK_ROLES.map((r) => {
+              const table = ticketPrices?.[r.key] ?? {};
+              return (
+                <div key={r.key} className="rounded border border-slate-100 bg-white p-2">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs font-medium text-slate-700">{r.label}</span>
+                    <button
+                      onClick={() => addPrice(r.key)}
+                      className="text-xs text-primary-600 hover:text-primary-700"
+                    >
+                      + 票种
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(table).map(([type, val]) => (
+                      <div key={type} className="flex items-center gap-1 rounded bg-slate-50 px-1.5 py-1">
+                        <span className="text-xs text-slate-600">{type}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={val}
+                          onChange={(e) => setPrice(r.key, type, parseFloat(e.target.value) || 0)}
+                          className="w-14 rounded border border-slate-300 px-1 py-0.5 text-center text-xs"
+                        />
+                        <button
+                          onClick={() => removePrice(r.key, type)}
+                          className="text-red-400 hover:text-red-600 text-xs"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    {Object.keys(table).length === 0 && (
+                      <span className="text-xs text-slate-400 italic">无</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -271,6 +456,7 @@ const ConfigEditor: Record<string, React.FC<ConfigEditorProps>> = {
   MATRIX: MatrixEditor,
   SHARE: ShareEditor,
   NORMALIZE: NormalizeEditor,
+  BASIC_TIER: BasicTierEditor,
 };
 
 // ── Defaults ────────────────────────────────────────────────────────
