@@ -104,3 +104,75 @@ export function buildBasicFactDrafts(
   void evalYear;
   return drafts;
 }
+
+import type { PrismaClient } from '@prisma/client';
+
+/** 从 DB 读三维度 tiers（无配置回退默认） */
+export async function loadBasicFactTiers(prisma: PrismaClient): Promise<BasicFactTiers> {
+  const read = async (code: string, fallback: Record<string, number>) => {
+    const row = await prisma.scoringRule.findUnique({ where: { dimensionCode: code } });
+    const cfg = (row?.config ?? {}) as { tiers?: Record<string, number> };
+    return cfg.tiers ?? fallback;
+  };
+  const [skill, title, performance] = await Promise.all([
+    read('basic.skill-level', DEFAULT_SKILL_TIERS),
+    read('basic.title-level', DEFAULT_TITLE_TIERS),
+    read('basic.performance-level', DEFAULT_PERFORMANCE_TIERS),
+  ]);
+  return { skill, title, performance };
+}
+
+export interface BasicFactImportResult {
+  total: number;      // 员工行数
+  created: number;
+  updated: number;
+}
+
+/** 导入基本素质三维度：读 tiers → 草稿 → EmployeeBasicFact upsert */
+export async function importBasicFacts(
+  prisma: PrismaClient,
+  mapping: BasicFactFieldMapping,
+  rows: Record<string, string>[],
+  evalYear: number,
+  sourceFile: string,
+): Promise<BasicFactImportResult> {
+  const tiers = await loadBasicFactTiers(prisma);
+  const drafts = buildBasicFactDrafts(mapping, rows, evalYear, tiers);
+
+  // 统计涉及员工数
+  const employeeNos = new Set(drafts.map((d) => d.employeeNo));
+
+  let created = 0;
+  let updated = 0;
+  for (const f of drafts) {
+    const user = await prisma.user.findFirst({
+      where: { employeeNo: f.employeeNo },
+      select: { id: true },
+    });
+    const result = await prisma.employeeBasicFact.upsert({
+      where: {
+        year_employeeNo_dimension: {
+          year: evalYear, employeeNo: f.employeeNo, dimension: f.dimension,
+        },
+      },
+      create: {
+        year: evalYear, employeeNo: f.employeeNo, employeeName: f.employeeName,
+        userId: user?.id ?? null, dimension: f.dimension,
+        tierValue: f.tierValue,
+        yearBreakdown: f.yearBreakdown ?? undefined,
+        score: f.score, sourceFile,
+      },
+      update: {
+        employeeName: f.employeeName, userId: user?.id ?? null,
+        tierValue: f.tierValue,
+        yearBreakdown: f.yearBreakdown ?? undefined,
+        score: f.score, sourceFile,
+      },
+    });
+    // upsert 无法直接区分 create/update，用 createdAt 与 updatedAt 比较
+    if (result.createdAt.getTime() === result.updatedAt.getTime()) created++;
+    else updated++;
+  }
+
+  return { total: employeeNos.size, created, updated };
+}
