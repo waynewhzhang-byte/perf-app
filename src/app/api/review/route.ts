@@ -11,6 +11,11 @@ import {
   computeTemplateMaxScore,
   type ScorableSection,
 } from '@/lib/score-calculation';
+import { persistSubmissionDimensionFacts } from '@/lib/submission-fact-persistence';
+import {
+  isReviewSkippedSystemItem,
+  shouldCreateOptionReviews,
+} from '@/lib/system-filled-items';
 
 const DecisionSchema = z.object({
   submissionItemId: z.string().optional(),
@@ -148,6 +153,7 @@ async function archiveSubmission(tx: typeof prisma, submissionId: string, review
     update: { submissionId: sub.id, totalScore: total, archivedData: archived as any },
     create: { userId: sub.userId, year: sub.template.year, submissionId: sub.id, totalScore: total, archivedData: archived as any },
   });
+  await persistSubmissionDimensionFacts(tx, sub.id, new Date());
   return total;
 }
 
@@ -264,7 +270,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '该申报不在您的审核范围内' }, { status: 403 });
     }
 
-    const pendingItems = sub.items.filter((item) => item.status === 'PENDING_L1');
+    const pendingItems = sub.items.filter(
+      (item) =>
+        item.status === 'PENDING_L1' &&
+        !isReviewSkippedSystemItem({
+          isSystemFilled: !!(item as { isSystemFilled?: boolean }).isSystemFilled,
+          confirmationStatus: (item as { confirmationStatus?: 'CONFIRMED' | 'DISPUTED' | null }).confirmationStatus,
+        }),
+    );
     const decisionMap = new Map(parsed.data.decisions.map((d) => [d.submissionItemId, d]));
     const uncovered = pendingItems.filter((item) => !decisionMap.has(item.id));
     if (uncovered.length > 0) {
@@ -346,6 +359,13 @@ export async function POST(req: Request) {
       });
 
       for (const item of sub.items) {
+        if (
+          !shouldCreateOptionReviews({
+            isSystemFilled: !!(item as { isSystemFilled?: boolean }).isSystemFilled,
+          })
+        ) {
+          continue;
+        }
         const selected = normalizeSelectedOptions(
           item.itemId,
           (Array.isArray(item.item.scoreOptions) ? item.item.scoreOptions : []) as unknown as ScoreOptionLike[],

@@ -6,6 +6,9 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { ensureScoreOptionIds } from '@/lib/form-options';
+import {
+  isSubDimensionInSection,
+} from '@/lib/performance-dimension-registry';
 
 // ---- Validation schemas ----
 
@@ -38,11 +41,25 @@ const ItemSchema = z.object({
   path: ['maxScore'],
 });
 
+const SectionCodeSchema = z.enum(['basic', 'performance', 'worksite', 'special']);
+
 const SectionSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
+  sectionCode: SectionCodeSchema.optional().nullable(),
+  maxScore: z.number().min(0).max(1000).optional().nullable(),
   sortOrder: z.number().int().default(0),
   items: z.array(ItemSchema).min(1, '章节至少需要一个申报项'),
+}).superRefine((sec, ctx) => {
+  for (const [idx, it] of sec.items.entries()) {
+    if (it.dimensionCode && sec.sectionCode && !isSubDimensionInSection(it.dimensionCode, sec.sectionCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `申报项「${it.title}」的二级维度不属于章节「${sec.title}」`,
+        path: ['items', idx, 'dimensionCode'],
+      });
+    }
+  }
 });
 
 const TemplateSchema = z.object({
@@ -96,6 +113,8 @@ function normalizeSectionsForWrite(sections: z.infer<typeof SectionSchema>[]) {
   return sections.map((s) => ({
     title: s.title,
     description: s.description,
+    sectionCode: s.sectionCode ?? null,
+    maxScore: s.maxScore ?? null,
     sortOrder: s.sortOrder,
     items: {
       create: s.items.map((it) => ({

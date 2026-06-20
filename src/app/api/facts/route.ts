@@ -1,13 +1,23 @@
 /**
- * 获取当前用户在指定模板下的系统填充事实数据。
+ * 获取当前用户在指定模板下的系统填充事实数据 + 绩效分表维度得分。
  *
  * GET /api/facts?templateId=xxx
- * → 返回模板中 dimensionCode 对应的 PerformanceFact 列表，用于前端渲染系统填充项。
  */
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getSession } from '@/lib/auth';
+import {
+  basicDimensionFromCode,
+  BASIC_DIMENSION_LABELS,
+  isBasicDimensionCode,
+} from '@/lib/basic-dimension-map';
+import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import {
+  extractSystemFilledFromSheet,
+  isFactDataSourceDimension,
+  resolveFormItemDimension,
+} from '@/lib/system-filled-items';
 
 export async function GET(req: Request) {
   const s = await getSession(false);
@@ -16,69 +26,145 @@ export async function GET(req: Request) {
   const templateId = new URL(req.url).searchParams.get('templateId');
   if (!templateId) return NextResponse.json({ error: '缺少 templateId' }, { status: 400 });
 
-  // 获取模板的基础信息
   const template = await prisma.formTemplate.findUnique({
     where: { id: templateId },
-    select: { year: true },
+    select: { year: true, title: true },
   });
   if (!template) return NextResponse.json({ error: '模板不存在' }, { status: 404 });
 
-  // 获取模板中所有绑定了 dimensionCode 的申报项
   const sections = await prisma.formSection.findMany({
     where: { templateId },
-    include: {
-      items: {
-        where: { dimensionCode: { not: null } },
-      },
-    },
+    include: { items: { orderBy: { sortOrder: 'asc' } } },
   });
 
-  const dimensionItems = sections.flatMap((sec) => sec.items);
-  const dimensionCodes = dimensionItems.map((it) => it.dimensionCode!).filter(Boolean);
-  if (dimensionCodes.length === 0) {
-    return NextResponse.json({ success: true, facts: [], items: [] });
+  const sheet = await loadPerformanceScoreSheet({
+    prisma,
+    year: template.year,
+    employeeNo: '',
+    templateId,
+    userId: s.userId,
+  });
+
+  if (!sheet) {
+    return NextResponse.json({ success: true, items: [], scoreSheet: null });
   }
 
-  // 查找员工工号
+  const systemRows = extractSystemFilledFromSheet(sheet);
+  const systemByItemId = new Map(systemRows.map((r) => [r.itemId, r]));
+
   const user = await prisma.user.findUnique({
     where: { id: s.userId },
     select: { employeeNo: true },
   });
-  if (!user?.employeeNo) {
-    return NextResponse.json({ success: true, facts: [], items: [] });
-  }
 
-  // 查询该员工在该年度的所有 PerformanceFact
-  const facts = await prisma.performanceFact.findMany({
-    where: {
-      year: template.year,
-      employeeNo: user.employeeNo,
-      dimensionCode: { in: dimensionCodes },
+  const factBoundItems = sections.flatMap((sec) =>
+    sec.items
+      .map((it) => ({ item: it, dimensionCode: resolveFormItemDimension(it) }))
+      .filter(({ dimensionCode }) => isFactDataSourceDimension(dimensionCode)),
+  );
+
+  const perfCodes = factBoundItems
+    .map(({ dimensionCode }) => dimensionCode!)
+    .filter((c) => !isBasicDimensionCode(c));
+  const basicCodes = factBoundItems
+    .map(({ dimensionCode }) => dimensionCode!)
+    .filter((c) => isBasicDimensionCode(c));
+
+  const [perfFacts, basicFacts] = await Promise.all([
+    user?.employeeNo && perfCodes.length
+      ? prisma.performanceFact.findMany({
+          where: {
+            year: template.year,
+            employeeNo: user.employeeNo,
+            dimensionCode: { in: perfCodes },
+          },
+        })
+      : [],
+    user?.employeeNo && basicCodes.length
+      ? prisma.employeeBasicFact.findMany({
+          where: {
+            year: template.year,
+            employeeNo: user.employeeNo,
+            dimension: {
+              in: basicCodes
+                .map((c) => basicDimensionFromCode(c))
+                .filter((d): d is NonNullable<typeof d> => d != null),
+            },
+          },
+        })
+      : [],
+  ]);
+
+  const items = factBoundItems
+    .map(({ item, dimensionCode }) => {
+      const code = dimensionCode!;
+      const sys = systemByItemId.get(item.id);
+      if (!sys) return null;
+
+      if (isBasicDimensionCode(code)) {
+        const dim = basicDimensionFromCode(code);
+        const fact = basicFacts.find((f) => f.dimension === dim);
+        if (!fact) return null;
+        return {
+          itemId: item.id,
+          itemTitle: item.title,
+          dimensionCode: code,
+          scoreMode: item.scoreMode,
+          maxScore: item.maxScore,
+          factKind: 'basic' as const,
+          source: 'FACT' as const,
+          ruleSummary: sys.ruleSummary,
+          requiresConfirmation: true,
+          facts: [
+            {
+              id: fact.id,
+              tierValue: fact.tierValue,
+              label: dim ? BASIC_DIMENSION_LABELS[dim] : code,
+              yearBreakdown: fact.yearBreakdown,
+              score: Number(fact.score),
+            },
+          ],
+          totalScore: sys.score,
+        };
+      }
+
+      const facts = perfFacts.filter((f) => f.dimensionCode === code);
+      if (facts.length === 0) return null;
+
+      return {
+        itemId: item.id,
+        itemTitle: item.title,
+        dimensionCode: code,
+        scoreMode: item.scoreMode,
+        maxScore: item.maxScore,
+        factKind: 'performance' as const,
+        source: 'FACT' as const,
+        ruleSummary: sys.ruleSummary,
+        requiresConfirmation: true,
+        facts: facts.map((f) => ({
+          id: f.id,
+          role: f.role,
+          eventType: f.eventType,
+          score: Number(f.score),
+          defectRef: f.defectRef,
+          defectLevel: f.defectLevel,
+          eventDate: f.eventDate,
+          metadata: f.metadata,
+        })),
+        totalScore: sys.score,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
+
+  return NextResponse.json({
+    success: true,
+    items,
+    scoreSheet: {
+      totalScore: sheet.totalScore,
+      positiveScore: sheet.positiveScore,
+      deductionScore: sheet.deductionScore,
+      positiveMaxScore: sheet.positiveMaxScore,
+      declarationTier: sheet.declarationTier,
     },
   });
-
-  // 按 itemId 组织返回
-  const items = dimensionItems.map((it) => ({
-    itemId: it.id,
-    itemTitle: it.title,
-    dimensionCode: it.dimensionCode,
-    scoreMode: it.scoreMode,
-    maxScore: it.maxScore,
-    facts: facts
-      .filter((f) => f.dimensionCode === it.dimensionCode)
-      .map((f) => ({
-        id: f.id,
-        role: f.role,
-        eventType: f.eventType,
-        score: Number(f.score),
-        defectRef: f.defectRef,
-        defectLevel: f.defectLevel,
-        eventDate: f.eventDate,
-      })),
-    totalScore: facts
-      .filter((f) => f.dimensionCode === it.dimensionCode)
-      .reduce((sum, f) => sum + Number(f.score), 0),
-  }));
-
-  return NextResponse.json({ success: true, items });
 }

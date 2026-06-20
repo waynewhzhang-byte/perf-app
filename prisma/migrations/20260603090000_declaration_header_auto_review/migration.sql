@@ -29,7 +29,7 @@ CREATE TABLE "AutoReviewRule" (
     "allowedLevelIds" JSONB NOT NULL DEFAULT '[]',
     "rejectMessage" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "AutoReviewRule_pkey" PRIMARY KEY ("id")
 );

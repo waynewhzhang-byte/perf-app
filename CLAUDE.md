@@ -186,7 +186,7 @@ COOKIE_SECURE         — 会话 Cookie Secure 覆盖；默认按 APP_BASE_URL �
 
 ### Issue tracker
 
-Issues live as GitHub issues in `waynewhzhang-byte/perf-app`. Use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues in `waynewhzhang-byte/perf-app`; external PRs are not a triage request surface. Use the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

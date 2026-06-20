@@ -25,11 +25,12 @@ function item(
     maxSelections: opts.maxSelections ?? 1,
     scoreOptions,
     sortOrder: opts.sortOrder ?? 0,
+    dimensionCode: opts.dimensionCode ?? null,
   };
 }
 
-function section(title, description, items, sortOrder) {
-  return { title, description, sortOrder, items };
+function section(title, description, items, sortOrder, sectionCode, maxScore) {
+  return { title, description, sortOrder, sectionCode, maxScore, items };
 }
 
 const templatePayload = {
@@ -50,7 +51,7 @@ const templatePayload = {
             { label: '高级工', score: 2 },
             { label: '其他', score: 1 },
           ],
-          { sortOrder: 0, isRequired: true },
+          { sortOrder: 0, isRequired: true, dimensionCode: 'basic.skill-level', requireAttachment: false },
         ),
         item(
           '职称等级（满分4分）',
@@ -60,7 +61,7 @@ const templatePayload = {
             { label: '工程师', score: 3 },
             { label: '助理工程师', score: 2 },
           ],
-          { sortOrder: 1, isRequired: true },
+          { sortOrder: 1, isRequired: true, dimensionCode: 'basic.title-level', requireAttachment: false },
         ),
         item(
           '绩效等级（满分6分）',
@@ -72,10 +73,12 @@ const templatePayload = {
             { label: '三年绩效 3B', score: 4.5 },
             { label: '满足基本绩效要求（其他情况）', score: 4 },
           ],
-          { sortOrder: 2, isRequired: true },
+          { sortOrder: 2, isRequired: true, dimensionCode: 'basic.performance-level', requireAttachment: false },
         ),
       ],
       0,
+      'basic',
+      14,
     ),
     section(
       '二、工作业绩（满分44分）',
@@ -126,6 +129,8 @@ const templatePayload = {
         ),
       ],
       1,
+      'performance',
+      44,
     ),
     section(
       '三、工作现场（满分42分）',
@@ -133,29 +138,20 @@ const templatePayload = {
       [
         item(
           '两票执行（满分30分）',
-          '按全年两票执行累加，各专业个人最高分满分后比例折算。请在备注列明：操作票项数、工作负责人/许可人/班成员各类票数。标准：操作票0.01分/项；工作负责人总票5分/份、分票3分/份、单班组一种票3分/份、二种票1分/份；许可人总票1.5分/份、单班组一种票1分/份、二种票0.3分/份；班成员一种票1.5分/份、二种票0.5分/份。',
-          [{ label: '提交全年两票执行材料（分值由安监部审核折算，满分30）', score: 0 }],
-          { sortOrder: 0, requireAttachment: true },
+          '系统根据安监部导入的全年两票台账自动计分并折算，请核对后确认或申诉。',
+          [{ label: '系统导入折算分（无需手工选择）', score: 0 }],
+          { sortOrder: 0, requireAttachment: false, dimensionCode: 'worksite.ticket-execution' },
         ),
         item(
           '缺陷治理（满分12分）',
-          '不可与安全突出贡献重复加分；既为发现人又为处理人按最高分计。请在备注说明角色与缺陷等级。',
-          [
-            { label: '危急缺陷-第一发现人（3分）', score: 3 },
-            { label: '危急缺陷-共同发现人限1人（1分）', score: 1 },
-            { label: '危急缺陷-第一处理人（3分）', score: 3 },
-            { label: '危急缺陷-共同处理人限1人（1分）', score: 1 },
-            { label: '严重缺陷-第一发现人（1分）', score: 1 },
-            { label: '严重缺陷-共同发现人限1人（0.5分）', score: 0.5 },
-            { label: '严重缺陷-第一处理人（1分）', score: 1 },
-            { label: '严重缺陷-共同处理人限1人（0.5分）', score: 0.5 },
-            { label: '一般缺陷-第一发现人（0.5分）', score: 0.5 },
-            { label: '一般缺陷-第一处理人（0.5分）', score: 0.5 },
-          ],
-          { sortOrder: 1, maxSelections: 4 },
+          '系统根据运检部缺陷库导入数据自动计分，请核对后确认或申诉。',
+          [{ label: '系统导入累计分（无需手工选择）', score: 0 }],
+          { sortOrder: 1, requireAttachment: false, dimensionCode: 'worksite.defect-governance' },
         ),
       ],
       2,
+      'worksite',
+      42,
     ),
     section(
       '四、特殊事项（扣分项）',
@@ -174,6 +170,8 @@ const templatePayload = {
         ),
       ],
       3,
+      'special',
+      0,
     ),
   ],
 };
@@ -207,6 +205,8 @@ async function main() {
             title: s.title,
             description: s.description,
             sortOrder: s.sortOrder,
+            sectionCode: s.sectionCode,
+            maxScore: s.maxScore,
             items: { create: s.items },
           })),
         },
@@ -229,6 +229,8 @@ async function main() {
           title: s.title,
           description: s.description,
           sortOrder: s.sortOrder,
+          sectionCode: s.sectionCode,
+          maxScore: s.maxScore,
           items: { create: s.items },
         })),
       },

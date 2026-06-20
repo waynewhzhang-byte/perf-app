@@ -14,7 +14,16 @@ import {
   HEADER_FIELD_LABELS,
   resolveHeaderFields,
 } from '@/lib/header-fields';
-import { DIMENSION_DEFS } from '@/lib/dimension-codes';
+import {
+  PERFORMANCE_SECTIONS,
+  PERFORMANCE_SUB_DIMENSIONS,
+  SUB_DIMENSION_BY_CODE,
+  defaultSectionTitle,
+  getPerformanceSection,
+  isSubDimensionInSection,
+  subDimensionsForSection,
+  type PerformanceSectionCode,
+} from '@/lib/performance-dimension-registry';
 
 type ScoreMode = 'TIERS' | 'COUNTED';
 interface Item {
@@ -28,7 +37,15 @@ interface Item {
   sortOrder: number;
   dimensionCode?: string | null;
 }
-interface Section { id?: string; title: string; description?: string; sortOrder: number; items: Item[] }
+interface Section {
+  id?: string;
+  sectionCode?: PerformanceSectionCode | null;
+  maxScore?: number | null;
+  title: string;
+  description?: string;
+  sortOrder: number;
+  items: Item[];
+}
 interface Template {
   id: string; year: number; title: string; description?: string;
   status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
@@ -81,6 +98,11 @@ function templateToEditing(t: Template | EditingState): EditingState {
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((s, sIdx) => ({
       id: s.id,
+      sectionCode: (s as { sectionCode?: PerformanceSectionCode | null }).sectionCode ?? null,
+      maxScore:
+        (s as { maxScore?: number | string | null }).maxScore == null
+          ? null
+          : Number((s as { maxScore?: number | string | null }).maxScore),
       title: s.title,
       description: s.description ?? '',
       sortOrder: s.sortOrder ?? sIdx,
@@ -139,7 +161,12 @@ const blankItem = (i = 0): Item => ({
   ],
 });
 const blankSection = (i = 0): Section => ({
-  title: '新章节', description: '', sortOrder: i, items: [blankItem(0)],
+  sectionCode: null,
+  maxScore: null,
+  title: '新章节',
+  description: '',
+  sortOrder: i,
+  items: [blankItem(0)],
 });
 
 export default function TemplatesPage() {
@@ -224,6 +251,14 @@ export default function TemplatesPage() {
         if (!sec.title.trim()) { alert('请填写章节标题'); return; }
         for (const it of sec.items) {
           if (!it.title.trim()) { alert('请填写申报项标题'); return; }
+          if (
+            it.dimensionCode &&
+            sec.sectionCode &&
+            !isSubDimensionInSection(it.dimensionCode, sec.sectionCode)
+          ) {
+            alert(`申报项「${it.title}」的二级维度与章节一级维度不匹配，请重新选择`);
+            return;
+          }
           if (it.scoreMode === 'COUNTED' && (it.maxScore == null || it.maxScore <= 0)) {
             alert(`申报项「${it.title}」：按次数计分必须设置大于 0 的上限分`);
             return;
@@ -451,6 +486,50 @@ export default function TemplatesPage() {
         <div className="mt-5 space-y-4">
           {editing.sections.map((sec, sIdx) => (
             <div key={sIdx} className="rounded-xl border border-slate-200 bg-white p-5">
+              {!textMode && (
+                <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+                  <label className="flex items-center gap-2 font-medium text-slate-700">
+                    一级绩效维度
+                    <select
+                      value={sec.sectionCode ?? ''}
+                      onChange={(e) => {
+                        const code = (e.target.value || null) as PerformanceSectionCode | null;
+                        const ns = [...editing.sections];
+                        if (!code) {
+                          ns[sIdx] = { ...sec, sectionCode: null, maxScore: null };
+                        } else {
+                          const def = getPerformanceSection(code);
+                          ns[sIdx] = {
+                            ...sec,
+                            sectionCode: code,
+                            title: defaultSectionTitle(code, sIdx),
+                            description: def.description,
+                            maxScore: def.maxScore,
+                            items: sec.items.map((it) =>
+                              it.dimensionCode && !isSubDimensionInSection(it.dimensionCode, code)
+                                ? { ...it, dimensionCode: null }
+                                : it,
+                            ),
+                          };
+                        }
+                        setEditing({ ...editing, sections: ns });
+                      }}
+                      className={`${inputClass} max-w-xs text-sm`}
+                    >
+                      <option value="">自定义（不绑定标准维度）</option>
+                      {PERFORMANCE_SECTIONS.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.excelOrder}. {s.title}
+                          {s.maxScore > 0 ? `（满分${s.maxScore}）` : '（扣分项）'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {sec.sectionCode && sec.maxScore != null && sec.maxScore > 0 && (
+                    <span className="text-xs text-slate-500">章节满分 {sec.maxScore} 分</span>
+                  )}
+                </div>
+              )}
               <div className="flex items-start gap-2">
                 <input value={sec.title} onChange={(e) => {
                   const ns = [...editing.sections]; ns[sIdx] = { ...sec, title: e.target.value }; setEditing({ ...editing, sections: ns });
@@ -469,7 +548,10 @@ export default function TemplatesPage() {
               <div className="mt-4 space-y-3">
                 {sec.items.map((it, iIdx) => (
                   <ItemEditor
-                    key={iIdx} item={it} textMode={textMode}
+                    key={iIdx}
+                    item={it}
+                    sectionCode={sec.sectionCode}
+                    textMode={textMode}
                     onChange={(next) => {
                       const ns = [...editing.sections];
                       const ni = [...sec.items]; ni[iIdx] = next;
@@ -612,7 +694,19 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ItemEditor({ item, onChange, onDelete, textMode = false }: Readonly<{ item: Item; onChange: (i: Item) => void; onDelete: () => void; textMode?: boolean }>) {
+function ItemEditor({
+  item,
+  sectionCode,
+  onChange,
+  onDelete,
+  textMode = false,
+}: Readonly<{
+  item: Item;
+  sectionCode?: PerformanceSectionCode | null;
+  onChange: (i: Item) => void;
+  onDelete: () => void;
+  textMode?: boolean;
+}>) {
   const smallInput =
     'rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20';
   const tinyInput =
@@ -621,6 +715,28 @@ function ItemEditor({ item, onChange, onDelete, textMode = false }: Readonly<{ i
     'rounded-lg px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 cursor-pointer';
 
   const isCounted = item.scoreMode === 'COUNTED';
+  const dimOptions = sectionCode
+    ? subDimensionsForSection(sectionCode)
+    : PERFORMANCE_SUB_DIMENSIONS;
+
+  const applyDimensionCode = (code: string | null) => {
+    if (!code) {
+      onChange({ ...item, dimensionCode: null });
+      return;
+    }
+    const sub = SUB_DIMENSION_BY_CODE[code as keyof typeof SUB_DIMENSION_BY_CODE];
+    if (!sub) {
+      onChange({ ...item, dimensionCode: code });
+      return;
+    }
+    onChange({
+      ...item,
+      dimensionCode: code,
+      title: item.title.trim() ? item.title : `${sub.title}（满分${sub.maxScore}分）`,
+      requireAttachment: sub.isSystemImport ? false : item.requireAttachment,
+      maxScore: isCounted ? (item.maxScore ?? sub.maxScore) : item.maxScore,
+    });
+  };
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -673,16 +789,26 @@ function ItemEditor({ item, onChange, onDelete, textMode = false }: Readonly<{ i
             </label>
           )}
           <label className="flex items-center gap-1.5">
-            系统维度
-            <select value={item.dimensionCode ?? ''}
-              onChange={(e) => onChange({ ...item, dimensionCode: e.target.value || null })}
-              className="rounded border border-slate-300 px-1.5 py-0.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 max-w-[180px]">
-              <option value="">手工填写</option>
-              {DIMENSION_DEFS.map((d) => (
-                <option key={d.code} value={d.code}>{d.name}（{d.category}）</option>
+            二级维度
+            <select
+              value={item.dimensionCode ?? ''}
+              onChange={(e) => applyDimensionCode(e.target.value || null)}
+              className="rounded border border-slate-300 px-1.5 py-0.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 max-w-[220px]"
+            >
+              <option value="">手工填写（不绑定）</option>
+              {dimOptions.map((d) => (
+                <option key={d.code} value={d.code}>
+                  {d.title}
+                  {d.isSystemImport ? ' · 系统导入' : d.dataSource === 'deduction' ? ' · 扣分' : ''}
+                </option>
               ))}
             </select>
           </label>
+          {item.dimensionCode && SUB_DIMENSION_BY_CODE[item.dimensionCode as keyof typeof SUB_DIMENSION_BY_CODE]?.isSystemImport && (
+            <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
+              事实导入自动计分
+            </span>
+          )}
         </div>
       )}
 

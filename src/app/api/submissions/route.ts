@@ -9,6 +9,12 @@ import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
+import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import {
+  extractSystemFilledFromSheet,
+  systemItemStatusOnSubmit,
+  type ConfirmationStatus,
+} from '@/lib/system-filled-items';
 
 async function me() {
   const s = await getSession(false);
@@ -246,9 +252,9 @@ export async function POST(req: Request) {
         }
       }
 
-      // 收集附件计数以便校验 requireAttachment
+      // 收集附件计数以便校验 requireAttachment / 申诉附件
       let attachmentCounts: Map<string, number> | null = null;
-      if (submit) {
+      if (submit || items.some((it) => (it as { confirmationStatus?: string }).confirmationStatus === 'DISPUTED')) {
         const allAttachments = await tx.attachment.findMany({
           where: { submissionItem: { submissionId: sub.id } },
           include: { submissionItem: true },
@@ -260,8 +266,88 @@ export async function POST(req: Request) {
         }
       }
 
-      // 处理每个提交项
+      const itemTitleById = new Map<string, string>();
+      for (const sec of template.sections) {
+        for (const it of sec.items) itemTitleById.set(it.id, it.title);
+      }
+
+      const systemFilledIds = new Set<string>();
+
+      // ── 系统填充项：服务端按评分规则写入得分，员工仅确认/申诉 ──
+      if (user.employeeNo) {
+        const sheet = await loadPerformanceScoreSheet({
+          prisma: tx as typeof prisma,
+          year: template.year,
+          employeeNo: user.employeeNo,
+          templateId,
+          userId: s.userId,
+        });
+        if (sheet) {
+          for (const sys of extractSystemFilledFromSheet(sheet)) {
+            systemFilledIds.add(sys.itemId);
+            if (lockedItemIds.has(sys.itemId)) {
+              const existingItem = existingMap.get(sys.itemId);
+              if (existingItem) totalScore += Number(existingItem.score);
+              continue;
+            }
+
+            const payload = items.find((i) => i.itemId === sys.itemId);
+            const existingItem = existingMap.get(sys.itemId);
+            const confStatus = (payload?.confirmationStatus ??
+              existingItem?.confirmationStatus) as ConfirmationStatus | undefined;
+            const disputeReason =
+              payload?.disputeReason ?? existingItem?.disputeReason ?? null;
+            const title = itemTitleById.get(sys.itemId) ?? sys.title;
+
+            if (submit) {
+              if (!confStatus) {
+                throw new EditableError(
+                  `请对系统填充项「${title}」选择「确认」或「申诉」`,
+                );
+              }
+              if (confStatus === 'DISPUTED') {
+                if (!disputeReason?.trim()) {
+                  throw new EditableError(`请填写「${title}」的申诉理由`);
+                }
+                const attCount = attachmentCounts?.get(sys.itemId) ?? 0;
+                if (attCount === 0) {
+                  throw new EditableError(`「${title}」申诉须上传证明材料`);
+                }
+              }
+            }
+
+            const itemStatus = systemItemStatusOnSubmit(submit, confStatus ?? null);
+
+            await tx.submissionItem.upsert({
+              where: { submissionId_itemId: { submissionId: sub.id, itemId: sys.itemId } },
+              update: {
+                selected: sys.selected as Prisma.InputJsonValue,
+                score: sys.score,
+                status: itemStatus,
+                isSystemFilled: true,
+                ...(confStatus ? { confirmationStatus: confStatus } : {}),
+                disputeReason,
+                rejectReason: null,
+              },
+              create: {
+                submissionId: sub.id,
+                itemId: sys.itemId,
+                selected: sys.selected as Prisma.InputJsonValue,
+                score: sys.score,
+                status: itemStatus,
+                isSystemFilled: true,
+                ...(confStatus ? { confirmationStatus: confStatus } : {}),
+                disputeReason,
+              },
+            });
+            totalScore += sys.score;
+          }
+        }
+      }
+
+      // 处理每个手工提交项
       for (const it of items) {
+        if (systemFilledIds.has(it.itemId)) continue;
         if (lockedItemIds.has(it.itemId)) {
           skippedItems.push(it.itemId);
           // 累加锁定项的分数（从 DB 读取，不用客户端数据）

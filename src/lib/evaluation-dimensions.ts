@@ -1,6 +1,8 @@
 /**
  * 国网山西超高压变电公司能级评价量化积分表（暂行稿第一稿）维度定义。
  * 与 FormTemplate 的 section / item 结构对应，供事实数据归集与自动计分引用。
+ *
+ * 一级/二级维度权威注册表见 performance-dimension-registry.ts（源自《评分标准 对应表.xlsx》）。
  */
 
 export type EvaluationDimensionCode =

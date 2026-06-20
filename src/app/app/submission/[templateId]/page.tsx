@@ -62,10 +62,30 @@ export default function SubmissionPage() {
   });
   const [answers, setAnswers] = useState<Record<string, SubItem>>({});
   const [factsData, setFactsData] = useState<{
-    items: { itemId: string; itemTitle: string; dimensionCode?: string; totalScore: number; facts: { id: string; role: string; eventType: string; score: number; defectRef: string; defectLevel?: string; eventDate?: string | null }[] }[];
+    items: {
+      itemId: string;
+      itemTitle: string;
+      dimensionCode?: string;
+      factKind?: 'basic' | 'performance';
+      totalScore: number;
+      facts: {
+        id: string;
+        score: number;
+        role?: string;
+        eventType?: string;
+        defectRef?: string;
+        defectLevel?: string;
+        eventDate?: string | null;
+        tierValue?: string;
+        label?: string;
+        yearBreakdown?: unknown;
+      }[];
+    }[];
   } | null>(null);
   const [factsConfirmations, setFactsConfirmations] = useState<Record<string, 'CONFIRMED' | 'DISPUTED'>>({});
   const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
+  const [factsItemDbIds, setFactsItemDbIds] = useState<Record<string, string>>({});
+  const [factsAttachments, setFactsAttachments] = useState<Record<string, Attachment[]>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -118,6 +138,7 @@ export default function SubmissionPage() {
       const map: Record<string, SubItem> = {};
       currentTemplate.sections.forEach((s) => s.items.forEach((it) => {
         const ex = existing?.items?.find((x: any) => x.itemId === it.id);
+        if (ex && (ex as any).isSystemFilled) return;
         map[it.id] = ex ? {
           id: ex.id, itemId: it.id, selected: ex.selected ?? [], content: ex.content ?? '',
           status: ex.status, rejectReason: ex.rejectReason, attachments: ex.attachments,
@@ -133,12 +154,20 @@ export default function SubmissionPage() {
         const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
         const disps: Record<string, string> = {};
         if (existing?.items) {
+          const dbIds: Record<string, string> = {};
+          const factAtts: Record<string, Attachment[]> = {};
           for (const si of existing.items) {
             if ((si as any).isSystemFilled && (si as any).confirmationStatus) {
               confs[si.itemId] = (si as any).confirmationStatus;
               if ((si as any).disputeReason) disps[si.itemId] = (si as any).disputeReason;
             }
+            if ((si as any).isSystemFilled) {
+              if (si.id) dbIds[si.itemId] = si.id;
+              if (si.attachments?.length) factAtts[si.itemId] = si.attachments;
+            }
           }
+          setFactsItemDbIds(dbIds);
+          setFactsAttachments(factAtts);
         }
         setFactsConfirmations(confs);
         setFactsDisputes(disps);
@@ -161,12 +190,23 @@ export default function SubmissionPage() {
   const showHeader = (key: HeaderFieldKey) => isFieldEnabled(headerFields, key);
   const requireHeader = (key: HeaderFieldKey) => isFieldRequired(headerFields, key);
 
+  const systemFilledItemIds = useMemo(
+    () => new Set(factsData?.items.map((fi) => fi.itemId) ?? []),
+    [factsData],
+  );
+
+  const factsScoreTotal = useMemo(
+    () => factsData?.items.reduce((s, fi) => s + fi.totalScore, 0) ?? 0,
+    [factsData],
+  );
+
   const total = useMemo(
-    () => Object.values(answers).reduce((s, a) => {
+    () => factsScoreTotal + Object.values(answers).reduce((s, a) => {
+      if (systemFilledItemIds.has(a.itemId)) return s;
       const it = itemById.get(a.itemId);
       return s + (it ? computeItemScore(it, a.selected) : a.selected.reduce((x, y) => x + y.score, 0));
     }, 0),
-    [answers, itemById],
+    [answers, itemById, factsScoreTotal, systemFilledItemIds],
   );
 
   const workYears = useMemo(() => {
@@ -231,21 +271,29 @@ export default function SubmissionPage() {
     setAnswers((prev) => ({ ...prev, [itemId]: { ...prev[itemId], content: val } }));
   };
 
-  const upload = async (itemId: string, files: FileList | null) => {
+  const upload = async (itemId: string, files: FileList | null, opts?: { isFact?: boolean }) => {
     if (!files || !files.length) return;
     if (!sub?.id) { alert('请先保存草稿后再上传附件'); return; }
-    const subItemId = answers[itemId].id;
-    if (!subItemId) { alert('请先保存草稿后再上传附件'); return; }
+    const submissionItemId = answers[itemId]?.id ?? factsItemDbIds[itemId];
+    if (!submissionItemId) { alert('请先保存草稿后再上传附件'); return; }
     const fd = new FormData();
-    fd.append('submissionItemId', subItemId);
+    fd.append('submissionItemId', submissionItemId);
     Array.from(files).forEach((f) => fd.append('files', f));
     const r = await fetch('/api/attachments', { method: 'POST', body: fd });
     if (!r.ok) { alert('上传失败'); return; }
     const d = await r.json();
-    setAnswers((prev) => ({
-      ...prev,
-      [itemId]: { ...prev[itemId], attachments: [...(prev[itemId].attachments ?? []), ...(d.attachments ?? [])] },
-    }));
+    const newAtts = d.attachments ?? [];
+    if (opts?.isFact) {
+      setFactsAttachments((prev) => ({
+        ...prev,
+        [itemId]: [...(prev[itemId] ?? []), ...newAtts],
+      }));
+    } else {
+      setAnswers((prev) => ({
+        ...prev,
+        [itemId]: { ...prev[itemId], attachments: [...(prev[itemId].attachments ?? []), ...newAtts] },
+      }));
+    }
   };
 
   const save = async (submit: boolean) => {
@@ -257,18 +305,32 @@ export default function SubmissionPage() {
       if (requireHeader('declarationLevel') && !header.declarationLevelId) missing.push('能级评价等级');
       if (requireHeader('declarationSpecialty') && !header.declarationSpecialtyId) missing.push('能级评价专业');
       tpl.sections.forEach((s) => s.items.forEach((it) => {
-        if (isLocked(it.id)) return;
+        if (isLocked(it.id) || systemFilledItemIds.has(it.id)) return;
         const a = answers[it.id];
         if (it.isRequired && !a.selected.length) missing.push(it.title);
         else if (a.selected.length && it.requireAttachment && !(a.attachments?.length)) missing.push(`${it.title}（缺附件）`);
       }));
       if (missing.length) { alert('请补全：\n' + missing.join('\n')); return; }
+      const missingFactConfirm = (factsData?.items ?? []).filter(
+        (fi) => !factsConfirmations[fi.itemId],
+      );
+      if (missingFactConfirm.length > 0) {
+        alert('请对以下系统填充项选择「确认」或「申诉」：\n' + missingFactConfirm.map((fi) => fi.itemTitle).join('\n'));
+        return;
+      }
       // 校验：申诉项必须填写原因
       const missingDisputeReason = (factsData?.items ?? []).filter(
         (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsDisputes[fi.itemId] ?? '').trim(),
       );
       if (missingDisputeReason.length > 0) {
         alert('请为以下申诉项填写原因：\n' + missingDisputeReason.map((fi) => fi.itemTitle).join('\n'));
+        return;
+      }
+      const missingDisputeAtt = (factsData?.items ?? []).filter(
+        (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsAttachments[fi.itemId]?.length),
+      );
+      if (missingDisputeAtt.length > 0) {
+        alert('请为以下申诉项上传证明材料（需先保存草稿）：\n' + missingDisputeAtt.map((fi) => fi.itemTitle).join('\n'));
         return;
       }
     }
@@ -463,7 +525,12 @@ export default function SubmissionPage() {
       {/* 系统自动填充项 */}
       {factsData && factsData.items.length > 0 && (
         <div className="mt-5 space-y-4">
-          <h2 className="text-sm font-semibold text-slate-500">系统自动填充（来自部门台账）</h2>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-700">部门导入事实 · 系统自动计分</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              以下维度由外部台账导入，系统已按《评分标准 对应表》计算得分。请逐项「确认」或「申诉」；确认后锁定且无需审核员重复审核该项内容。
+            </p>
+          </div>
           {factsData.items.map((fi) => {
             const confirmed = factsConfirmations[fi.itemId] === 'CONFIRMED';
             const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
@@ -482,11 +549,25 @@ export default function SubmissionPage() {
                     <div className="mt-2 space-y-1">
                       {fi.facts.map((f) => (
                         <p key={f.id} className="text-xs text-slate-500">
-                          {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
-                          {' · '}{f.role === 'FIRST_DISCOVERER' ? '第一发现人' : f.role === 'CO_DISCOVERER' ? '共同发现人' : f.role === 'FIRST_HANDLER' ? '第一处理人' : '共同处理人'}
-                          {' · '}{f.defectRef}
-                          {f.eventDate && ` · ${String(f.eventDate).slice(0, 10)}`}
-                          {' → '}<b>{f.score} 分</b>
+                          {fi.factKind === 'basic' ? (
+                            <>
+                              <span className="font-medium">{f.label ?? '基本素质'}</span>
+                              {' · 档位 '}{f.tierValue}
+                              {' → '}<b>{f.score} 分</b>
+                            </>
+                          ) : (
+                            <>
+                              {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
+                              {f.role && (
+                                <>
+                                  {' · '}{f.role === 'FIRST_DISCOVERER' ? '第一发现人' : f.role === 'CO_DISCOVERER' ? '共同发现人' : f.role === 'FIRST_HANDLER' ? '第一处理人' : '共同处理人'}
+                                </>
+                              )}
+                              {f.defectRef && <> {' · '}{f.defectRef}</>}
+                              {f.eventDate && ` · ${String(f.eventDate).slice(0, 10)}`}
+                              {' → '}<b>{f.score} 分</b>
+                            </>
+                          )}
                         </p>
                       ))}
                     </div>
@@ -517,13 +598,34 @@ export default function SubmissionPage() {
                   )}
                 </div>
                 {disputed && (
-                  <div className="mt-3">
+                  <div className="mt-3 space-y-3">
                     <textarea
                       value={factsDisputes[fi.itemId] ?? ''}
                       onChange={(e) => setFactsDisputes((p) => ({ ...p, [fi.itemId]: e.target.value }))}
                       placeholder="请说明申诉原因（必填，审核员可见）"
                       rows={3}
-                      className="w-full rounded-lg border border-amber-300 px-3 py-2 text-xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                      disabled={!itemEditable}
+                      className="w-full rounded-lg border border-amber-300 px-3 py-2 text-xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 disabled:bg-slate-50" />
+                    <div>
+                      <p className="text-xs font-semibold text-amber-800">申诉证明材料（提交前必传）</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {(factsAttachments[fi.itemId] ?? []).map((at) => (
+                          <li key={at.id} className="text-xs text-slate-600">{at.filename}</li>
+                        ))}
+                        {!(factsAttachments[fi.itemId]?.length) && (
+                          <li className="text-xs text-slate-400">尚未上传</li>
+                        )}
+                      </ul>
+                      {itemEditable && (
+                        <input
+                          type="file"
+                          multiple
+                          accept={UPLOAD_ACCEPT}
+                          onChange={(e) => upload(fi.itemId, e.target.files, { isFact: true })}
+                          className="mt-2 block text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-100 file:px-3 file:py-1 file:text-xs cursor-pointer"
+                        />
+                      )}
+                    </div>
                   </div>
                 )}
               </section>
@@ -538,7 +640,7 @@ export default function SubmissionPage() {
             <h2 className="font-semibold">{sec.title}</h2>
             {sec.description && <p className="mt-1 text-xs text-slate-400">{sec.description}</p>}
             <div className="mt-4 space-y-5">
-              {sec.items.map((it) => {
+              {sec.items.filter((it) => !systemFilledItemIds.has(it.id)).map((it) => {
                 const a = answers[it.id]; const locked = isLocked(it.id);
                 const rejected = a?.status === 'REJECTED';
                 return (

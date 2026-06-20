@@ -13,6 +13,10 @@
     "prisma:seed": "npx tsx prisma/seed.ts",
     "test": "npx tsx --test src/lib/*.test.ts",
     "import:defect-facts": "npx tsx scripts/import-defect-facts-2024.ts",
+    "import:facts-pipeline": "npx tsx scripts/import-facts-pipeline.ts",
+    "compute:imported-scores": "npx tsx scripts/compute-imported-scores.ts",
+    "export:imported-scores": "npx tsx scripts/export-imported-scores.ts",
+    "seed:scoring-rules": "npx tsx scripts/seed-scoring-rules.ts",
     "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts"
   },
   "prisma": {
