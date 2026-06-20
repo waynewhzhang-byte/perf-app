@@ -67,3 +67,53 @@ export function buildThreeTierOrgPlan(rows: OrgRow[]): ThreeTierOrgPlan {
         zh(a.workArea, b.workArea) || zh(a.department, b.department) || zh(a.name, b.name)),
   };
 }
+
+import type { PrismaClient } from '@prisma/client';
+
+/** 三层组织 id 查找表（ensure 后返回，供员工导入关联） */
+export interface ThreeTierOrgLookup {
+  branchIdByWorkArea: Map<string, string>;
+  departmentIdByKey: Map<string, string>; // key = `${workArea}\0${department}`
+  teamIdByKey: Map<string, string>; // key = `${workArea}\0${department}\0${team}`
+}
+
+export const deptKey = (workArea: string, department: string) => `${workArea}\0${department}`;
+export const teamKey = (workArea: string, department: string, team: string) =>
+  `${workArea}\0${department}\0${team}`;
+
+/**
+ * 确保三层组织存在（缺则建），返回 id 查找表。
+ * 沿用现有 ensureOrgStructure 的 upsert-by-findFirst 模式。
+ */
+export async function ensureThreeTierOrg(
+  prisma: PrismaClient,
+  plan: ThreeTierOrgPlan,
+): Promise<ThreeTierOrgLookup> {
+  const branchIdByWorkArea = new Map<string, string>();
+  const departmentIdByKey = new Map<string, string>();
+  const teamIdByKey = new Map<string, string>();
+
+  for (const name of plan.workAreas) {
+    const existing = await prisma.branch.findFirst({ where: { name } });
+    const branch = existing ?? (await prisma.branch.create({ data: { name } }));
+    branchIdByWorkArea.set(name, branch.id);
+  }
+
+  for (const { workArea, name } of plan.departments) {
+    const branchId = branchIdByWorkArea.get(workArea);
+    if (!branchId) continue;
+    const existing = await prisma.department.findFirst({ where: { branchId, name } });
+    const dept = existing ?? (await prisma.department.create({ data: { branchId, name } }));
+    departmentIdByKey.set(deptKey(workArea, name), dept.id);
+  }
+
+  for (const { workArea, department, name } of plan.teams) {
+    const departmentId = departmentIdByKey.get(deptKey(workArea, department));
+    if (!departmentId) continue;
+    const existing = await prisma.team.findFirst({ where: { departmentId, name } });
+    const team = existing ?? (await prisma.team.create({ data: { departmentId, name } }));
+    teamIdByKey.set(teamKey(workArea, department, name), team.id);
+  }
+
+  return { branchIdByWorkArea, departmentIdByKey, teamIdByKey };
+}
