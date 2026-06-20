@@ -66,15 +66,21 @@ model User {
   employeeNo      String?  @unique
   branchId        String?
   departmentId    String?
+  teamId          String?
   positionId      String?
   jobTypeId       String?
   employeeLevelId String?
   hireDate        DateTime?                // 入职时间，导入时设定，申报时预填充
+  gender          String?                  // 性别（导入自《基本素质信息》）
+  // Sheet1 全列原始快照（班组、岗位分类代码、岗位分类、工作负责人标识、技能等级工种、
+  // 专业技术资格系列等系统未单独建表的列），保留原始信息便于后续扩展
+  profile         Json     @default("{}")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   branch         Branch?         @relation(fields: [branchId], references: [id])
   department     Department?     @relation(fields: [departmentId], references: [id])
+  team           Team?           @relation(fields: [teamId], references: [id])
   position       Position?       @relation(fields: [positionId], references: [id])
   jobType        JobType?        @relation(fields: [jobTypeId], references: [id])
   employeeLevel  EmployeeLevel?  @relation(fields: [employeeLevelId], references: [id])
@@ -84,6 +90,8 @@ model User {
   records          PerformanceRecord[]
   sectionReviews   SectionReviewer[]
   performanceFacts PerformanceFact[]
+  employeeBasicFacts EmployeeBasicFact[]
+  submissionDimensionFacts SubmissionDimensionFact[]
 }
 
 enum AppRole {
@@ -158,8 +166,22 @@ model Department {
 
   branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
   users  User[]
+  teams  Team[]
   optionReviewers FormOptionReviewer[]
   submissionOptionReviews SubmissionOptionReview[]
+}
+
+model Team {
+  id           String   @id @default(cuid())
+  departmentId String
+  name         String
+  createdAt    DateTime @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  users      User[]
+
+  @@unique([departmentId, name])
+  @@index([departmentId])
 }
 
 model Position {
@@ -213,6 +235,10 @@ model FormSection {
   templateId String
   title      String
   description String?
+  /// 一级绩效维度：basic | performance | worksite | special（对应《评分标准 对应表》评价维度）
+  sectionCode String?
+  /// 章节满分（与 sectionCode 对应的一级维度上限）
+  maxScore    Decimal?    @db.Decimal(10, 2)
   sortOrder  Int          @default(0)
 
   template  FormTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
@@ -486,6 +512,71 @@ model PerformanceFact {
   @@index([userId, year])
 }
 
+// ========== 基本素质评分事实（员工档案维度，组织部认定） ==========
+// 与 PerformanceFact（缺陷/事件类事实）分离：基本素质来自员工档案，
+// 无角色/事件概念，按年度+维度记录档位值与得分，供模板 basic.* 维度系统填充。
+enum BasicDimension {
+  SKILL_LEVEL        // 技能等级（满分4）
+  TITLE_LEVEL        // 职称等级（满分4）
+  PERFORMANCE_LEVEL  // 绩效等级（满分6，三年滚动）
+}
+
+model EmployeeBasicFact {
+  id            String         @id @default(cuid())
+  year          Int                                    // 评价年度（绩效=申报年；技能/职称=评价年）
+  employeeNo    String
+  employeeName  String
+  userId        String?
+  dimension     BasicDimension
+  // 原始档位值：如「技师」「副高级」「2A1B」；绩效等级=三年组合码
+  tierValue     String
+  // 三年明细（仅 PERFORMANCE_LEVEL）：{ "2023": "A", "2024": "B", "2025": "B" }，缺失为 null
+  yearBreakdown Json?
+  score         Decimal        @db.Decimal(10, 2)
+  sourceFile    String
+  createdAt     DateTime       @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([year, employeeNo, dimension])
+  @@index([year, employeeNo])
+  @@index([userId, year])
+}
+
+// ========== 申报归档事实（员工自助填写 + 二级审核通过后落库） ==========
+// 与 PerformanceFact（Excel 导入）并列：manual / deduction 维度在 L2 归档后写入，
+// 供绩效分表与后续年度查询使用。
+model SubmissionDimensionFact {
+  id               String   @id @default(cuid())
+  year             Int
+  employeeNo       String
+  employeeName     String
+  userId           String?
+  submissionId     String
+  submissionItemId String
+  formItemId       String
+  dimensionCode    String
+  dimensionTitle   String
+  optionId         String
+  label            String
+  unitScore        Decimal  @db.Decimal(10, 2)
+  count            Int      @default(1)
+  score            Decimal  @db.Decimal(10, 2)
+  content          String?  @db.Text
+  departmentId     String?
+  sourceFile       String
+  metadata         Json     @default("{}")
+  approvedAt       DateTime
+  createdAt        DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([year, employeeNo, dimensionCode, submissionItemId, optionId])
+  @@index([year, employeeNo, dimensionCode])
+  @@index([submissionId])
+  @@index([userId, year])
+}
+
 // ========== 评分规则配置（管理员可维护） ==========
 model ScoringRule {
   id            String  @id @default(cuid())
@@ -515,4 +606,18 @@ model PerformanceRecord {
 
   @@unique([userId, year])
   @@index([year])
+}
+
+// ========== 事实导入日志（管理员查看导入结果与未匹配） ==========
+model FactImportLog {
+  id          String   @id @default(cuid())
+  year        Int
+  kind        String   @default("pipeline")
+  sourceFiles Json
+  summary     Json
+  unmatched   Json     @default("{}")
+  createdAt   DateTime @default(now())
+  createdBy   String?
+
+  @@index([year, createdAt(sort: Desc)])
 }
