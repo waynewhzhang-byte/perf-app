@@ -9,7 +9,8 @@ import { parsePersonList } from '@/lib/defect-governance';
 import { TICKET_EXECUTION_DIMENSION } from '@/lib/evaluation-dimensions';
 
 export interface TicketScoreBreakdown {
-  operationSteps: number;
+  /** 操作票角色项数（每行每角色每人计 1 项） */
+  operationItems: number;
   operationPoints: number;
   workLeaderPoints: number;
   workPermitterPoints: number;
@@ -34,7 +35,7 @@ export interface TicketExecutionImportOptions {
 
 /** 两票单价表（来自 ScoringRule.config；DB 无配置时回退 DEFAULT_*） */
 export interface TicketPriceConfig {
-  /** 操作票：每操作步单价 */
+  /** 操作票：每项（一行一次角色参与）单价，与操作步数无关 */
   operationStepPrice: number;
   /** 工作票：角色 × 票种类 → 每份得分 */
   workLeader: Record<string, number>;
@@ -70,22 +71,36 @@ function cellString(value: unknown): string {
   return String(value).trim();
 }
 
-function cellNumber(value: unknown): number {
-  const s = cellString(value);
-  if (!s || s === '/' || s === '#DIV/0!') return 0;
-  const n = Number(s.replace(/,/g, ''));
-  return Number.isFinite(n) ? n : 0;
-}
-
 function sheetMatrix(wb: XLSX.WorkBook, name: string): Record<string, string>[] {
   const sheet = wb.Sheets[name];
   if (!sheet) return [];
-  return XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }) as Record<string, string>[];
+  return rowsToMatrix(XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }));
 }
+
+/** 将 sheet_to_json 结果规范为 string 单元格（浏览器上传/API 共用） */
+export function rowsToMatrix(raw: Record<string, unknown>[]): Record<string, string>[] {
+  return raw.map((row) => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (!k || k.startsWith('__EMPTY')) continue;
+      out[k] = cellString(v);
+    }
+    return out;
+  });
+}
+
+/** 操作票可计分状态（票状态仅表示记录状态，与作业内容无关；已执行亦计入） */
+export function isOperationTicketEligible(status: string): boolean {
+  const s = status.trim();
+  return s === '已归档' || s === '归档' || s === '已执行';
+}
+
+/** @deprecated 使用 isOperationTicketEligible */
+export const isOperationTicketArchived = isOperationTicketEligible;
 
 function emptyBreakdown(): TicketScoreBreakdown {
   return {
-    operationSteps: 0,
+    operationItems: 0,
     operationPoints: 0,
     workLeaderPoints: 0,
     workPermitterPoints: 0,
@@ -144,29 +159,25 @@ export interface EmployeeNoResolver {
   resolve(name: string): { employeeNo: string; employeeName: string } | null;
 }
 
-/** 解析并聚合两票原始分（需先有员工工号名册） */
-export function aggregateTicketExecutionFromFile(
-  filePath: string,
+/** 从操作票 + 工作票明细行聚合每人原始分（需先有员工工号名册） */
+export function aggregateTicketExecutionRows(
+  opRows: Record<string, string>[],
+  workRows: Record<string, string>[],
   resolveNo: EmployeeNoResolver,
   options: TicketExecutionImportOptions = {},
   priceConfig: TicketPriceConfig = DEFAULT_TICKET_PRICES,
 ): TicketExecutionParseResult {
-  const buf = readFileSync(filePath);
-  const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
   const unitFilter = options.unitFilter?.trim();
   const archivedOnly = options.operationArchivedOnly !== false;
 
   const map = new Map<string, AggBucket>();
   const unmatched = new Set<string>();
 
-  const opRows = sheetMatrix(wb, '操作票');
+  const itemPrice = priceConfig.operationStepPrice;
+
   for (const row of opRows) {
     if (unitFilter && cellString(row['单位']) !== unitFilter) continue;
-    if (archivedOnly && cellString(row['票状态']) !== '已归档') continue;
-
-    const steps = cellNumber(row['实际操作步数']);
-    if (steps <= 0) continue;
-    const points = round2(steps * priceConfig.operationStepPrice);
+    if (archivedOnly && !isOperationTicketEligible(cellString(row['票状态']))) continue;
 
     const touched = new Set<string>();
     for (const col of OP_ROLE_COLUMNS) {
@@ -177,9 +188,9 @@ export function aggregateTicketExecutionFromFile(
           continue;
         }
         const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
-        addPoints(bucket, 'operationPoints', points);
+        addPoints(bucket, 'operationPoints', itemPrice);
+        bucket.breakdown.operationItems += 1;
         if (!touched.has(hit.employeeNo)) {
-          bucket.breakdown.operationSteps += steps;
           bucket.breakdown.operationTicketCount += 1;
           touched.add(hit.employeeNo);
         }
@@ -187,14 +198,12 @@ export function aggregateTicketExecutionFromFile(
     }
   }
 
-  const workRows = sheetMatrix(wb, '工作票');
   for (const row of workRows) {
     if (unitFilter && cellString(row['单位']) !== unitFilter) continue;
 
     const ticketType = cellString(row['票种类']);
     const leaderScore = resolveWorkTicketPrice('workLeader', ticketType, priceConfig);
     const permitScore = resolveWorkTicketPrice('workPermitter', ticketType, priceConfig);
-    const memberScore = resolveWorkTicketPrice('workMember', ticketType, priceConfig);
 
     if (leaderScore > 0 && cellString(row['工作负责人'])) {
       for (const name of parsePersonList(row['工作负责人'])) {
@@ -221,26 +230,12 @@ export function aggregateTicketExecutionFromFile(
       }
     }
 
-    // 专责监护 → 工作班成员（一种/二种票）
-    if (memberScore > 0 && cellString(row['专责监护'])) {
-      for (const name of parsePersonList(row['专责监护'])) {
-        const hit = resolveNo.resolve(name);
-        if (!hit) {
-          unmatched.add(name);
-          continue;
-        }
-        const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
-        addPoints(bucket, 'workMemberPoints', memberScore);
-      }
-    }
-
-    if (leaderScore > 0 || permitScore > 0 || memberScore > 0) {
+    if (leaderScore > 0 || permitScore > 0) {
       const creditedNos = new Set<string>();
       const namesOnTicket = [
         ...parsePersonList(row['工作负责人']),
         ...parsePersonList(row['开工许可人']),
         ...parsePersonList(row['完工许可人']),
-        ...parsePersonList(row['专责监护']),
       ];
       for (const name of namesOnTicket) {
         const hit = resolveNo.resolve(name);
@@ -264,7 +259,7 @@ export function aggregateTicketExecutionFromFile(
   }
 
   return {
-    sourceFile: filePath,
+    sourceFile: '',
     aggregates,
     byEmployeeNo,
     byName,
@@ -275,6 +270,21 @@ export function aggregateTicketExecutionFromFile(
       employeeCount: aggregates.length,
     },
   };
+}
+
+/** 解析并聚合两票原始分（需先有员工工号名册） */
+export function aggregateTicketExecutionFromFile(
+  filePath: string,
+  resolveNo: EmployeeNoResolver,
+  options: TicketExecutionImportOptions = {},
+  priceConfig: TicketPriceConfig = DEFAULT_TICKET_PRICES,
+): TicketExecutionParseResult {
+  const buf = readFileSync(filePath);
+  const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
+  const opRows = sheetMatrix(wb, '操作票');
+  const workRows = sheetMatrix(wb, '工作票');
+  const result = aggregateTicketExecutionRows(opRows, workRows, resolveNo, options, priceConfig);
+  return { ...result, sourceFile: filePath };
 }
 
 export const TICKET_DIMENSION = TICKET_EXECUTION_DIMENSION;

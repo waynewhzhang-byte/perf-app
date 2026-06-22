@@ -7,11 +7,16 @@ import { previewBasicFacts } from '@/lib/import-preview';
 import { loadBasicFactTiers, type BasicFactFieldMapping } from '@/lib/basic-fact-import';
 import { rowsToFactInputs, type FactFieldMapping } from '@/lib/manual-fact-import';
 import { computeFactScores, type ScoringRule } from '@/lib/scoring-engine';
+import { aggregateTicketsForImport } from '@/lib/ticket-import-api';
 
 const BodySchema = z.object({
   itemCode: z.enum(['employees', 'basic', 'tickets', 'defects', 'safety']),
-  mapping: z.record(z.string(), z.string()),
-  rows: z.array(z.record(z.string(), z.string())).min(1),
+  mapping: z.record(z.string(), z.string()).optional().default({}),
+  rows: z.array(z.record(z.string(), z.string())).optional().default([]),
+  operationRows: z.array(z.record(z.string(), z.string())).optional(),
+  workRows: z.array(z.record(z.string(), z.string())).optional(),
+  unitFilter: z.string().optional(),
+  year: z.number().int().optional(),
 });
 
 async function loadRule(dimensionCode: string): Promise<ScoringRule> {
@@ -35,9 +40,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
     }
 
-    const { itemCode, mapping, rows } = parsed.data;
+    const { itemCode, mapping, rows, operationRows, workRows, unitFilter, year } = parsed.data;
 
     if (itemCode === 'employees') {
+      if (rows.length === 0) {
+        return NextResponse.json({ error: '无数据行' }, { status: 400 });
+      }
       // 员工档案无分数，返回行数与字段预览
       return NextResponse.json({
         success: true,
@@ -51,18 +59,56 @@ export async function POST(req: Request) {
     }
 
     if (itemCode === 'basic') {
+      if (rows.length === 0) {
+        return NextResponse.json({ error: '无数据行' }, { status: 400 });
+      }
       const tiers = await loadBasicFactTiers(prisma);
       const preview = previewBasicFacts(mapping as unknown as BasicFactFieldMapping, rows.slice(0, 20), tiers);
       return NextResponse.json({ success: true, kind: 'score', rows: preview });
     }
 
-    // tickets / defects / safety
+    // 两票：从操作票 + 工作票明细聚合原始分（折算在最终汇总阶段）
+    if (itemCode === 'tickets') {
+      if (!operationRows?.length && !workRows?.length) {
+        return NextResponse.json({ error: '请上传含操作票、工作票两个工作表的 Excel' }, { status: 400 });
+      }
+      const ticketResult = await aggregateTicketsForImport(prisma, {
+        year: year ?? new Date().getFullYear(),
+        sourceFile: 'preview',
+        operationRows: operationRows ?? [],
+        workRows: workRows ?? [],
+        unitFilter,
+      });
+
+      const previewRows = ticketResult.aggregates.slice(0, 20).map((agg) => ({
+        工号: agg.employeeNo,
+        姓名: agg.employeeName,
+        原始分: agg.rawScore,
+        操作票分: agg.breakdown.operationPoints,
+        负责人分: agg.breakdown.workLeaderPoints,
+        许可人分: agg.breakdown.workPermitterPoints,
+      }));
+
+      return NextResponse.json({
+        success: true,
+        kind: 'ticket-aggregate',
+        stats: ticketResult.stats,
+        unmatchedTotal: ticketResult.unmatchedNames.length,
+        unmatched: ticketResult.unmatchedNames.slice(0, 30),
+        rows: previewRows,
+      });
+    }
+
+    if (rows.length === 0) {
+      return NextResponse.json({ error: '无数据行' }, { status: 400 });
+    }
+
+    // defects / safety
     const dimMap = {
-      tickets: 'worksite.ticket-execution',
       defects: 'worksite.defect-governance',
       safety: 'performance.safety-contribution',
     } as const;
-    const dimensionCode = dimMap[itemCode as 'tickets' | 'defects' | 'safety'];
+    const dimensionCode = dimMap[itemCode as 'defects' | 'safety'];
     const rule = await loadRule(dimensionCode);
     const inputs = rowsToFactInputs(dimensionCode, mapping as unknown as FactFieldMapping, rows.slice(0, 20));
     const scored = computeFactScores(inputs, [rule]);

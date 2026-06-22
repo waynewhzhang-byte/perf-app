@@ -1,12 +1,14 @@
 'use client';
 // 审核工作台
 import { useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 
 interface Att { id: string; filename: string; mimeType?: string | null }
 type ViewKind = 'image' | 'pdf' | 'other';
 interface AttachmentPreview {
+  attachmentId: string;
   filename: string;
   viewUrl: string;
   kind: ViewKind;
@@ -82,7 +84,12 @@ export default function ReviewPage() {
         window.open(`/api/attachments/${attId}/view?redirect=1`, '_blank', 'noopener,noreferrer');
         return;
       }
-      setPreview({ filename: d.filename ?? '附件', viewUrl: d.viewUrl, kind: d.kind as ViewKind });
+      setPreview({
+        attachmentId: attId,
+        filename: d.filename ?? '附件',
+        viewUrl: d.viewUrl,
+        kind: d.kind as ViewKind,
+      });
     } finally { setOpeningAttId(null); }
   };
 
@@ -694,7 +701,17 @@ export default function ReviewPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-2">
-              {preview.kind === 'image' && <img src={preview.viewUrl} alt={preview.filename} className="mx-auto max-h-[75vh] w-auto max-w-full object-contain" />}
+              {preview.kind === 'image' && (
+                <div className="relative mx-auto h-[75vh] w-full">
+                  <Image
+                    src={`/api/attachments/${preview.attachmentId}/view?redirect=1`}
+                    alt={preview.filename}
+                    fill
+                    unoptimized
+                    className="object-contain"
+                  />
+                </div>
+              )}
               {preview.kind === 'pdf' && <iframe title={preview.filename} src={preview.viewUrl} className="h-[75vh] w-full rounded border-0 bg-white" />}
             </div>
           </div>

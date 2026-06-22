@@ -28,3 +28,11 @@ export function levelFromHireDate(hireDate: Date, asOf: Date = new Date()): Decl
   }
   return computeLevel(Math.max(0, years));
 }
+
+/** 从 User.profile 读取模拟能级（入库字段 mockDeclarationTier: 一级|二级|三级） */
+export function parseMockDeclarationTier(profile: unknown): DeclarationLevel | null {
+  if (!profile || typeof profile !== 'object') return null;
+  const tier = (profile as { mockDeclarationTier?: string }).mockDeclarationTier?.trim();
+  if (tier === '一级' || tier === '二级' || tier === '三级') return tier;
+  return null;
+}

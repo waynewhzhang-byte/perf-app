@@ -258,13 +258,13 @@ function processShare(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
 }
 
 // ── NORMALIZE: 两票执行 ─────────────────────────────────────────
-// 两层：单价聚合（操作票 steps×单价 / 工作票 ticketPrices[role][type]）→ rawScore；
+// 两层：单价聚合（操作票每项固定单价 / 工作票 ticketPrices[role][type]）→ rawScore；
 //       再折算（rawScore ÷ 同能级最高 × 目标满分）。无单价配置时退化为读 fact.rawScore。
 
 function computeTicketRawScore(f: FactInput, rule: ScoringRule): number {
-  // 操作票
-  if (f.ticketKind === 'operation' && rule.operationStepPrice != null && typeof f.steps === 'number') {
-    return rule.operationStepPrice * f.steps;
+  // 操作票：每项（一行一次角色参与）固定单价，与步数无关
+  if (f.ticketKind === 'operation' && rule.operationStepPrice != null) {
+    return rule.operationStepPrice;
   }
   // 工作票
   if (f.ticketKind === 'work' && rule.ticketPrices && f.workRole && f.ticketType) {

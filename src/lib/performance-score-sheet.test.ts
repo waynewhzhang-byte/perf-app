@@ -78,7 +78,7 @@ describe('buildPerformanceScoreSheet', () => {
       .find((s) => s.code === 'worksite')!
       .items.find((i) => i.dimensionCode === 'worksite.ticket-execution')!;
     assert.equal(ticket.source, 'FACT');
-    assert.equal(ticket.score, 30);
+    assert.equal(ticket.score, 50);
 
     const defect = sheet.sections
       .find((s) => s.code === 'worksite')!
@@ -124,23 +124,34 @@ describe('buildPerformanceScoreSheet', () => {
     assert.equal(safety?.source, 'FACT');
   });
 
-  it('无入职日期时两票按一级能级折算', () => {
+  it('两票导入阶段展示原始分，不做封顶折算', () => {
     const sheet = buildPerformanceScoreSheet({
       year: 2025,
       employeeNo: '001',
       employeeName: '测试',
-      hireDate: null,
       templateItems: [{ id: 'i3', title: '两票执行（满分30分）' }],
       basicFacts: [],
       performanceFacts: [
-        { id: 'p1', dimensionCode: 'worksite.ticket-execution', score: 26 },
+        { id: 'p1', dimensionCode: 'worksite.ticket-execution', score: 45 },
       ],
-      ticketTierMaxRaw: { 一级: 34.5 },
     });
     const ticket = sheet.sections
       .find((s) => s.code === 'worksite')!
       .items.find((i) => i.dimensionCode === 'worksite.ticket-execution')!;
-    assert.equal(ticket.score, 22.6);
-    assert.equal(ticket.source, 'FACT');
+    assert.equal(ticket.score, 45);
+  });
+
+  it('profile.mockDeclarationTier 优先于入职推算能级', () => {
+    const sheet = buildPerformanceScoreSheet({
+      year: 2025,
+      employeeNo: '001',
+      employeeName: '测试',
+      hireDate: new Date('2010-01-01'),
+      mockDeclarationTier: '一级',
+      templateItems: [],
+      basicFacts: [],
+      performanceFacts: [],
+    });
+    assert.equal(sheet.declarationTier, '一级');
   });
 });

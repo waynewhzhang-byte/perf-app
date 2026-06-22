@@ -1,6 +1,6 @@
 'use client';
 // 申报表可视化设计器
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
 import {
   TemplatePreviewModal,
@@ -872,7 +872,7 @@ function OptionReviewerModal({ template, onClose }: Readonly<{ template: { id: s
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
@@ -887,8 +887,8 @@ function OptionReviewerModal({ template, onClose }: Readonly<{ template: { id: s
     } finally {
       setLoading(false);
     }
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [template.id]);
+  }, [template.id]);
+  useEffect(() => { load(); }, [load]);
 
   const assign = async (itemId: string, optionId: string, departmentId: string) => {
     setBusy(true);

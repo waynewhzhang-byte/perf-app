@@ -382,7 +382,7 @@ function NormalizeEditor({ config, onChange }: ConfigEditorProps) {
 
       {/* 操作票单价 */}
       <label className="mt-4 flex items-center gap-2 text-sm">
-        <span className="font-medium text-slate-600">操作票每步单价</span>
+        <span className="font-medium text-slate-600">操作票每项单价</span>
         <input
           type="number"
           min={0}

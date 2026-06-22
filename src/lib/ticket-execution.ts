@@ -134,7 +134,16 @@ export function roundTicketScore(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-/** 暂行稿：本专业（此处按能级）内最高分 = 满分 30，其余按比例折算 */
+/** 全年累加原始分封顶（最终汇总阶段可选用） */
+export function capTicketExecutionScore(
+  rawScore: number,
+  maxScore = TICKET_EXECUTION_DIMENSION.maxScore,
+): number {
+  if (rawScore <= 0) return 0;
+  return roundTicketScore(Math.min(rawScore, maxScore));
+}
+
+/** @deprecated 旧暂行稿同能级比例折算；现业务规则为 capTicketExecutionScore 封顶 */
 export function scaleTicketScoreByTier(
   rawScore: number,
   tierMaxRaw: number,

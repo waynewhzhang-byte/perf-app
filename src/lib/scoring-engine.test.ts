@@ -317,12 +317,12 @@ describe('NORMALIZE (两票单价表)', () => {
     ...over,
   });
 
-  it('操作票：steps × operationStepPrice 算 rawScore', () => {
+  it('操作票：每项固定 operationStepPrice，与 steps 无关', () => {
     const scored = computeFactScores(
       [tk({ employeeNo: '001', ticketKind: 'operation', steps: 100, declarationLevel: 'L2' })],
       [rule],
     );
-    assert.equal(scored.find((r) => r.employeeNo === '001')!.rawScore, 1);
+    assert.equal(scored.find((r) => r.employeeNo === '001')!.rawScore, 0.01);
   });
 
   it('工作票：ticketPrices[workRole][ticketType] 算 rawScore', () => {
@@ -337,12 +337,12 @@ describe('NORMALIZE (两票单价表)', () => {
     const scored = computeFactScores(
       [
         tk({ employeeNo: 'hi', ticketKind: 'work', ticketType: '总工作票', workRole: 'workLeader', declarationLevel: 'L2' }), // raw 5
-        tk({ employeeNo: 'lo', ticketKind: 'operation', steps: 50, declarationLevel: 'L2' }), // raw 0.5
+        tk({ employeeNo: 'lo', ticketKind: 'operation', steps: 50, declarationLevel: 'L2' }), // raw 0.01
       ],
       [rule],
     );
-    // lo: 0.5/5*30 = 3
-    assert.equal(scored.find((r) => r.employeeNo === 'lo')!.score, 3);
+    // lo: 0.01/5*30 = 0.06
+    assert.equal(scored.find((r) => r.employeeNo === 'lo')!.score, 0.06);
     assert.equal(scored.find((r) => r.employeeNo === 'hi')!.score, 30); // 5/5*30
   });
 

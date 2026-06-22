@@ -8,6 +8,7 @@ import {
   loadTicketTierMaxRaw,
   type PerformanceScoreSheet,
 } from '@/lib/performance-score-sheet';
+import { parseMockDeclarationTier } from '@/lib/declaration-level';
 
 export interface ImportedScoreRow {
   employeeNo: string;
@@ -159,6 +160,7 @@ export async function batchComputeImportedScores(
         fullName: true,
         hireDate: true,
         gender: true,
+        profile: true,
         branch: { select: { name: true } },
         department: { select: { name: true } },
       },
@@ -199,6 +201,7 @@ export async function batchComputeImportedScores(
       employeeNo: no,
       employeeName: user.fullName,
       hireDate: user.hireDate,
+      mockDeclarationTier: parseMockDeclarationTier(user.profile),
       templateItems: [],
       basicFacts: (basicByNo.get(no) ?? []).map((f) => ({
         id: f.id,

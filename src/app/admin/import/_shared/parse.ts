@@ -21,17 +21,36 @@ export function parseCSV(text: string): ParsedFile {
   return { headers, rows };
 }
 
-export function parseXLSX(buffer: ArrayBuffer): ParsedFile {
+export function parseXLSX(buffer: ArrayBuffer, sheetName?: string): ParsedFile {
   const wb = XLSX.read(buffer, { type: 'array' });
-  const sheetName = wb.SheetNames[0];
-  if (!sheetName) return { headers: [], rows: [] };
-  const sheet = wb.Sheets[sheetName];
+  const name = sheetName ?? wb.SheetNames[0];
+  if (!name) return { headers: [], rows: [] };
+  const sheet = wb.Sheets[name];
+  if (!sheet) return { headers: [], rows: [] };
+  return sheetToParsedFile(sheet);
+}
+
+/** 读取 Excel 中指定工作表（用于两票等多 sheet 模板） */
+export function parseXLSXSheets(
+  buffer: ArrayBuffer,
+  sheetNames: string[],
+): { sheetNames: string[]; sheets: Record<string, ParsedFile> } {
+  const wb = XLSX.read(buffer, { type: 'array' });
+  const sheets: Record<string, ParsedFile> = {};
+  for (const name of sheetNames) {
+    const sheet = wb.Sheets[name];
+    sheets[name] = sheet ? sheetToParsedFile(sheet) : { headers: [], rows: [] };
+  }
+  return { sheetNames: wb.SheetNames, sheets };
+}
+
+function sheetToParsedFile(sheet: XLSX.WorkSheet): ParsedFile {
   const raw: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
   if (raw.length === 0) return { headers: [], rows: [] };
   const headerSet = new Set<string>();
   for (const obj of raw) {
     for (const k of Object.keys(obj)) {
-      if (k && typeof k === 'string' && k.trim()) headerSet.add(k.trim());
+      if (k && typeof k === 'string' && k.trim() && !k.startsWith('__EMPTY')) headerSet.add(k.trim());
     }
   }
   const headers = Array.from(headerSet);

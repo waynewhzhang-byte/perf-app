@@ -125,33 +125,37 @@ export function scorePerformanceLevel(
 
 // ── Sheet 列映射 ─────────────────────────────────────────────────
 
-/** Sheet1「技能等级 职称」列索引（0 基） */
+/** Sheet1「技能等级 职称」列索引（0 基，与《基本素质信息》现行表头一致） */
 export const SHEET1_COLUMNS = {
   employeeNo: 0, // 人员编号
   name: 1, // 姓名
   department: 2, // 部门
-  team: 3, // 班组/处室
-  position: 4, // 岗位
-  positionCode: 5, // 岗位分类代码
-  positionCategory: 6, // 岗位分类
-  workLeaderFlag: 7, // 工作负责人标识
-  gender: 8, // 性别
-  skillJobType: 9, // 技能等级工种
-  skillLevel: 10, // 技能等级
-  titleSeries: 11, // 专业技术资格系列
-  titleLevel: 12, // 专业技术资格等级
+  workArea: 3, // 工区
+  team: 4, // 班组/处室
+  position: 5, // 岗位
+  positionCode: 6, // 岗位分类代码
+  positionCategory: 7, // 岗位分类
+  workLeaderFlag: 8, // 工作负责人标识
+  gender: 9, // 性别
+  skillJobType: 10, // 技能等级工种
+  skillLevel: 11, // 技能等级
+  titleSeries: 12, // 专业技术资格系列
+  titleLevel: 13, // 专业技术资格等级
 } as const;
 
-/** Sheet2「考核结果」列索引（真实表头在第 2 行，1 基）；以下为 0 基、相对真实表头 */
+/** Sheet2「考核结果」列索引（0 基，相对真实表头行） */
 export const SHEET2_COLUMNS = {
   seq: 0, // 序号
   employeeNo: 1, // 人员编码
   name: 2, // 人员姓名
   unit: 3, // 所属单位
-  position: 4, // 岗位
-  personnelType: 5, // 人员类型
-  assessed: 6, // 是否考核
-  year2023: 7, // 2023年考核等级
-  year2024: 8, // 2024年考核等级
-  year2025: 9, // 2025年考核等级
+  workArea: 4, // 工区
+  department: 5, // 部门
+  team: 6, // 班组
+  position: 7, // 岗位
+  personnelType: 8, // 人员类型
+  assessed: 9, // 是否考核
+  year2023: 10, // 2023年考核等级
+  year2024: 11, // 2024年考核等级
+  year2025: 12, // 2025年考核等级
 } as const;

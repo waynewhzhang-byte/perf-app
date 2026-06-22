@@ -154,7 +154,7 @@ export const SCORING_STANDARDS: DimensionScoringStandard[] = [
     ruleType: 'NORMALIZE',
     engineRuleType: 'NORMALIZE',
     ownerDepartment: '安监部',
-    scoringSummary: '操作票0.01分/项；工作票按角色计分；能级内最高=满分30比例折算',
+    scoringSummary: '操作票0.01分/项（按行）；工作票按负责人/许可人计分；导入存原始分，汇总阶段折算',
     referenceFile: '《工作现场-两票执行》.xlsx',
   },
   {

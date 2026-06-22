@@ -98,6 +98,7 @@ export function parseBasicQualityFile(filePath: string): BasicQualityParseResult
       skillLevel: cellString(row[SHEET1_COLUMNS.skillLevel]),
       titleLevel: cellString(row[SHEET1_COLUMNS.titleLevel]),
       profile: {
+        workArea: cellString(row[SHEET1_COLUMNS.workArea]),
         positionCode: cellString(row[SHEET1_COLUMNS.positionCode]),
         positionCategory: cellString(row[SHEET1_COLUMNS.positionCategory]),
         workLeaderFlag: cellString(row[SHEET1_COLUMNS.workLeaderFlag]),

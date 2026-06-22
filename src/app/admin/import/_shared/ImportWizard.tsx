@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import type { ImportItemConfig } from './types';
 import { parseCSV, parseXLSX, type ParsedFile } from './parse';
+import { resolveHeaderMapping } from '@/lib/import-auto-map';
 
 interface PreviewRow { employeeNo: string; [k: string]: unknown }
 
@@ -15,15 +16,10 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
   const [result, setResult] = useState<{ total: number; created: number; updated: number; skipped: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // 切换配置或表头变化时，按中文 label 自动模糊匹配
+  // 切换配置或表头变化时，按 label / 别名精确匹配
   useEffect(() => {
     if (headers.length === 0) return;
-    const auto: Record<string, string> = {};
-    for (const f of config.fields) {
-      const m = headers.find((h) => h === f.label || h.includes(f.label));
-      if (m) auto[f.key] = m;
-    }
-    setMapping(auto);
+    setMapping(resolveHeaderMapping(headers, config.fields));
   }, [config, headers]);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -36,12 +32,7 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
       setRows(parsed.rows);
       setResult(null);
       setPreview(null);
-      const auto: Record<string, string> = {};
-      for (const f of config.fields) {
-        const m = parsed.headers.find((h) => h === f.label || h.includes(f.label));
-        if (m) auto[f.key] = m;
-      }
-      setMapping(auto);
+      setMapping(resolveHeaderMapping(parsed.headers, config.fields));
     };
     if (ext === 'xlsx' || ext === 'xls') {
       reader.onload = () => process(parseXLSX(reader.result as ArrayBuffer));

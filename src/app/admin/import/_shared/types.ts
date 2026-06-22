@@ -5,6 +5,8 @@ export interface FieldSpec {
   label: string;
   required: boolean;
   hint?: string;
+  /** Excel/CSV 表头别名（精确匹配，优先于模糊匹配） */
+  headerAliases?: string[];
 }
 
 export interface ImportItemConfig {

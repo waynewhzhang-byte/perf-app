@@ -1,9 +1,8 @@
 'use client';
 import { useState } from 'react';
-import ImportWizard from '../_shared/ImportWizard';
-import { getItemConfig } from '../_shared/field-specs';
+import TicketImportWizard from './TicketImportWizard';
 
 export default function TicketsImportPage() {
   const [year] = useState(new Date().getFullYear());
-  return <ImportWizard config={getItemConfig('tickets')} year={year} />;
+  return <TicketImportWizard year={year} />;
 }

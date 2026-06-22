@@ -10,14 +10,13 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import type { DeclarationTier } from '@/lib/quantitative-report';
-import { scaleTicketScoreByTier } from '@/lib/ticket-execution';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
   type DimensionScoringStandard,
   type ScoringDataSource,
 } from '@/lib/scoring-standards';
-import { levelFromHireDate } from '@/lib/declaration-level';
+import { levelFromHireDate, parseMockDeclarationTier } from '@/lib/declaration-level';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 
@@ -117,8 +116,10 @@ export interface ScoreSheetInput {
     count?: number;
     unitScore?: number | string;
   }>;
-  /** 同年度同能级两票原始分最大值（NORMALIZE 用） */
+  /** @deprecated 两票已改为个人全年累加封顶，不再按能级比例折算 */
   ticketTierMaxRaw?: Partial<Record<DeclarationTier, number>>;
+  /** 员工 profile.mockDeclarationTier 等模拟能级（申报前展示用） */
+  mockDeclarationTier?: DeclarationTier | null;
 }
 
 function round1(n: number) {
@@ -127,8 +128,8 @@ function round1(n: number) {
 
 function resolveTier(input: ScoreSheetInput): DeclarationTier | null {
   if (input.declarationTier) return input.declarationTier;
+  if (input.mockDeclarationTier) return input.mockDeclarationTier;
   if (input.hireDate) return levelFromHireDate(input.hireDate) as DeclarationTier;
-  // 仅事实导入、尚未申报时：按一级参与两票同能级折算（与 loadTicketTierMaxRaw 缺省一致）
   return '一级';
 }
 
@@ -238,21 +239,15 @@ function computeFactDimensionScore(
     const agg = perfFacts[0];
     if (!agg) return { score: 0, lines: [], hasFacts: false };
     const raw = Number(agg.score);
-    const tier = resolveTier(input);
-    const tierMax = tier && input.ticketTierMaxRaw?.[tier] ? input.ticketTierMaxRaw[tier]! : 0;
-    const score =
-      tier && tierMax > 0
-        ? scaleTicketScoreByTier(raw, tierMax, standard.maxScore)
-        : round1(Math.min(raw, standard.maxScore));
-    const meta = agg.metadata as { breakdown?: Record<string, number> } | undefined;
+    const meta = agg.metadata as { breakdown?: Record<string, number>; isRawScore?: boolean } | undefined;
     return {
-      score,
+      score: round1(raw),
       hasFacts: true,
       lines: [
         {
           id: agg.id,
-          label: `原始分 ${raw}${tier ? ` → 折算 ${score}（${tier}）` : ''}`,
-          score,
+          label: `原始分 ${raw}（最终折算在汇总阶段）`,
+          score: round1(raw),
           detail: meta?.breakdown ? JSON.stringify(meta.breakdown) : undefined,
         },
       ],
@@ -332,7 +327,11 @@ function buildDimensionRow(
     }
   }
 
-  if (standard.dataSource !== 'deduction' && standard.maxScore > 0) {
+  if (
+    standard.dataSource !== 'deduction'
+    && standard.maxScore > 0
+    && standard.code !== 'worksite.ticket-execution'
+  ) {
     score = round1(Math.min(score, standard.maxScore));
   }
 
@@ -517,6 +516,7 @@ export async function loadPerformanceScoreSheet(
       employeeNo: true,
       fullName: true,
       hireDate: true,
+      profile: true,
     },
   });
   if (!user?.employeeNo) return null;
@@ -566,6 +566,7 @@ export async function loadPerformanceScoreSheet(
     employeeNo: user.employeeNo,
     employeeName: user.fullName,
     declarationTier: declarationTier ?? null,
+    mockDeclarationTier: parseMockDeclarationTier(user.profile),
     hireDate: user.hireDate,
     templateItems,
     submissionItems: submission?.items.map((it) => ({
