@@ -12,6 +12,9 @@ export type EvaluationDimensionCode =
   | 'performance.safety-contribution'
   | 'performance.technical-contribution.standard'
   | 'performance.technical-contribution.resource'
+  | 'performance.technical-contribution.textbook'
+  | 'performance.technical-contribution.regulation'
+  | 'performance.technical-contribution.ticket-revision'
   | 'performance.competition.competition'
   | 'performance.competition.exam'
   | 'performance.innovation.award'
@@ -98,6 +101,30 @@ export const EVALUATION_DIMENSIONS: EvaluationSection[] = [
         ownerDepartment: '组织部/安监部/运检部',
         evidenceSource: '规范标准修编、资源库建设成果材料',
         scoringSummary: '公司级及以上安全生产相关规范标准修编、资源库建设2分/项',
+      },
+      {
+        code: 'performance.technical-contribution.textbook',
+        title: '技术贡献（教材/题库/课件）',
+        maxScore: 12,
+        ownerDepartment: '组织部',
+        evidenceSource: '教材/题库/课件开发成果材料',
+        scoringSummary: '参与教材/题库/课件开发，按贡献度计分，总分不超过12分',
+      },
+      {
+        code: 'performance.technical-contribution.regulation',
+        title: '技术贡献（运规编写/会审）',
+        maxScore: 12,
+        ownerDepartment: '运检部',
+        evidenceSource: '运规编写/会审记录',
+        scoringSummary: '参与运规编写/会审，按贡献度计分，总分不超过12分',
+      },
+      {
+        code: 'performance.technical-contribution.ticket-revision',
+        title: '技术贡献（两票修订/审查）',
+        maxScore: 12,
+        ownerDepartment: '安监部',
+        evidenceSource: '两票修订/审查记录',
+        scoringSummary: '参与两票修订/审查，按贡献度计分，总分不超过12分',
       },
       {
         code: 'performance.competition.competition',
@@ -199,6 +226,30 @@ export const SAFETY_CONTRIBUTION_DIMENSION: EvaluationSubItem =
   EVALUATION_DIMENSIONS.find((s) => s.code === 'performance')!.items.find(
     (i) => i.code === 'performance.safety-contribution',
   )!;
+
+export const TECHNICAL_CONTRIBUTION_TEXTBOOK_DIMENSION = {
+  code: 'performance.technical-contribution.textbook' as const,
+  title: '技术贡献（教材/题库/课件）',
+  sectionCode: 'performance',
+  sectionTitle: '工作业绩',
+  maxScore: 12, // shared cap across all 3 tech-contrib sub-dimensions
+} as const;
+
+export const TECHNICAL_CONTRIBUTION_REGULATION_DIMENSION = {
+  code: 'performance.technical-contribution.regulation' as const,
+  title: '技术贡献（运规编写/会审）',
+  sectionCode: 'performance',
+  sectionTitle: '工作业绩',
+  maxScore: 12,
+} as const;
+
+export const TECHNICAL_CONTRIBUTION_TICKET_REVISION_DIMENSION = {
+  code: 'performance.technical-contribution.ticket-revision' as const,
+  title: '技术贡献（两票修订/审查）',
+  sectionCode: 'performance',
+  sectionTitle: '工作业绩',
+  maxScore: 12,
+} as const;
 
 export function findDimensionByCode(
   code: EvaluationDimensionCode,
