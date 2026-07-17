@@ -17,13 +17,16 @@
     "compute:imported-scores": "npx tsx scripts/compute-imported-scores.ts",
     "export:imported-scores": "npx tsx scripts/export-imported-scores.ts",
     "seed:scoring-rules": "npx tsx scripts/seed-scoring-rules.ts",
-    "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts"
+    "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts",
+    "migrate:2026": "npx tsx scripts/migrate-to-2026.ts",
+    "clean:old-users": "npx tsx scripts/clean-old-users.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "@sentry/nextjs": "^10.59.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "jose": "^5.9.6",
