@@ -184,6 +184,8 @@ COOKIE_SECURE         — 会话 Cookie Secure 覆盖；默认按 APP_BASE_URL �
 
 ## Agent skills
 
+> Tool-usage conventions (codegraph 等)统一维护在 [`AGENTS.md`](./AGENTS.md),此处不再重复。修改相关规则时只改 `AGENTS.md`。
+
 ### Issue tracker
 
 Issues live as GitHub issues in `waynewhzhang-byte/perf-app`; external PRs are not a triage request surface. Use the `gh` CLI. See `docs/agents/issue-tracker.md`.
@@ -195,3 +197,13 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context layout: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+This repository uses OpenWiki for recurring code documentation. Start with `openwiki/quickstart.md`, then follow its links to architecture, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+
+The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+
+<!-- OPENWIKI:END -->
