@@ -170,6 +170,9 @@ export default function OrganizationPage() {
 
   const branchNameById = (id: string) =>
     data.branches.find((b) => b.id === id)?.name ?? id;
+  const filteredDepartments = data.departments.filter(
+    (department) => department.branchId === deptBranchId,
+  );
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
@@ -273,7 +276,7 @@ export default function OrganizationPage() {
           <button type="submit" disabled={data.branches.length === 0} className={btnPrimary}>添加</button>
         </form>
         <ul className="mt-4 divide-y divide-slate-100">
-          {data.departments.map((d) => (
+          {filteredDepartments.map((d) => (
             <DepartmentRow
               key={d.id}
               dept={d}
@@ -282,8 +285,8 @@ export default function OrganizationPage() {
               onDelete={() => remove('department', d.id, d.name)}
             />
           ))}
-          {data.departments.length === 0 && (
-            <li className="py-3 text-sm text-slate-400">暂无部门</li>
+          {filteredDepartments.length === 0 && (
+            <li className="py-3 text-sm text-slate-400">当前工区暂无部门</li>
           )}
         </ul>
       </section>

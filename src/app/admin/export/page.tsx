@@ -2,6 +2,11 @@
 // 有条件导出：申报表 + 能级专业/等级 + 工区；CSV 汇总/明细；单人 ZIP；归档 ZIP
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
+import {
+  ALL_QUANTITATIVE_REPORT_UNITS,
+  quantitativeReportBranchOptionLabel,
+  quantitativeReportFilename,
+} from '@/lib/quantitative-report-contract';
 
 type Branch = { id: string; name: string; code?: string | null };
 type DictItem = { id: string; name: string };
@@ -51,6 +56,8 @@ export default function ExportPage() {
 
   const [archiveBranchId, setArchiveBranchId] = useState('');
   const [archiveYear, setArchiveYear] = useState(() => new Date().getFullYear());
+  const [quantitativeBranchId, setQuantitativeBranchId] = useState('');
+  const [quantitativeYear, setQuantitativeYear] = useState(2026);
 
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
@@ -85,6 +92,11 @@ export default function ExportPage() {
           setLevels(org.declarationLevels ?? []);
           setSpecialties(org.declarationSpecialties ?? []);
           setArchiveBranchId((prev) => prev || list[0]?.id || '');
+          setQuantitativeBranchId((prev) =>
+            prev === ALL_QUANTITATIVE_REPORT_UNITS || list.some((branch) => branch.id === prev)
+              ? prev
+              : list.find((branch) => branch.name === '变电检修中心')?.id || list[0]?.id || '',
+          );
         }
         if (tpl.success) {
           const published = (tpl.templates as Template[]).filter(
@@ -184,11 +196,68 @@ export default function ExportPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">数据导出</h1>
           <p className="mt-1 text-sm text-slate-500">
-            按申报表、能级评价专业/等级、工区筛选二审通过数据；支持汇总与明细 CSV、批量 ZIP、单人档案
+            支持年度量化积分报送表，以及按申报条件导出的 CSV、ZIP 和单人档案
           </p>
         </div>
         <AdminPageActions />
       </div>
+
+      <section className="mb-8 rounded-xl border border-primary-200 bg-primary-50/40 p-5">
+        <h2 className="text-lg font-semibold">年度量化积分报送表</h2>
+        <p className="mt-1 text-xs text-slate-600">
+          工龄截至所选年度5月31日计算：0—4年三级、5—8年二级、9年及以上一级
+        </p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm">
+            <span className="font-medium text-slate-600">评价年度</span>
+            <input
+              type="number"
+              min={2000}
+              max={2100}
+              value={quantitativeYear}
+              onChange={(event) =>
+                setQuantitativeYear(Number.parseInt(event.target.value, 10) || quantitativeYear)
+              }
+              disabled={exporting !== null}
+              className={inputClass}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-medium text-slate-600">报送单位</span>
+            <select
+              value={quantitativeBranchId}
+              onChange={(event) => setQuantitativeBranchId(event.target.value)}
+              disabled={branches.length === 0 || exporting !== null}
+              className={inputClass}
+            >
+              <option value={ALL_QUANTITATIVE_REPORT_UNITS}>全部部门（435人）</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {quantitativeReportBranchOptionLabel(branch.name)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <button
+          type="button"
+          disabled={exporting !== null || !quantitativeBranchId}
+          onClick={() =>
+            downloadFile(
+              `/api/admin/reports/quantitative-export?year=${quantitativeYear}&branchId=${encodeURIComponent(quantitativeBranchId)}`,
+              quantitativeReportFilename(
+                quantitativeBranchId === ALL_QUANTITATIVE_REPORT_UNITS
+                  ? ALL_QUANTITATIVE_REPORT_UNITS
+                  : branches.find((branch) => branch.id === quantitativeBranchId)?.name ?? '报送部门',
+              ),
+              'quantitative-xlsx',
+            )
+          }
+          className="mt-4 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+        >
+          {exporting === 'quantitative-xlsx' ? '正在生成…' : '下载量化积分报送表 XLSX'}
+        </button>
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-lg font-semibold">条件导出（二审通过）</h2>

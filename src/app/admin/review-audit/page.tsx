@@ -54,34 +54,6 @@ export default function ReviewAuditPage() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [overrideItemId, setOverrideItemId] = useState<string | null>(null);
-  const [overrideScore, setOverrideScore] = useState('');
-  const [overrideReason, setOverrideReason] = useState('');
-  const [overrideBusy, setOverrideBusy] = useState(false);
-
-  const submitOverride = async () => {
-    if (!overrideItemId || !overrideScore.trim() || !overrideReason.trim()) {
-      alert('请填写覆盖分数和原因');
-      return;
-    }
-    const score = parseFloat(overrideScore);
-    if (isNaN(score) || score < 0) { alert('请输入有效的分数'); return; }
-    setOverrideBusy(true);
-    try {
-      const r = await fetch('/api/admin/override', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissionItemId: overrideItemId, overrideScore: score, overrideReason: overrideReason.trim() }),
-      });
-      const d = await r.json();
-      if (!r.ok) { alert(d.error || '覆盖失败'); return; }
-      alert('覆盖成功');
-      setOverrideItemId(null); setOverrideScore(''); setOverrideReason('');
-      // 刷新详情
-      if (detail) openDetail(detail.id);
-    } finally { setOverrideBusy(false); }
-  };
-
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -322,58 +294,13 @@ export default function ReviewAuditPage() {
                                     {it.attachments.length > 0 && (
                                       <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
                                     )}
-                                    {/* 管理员覆盖表单 */}
-                                    {it.disputeL2Result === 'APPROVED' && it.overrideScore == null && (
-                                      <div className="mt-2 rounded border border-orange-200 bg-orange-50 p-3">
-                                        <p className="text-xs font-semibold text-orange-700 mb-2">申诉已确认有效，可覆盖分数</p>
-                                        {overrideItemId === it.id ? (
-                                          <div className="space-y-2">
-                                            <div>
-                                              <label className="text-xs font-medium text-orange-700">覆盖分数（当前 {Number(it.score).toFixed(1)} 分）</label>
-                                              <input
-                                                type="number"
-                                                step="0.1"
-                                                min="0"
-                                                value={overrideScore}
-                                                onChange={(e) => setOverrideScore(e.target.value)}
-                                                className="mt-0.5 w-32 rounded border border-orange-300 px-2 py-1 text-sm"
-                                                placeholder="新分数"
-                                              />
-                                            </div>
-                                            <div>
-                                              <label className="text-xs font-medium text-orange-700">覆盖原因</label>
-                                              <input
-                                                value={overrideReason}
-                                                onChange={(e) => setOverrideReason(e.target.value)}
-                                                className="mt-0.5 w-full rounded border border-orange-300 px-2 py-1 text-sm"
-                                                placeholder="请填写覆盖原因（审计用）"
-                                              />
-                                            </div>
-                                            <div className="flex gap-2">
-                                              <button
-                                                onClick={submitOverride}
-                                                disabled={overrideBusy}
-                                                className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50"
-                                              >
-                                                {overrideBusy ? '提交中…' : '确认覆盖'}
-                                              </button>
-                                              <button
-                                                onClick={() => { setOverrideItemId(null); setOverrideScore(''); setOverrideReason(''); }}
-                                                className="rounded border border-orange-300 px-3 py-1 text-xs text-orange-700 hover:bg-orange-100"
-                                              >
-                                                取消
-                                              </button>
-                                            </div>
-                                          </div>
-                                        ) : (
-                                          <button
-                                            onClick={() => { setOverrideItemId(it.id); setOverrideScore(''); setOverrideReason(''); }}
-                                            className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
-                                          >
-                                            覆盖分数
-                                          </button>
-                                        )}
-                                      </div>
+                                    {it.disputeL2Result === 'APPROVED' && (
+                                      <Link
+                                        href={`/admin/fact-corrections/${detail!.id}`}
+                                        className="mt-2 inline-block rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
+                                      >
+                                        查看并修正事实数据
+                                      </Link>
                                     )}
                                   </div>
                                   <span className="ml-3 shrink-0 rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
