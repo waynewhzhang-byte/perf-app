@@ -20,6 +20,7 @@ async function main() {
   await prisma.submissionItem.deleteMany();
   await prisma.submission.deleteMany();
   await prisma.performanceRecord.deleteMany();
+  await prisma.dimensionReviewRoute.deleteMany();
   await prisma.formOptionReviewer.deleteMany();
   await prisma.formItem.deleteMany();
   await prisma.formSection.deleteMany();
