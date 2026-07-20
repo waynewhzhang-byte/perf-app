@@ -65,6 +65,7 @@ export function buildEmployeeDrafts(
 }
 
 import type { PrismaClient } from '@prisma/client';
+import { hashPassword } from './password';
 import {
   buildThreeTierOrgPlan,
   ensureThreeTierOrg,
@@ -150,7 +151,7 @@ export async function importEmployees(
       usersUpdated++;
     } else {
       await prisma.user.create({
-        data: { contact: d.employeeNo, passwordHash: '', ...userData },
+        data: { contact: d.employeeNo, passwordHash: await hashPassword(d.employeeNo), ...userData },
       });
       usersCreated++;
     }

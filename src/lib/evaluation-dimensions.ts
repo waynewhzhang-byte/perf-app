@@ -10,13 +10,14 @@ export type EvaluationDimensionCode =
   | 'basic.title-level'
   | 'basic.performance-level'
   | 'performance.safety-contribution'
-  | 'performance.technical-contribution.standard'
-  | 'performance.technical-contribution.resource'
+  | 'performance.technical-contribution'
   | 'performance.technical-contribution.textbook'
   | 'performance.technical-contribution.regulation'
   | 'performance.technical-contribution.ticket-revision'
+  | 'performance.competition'
   | 'performance.competition.competition'
   | 'performance.competition.exam'
+  | 'performance.innovation'
   | 'performance.innovation.award'
   | 'performance.innovation.paper-patent'
   | 'worksite.ticket-execution'
@@ -87,76 +88,28 @@ export const EVALUATION_DIMENSIONS: EvaluationSection[] = [
         scoringSummary: '第一发现人3分/次；其他发现人合计3分/次',
       },
       {
-        code: 'performance.technical-contribution.standard',
-        title: '技术贡献（国标行标企标）',
+        code: 'performance.technical-contribution',
+        title: '技术贡献',
         maxScore: 12,
         ownerDepartment: '组织部/安监部/运检部',
-        evidenceSource: '规范标准修编、资源库建设成果材料',
-        scoringSummary: '国标行标5分/项；国网企标4分/项；省公司企标3分/项',
+        evidenceSource: '教材编制/题库开发/课件开发、运规编写/会审、两票修订/审查记录',
+        scoringSummary: '教材/题库/课件3分/次；运规/两票修订2分/项；总分封顶12',
       },
       {
-        code: 'performance.technical-contribution.resource',
-        title: '技术贡献（规范标准、资源库）',
-        maxScore: 12,
-        ownerDepartment: '组织部/安监部/运检部',
-        evidenceSource: '规范标准修编、资源库建设成果材料',
-        scoringSummary: '公司级及以上安全生产相关规范标准修编、资源库建设2分/项',
-      },
-      {
-        code: 'performance.technical-contribution.textbook',
-        title: '技术贡献（教材/题库/课件）',
-        maxScore: 12,
-        ownerDepartment: '组织部',
-        evidenceSource: '教材/题库/课件开发成果材料',
-        scoringSummary: '参与教材/题库/课件开发，按贡献度计分，总分不超过12分',
-      },
-      {
-        code: 'performance.technical-contribution.regulation',
-        title: '技术贡献（运规编写/会审）',
-        maxScore: 12,
-        ownerDepartment: '运检部',
-        evidenceSource: '运规编写/会审记录',
-        scoringSummary: '参与运规编写/会审，按贡献度计分，总分不超过12分',
-      },
-      {
-        code: 'performance.technical-contribution.ticket-revision',
-        title: '技术贡献（两票修订/审查）',
-        maxScore: 12,
-        ownerDepartment: '安监部',
-        evidenceSource: '两票修订/审查记录',
-        scoringSummary: '参与两票修订/审查，按贡献度计分，总分不超过12分',
-      },
-      {
-        code: 'performance.competition.competition',
-        title: '竞赛比武（生产类竞赛）',
+        code: 'performance.competition',
+        title: '竞赛比武',
         maxScore: 10,
         ownerDepartment: '组织部',
         evidenceSource: '获奖证书、获奖通报、公司荣誉册',
-        scoringSummary: '国网竞赛10分/次；省公司竞赛团体前4或个人前6得5分/次',
+        scoringSummary: '代表省公司参加国网竞赛10分/次；代表公司参加省公司竞赛5分/次',
       },
       {
-        code: 'performance.competition.exam',
-        title: '竞赛比武（生产类调考）',
-        maxScore: 10,
-        ownerDepartment: '组织部',
-        evidenceSource: '获奖证书、获奖通报、公司荣誉册',
-        scoringSummary: '国网调考5分/次；省公司调考团体前4或个人前6得2分/次',
-      },
-      {
-        code: 'performance.innovation.award',
-        title: '发明创新（创新奖项）',
+        code: 'performance.innovation',
+        title: '发明创新',
         maxScore: 10,
         ownerDepartment: '各部门',
-        evidenceSource: '科技创新、职工技术创新、管理创新、青创、五小创新获奖材料',
-        scoringSummary: '国网公司级4分/次；省公司级3分/次',
-      },
-      {
-        code: 'performance.innovation.paper-patent',
-        title: '发明创新（论文专利）',
-        maxScore: 10,
-        ownerDepartment: '各部门',
-        evidenceSource: '核心期刊论文、发明专利材料',
-        scoringSummary: '前3作者分别4、3、2分',
+        evidenceSource: '管理创新/科技创新/QC/五小获奖材料、发明专利授权证书',
+        scoringSummary: '管理/科技创新国网5省3；QC/五小国网4省2；发明专利4/3/2/1分',
       },
     ],
   },
@@ -226,30 +179,6 @@ export const SAFETY_CONTRIBUTION_DIMENSION: EvaluationSubItem =
   EVALUATION_DIMENSIONS.find((s) => s.code === 'performance')!.items.find(
     (i) => i.code === 'performance.safety-contribution',
   )!;
-
-export const TECHNICAL_CONTRIBUTION_TEXTBOOK_DIMENSION = {
-  code: 'performance.technical-contribution.textbook' as const,
-  title: '技术贡献（教材/题库/课件）',
-  sectionCode: 'performance',
-  sectionTitle: '工作业绩',
-  maxScore: 12, // shared cap across all 3 tech-contrib sub-dimensions
-} as const;
-
-export const TECHNICAL_CONTRIBUTION_REGULATION_DIMENSION = {
-  code: 'performance.technical-contribution.regulation' as const,
-  title: '技术贡献（运规编写/会审）',
-  sectionCode: 'performance',
-  sectionTitle: '工作业绩',
-  maxScore: 12,
-} as const;
-
-export const TECHNICAL_CONTRIBUTION_TICKET_REVISION_DIMENSION = {
-  code: 'performance.technical-contribution.ticket-revision' as const,
-  title: '技术贡献（两票修订/审查）',
-  sectionCode: 'performance',
-  sectionTitle: '工作业绩',
-  maxScore: 12,
-} as const;
 
 export function findDimensionByCode(
   code: EvaluationDimensionCode,

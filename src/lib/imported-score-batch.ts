@@ -1,5 +1,5 @@
 /**
- * 基于已导入事实（基本素质 + 两票 + 缺陷）批量计算绩效分表。
+ * 基于已导入基本素质和绩效事实批量计算绩效分表。
  * 规则与 buildPerformanceScoreSheet / 《评分标准 对应表》一致。
  */
 import type { BasicDimension, PrismaClient } from '@prisma/client';
@@ -9,6 +9,11 @@ import {
   type PerformanceScoreSheet,
 } from '@/lib/performance-score-sheet';
 import { parseMockDeclarationTier } from '@/lib/declaration-level';
+import { SCORING_STANDARDS } from '@/lib/scoring-standards';
+
+const FACT_DIMENSION_CODES = SCORING_STANDARDS
+  .filter((standard) => standard.dataSource === 'fact')
+  .map((standard) => standard.code);
 
 export interface ImportedScoreRow {
   employeeNo: string;
@@ -100,6 +105,8 @@ function toImportedScoreRow(
 }
 
 export interface BatchImportedScoresOptions {
+  /** 精确匹配员工工号 */
+  employeeNo?: string;
   search?: string;
   page?: number;
   pageSize?: number;
@@ -123,10 +130,13 @@ export async function batchComputeImportedScores(
     ? 10000
     : Math.min(100, Math.max(1, defaultSize));
   const search = options.search?.trim();
+  const employeeNo = options.employeeNo?.trim();
   const requireBasic = options.requireBasic !== false;
   const includeSheet = options.includeSheet ?? false;
 
-  const userWhere = search
+  const userWhere = employeeNo
+    ? { employeeNo }
+    : search
     ? {
         employeeNo: { not: null as null | string },
         OR: [
@@ -172,7 +182,7 @@ export async function batchComputeImportedScores(
     prisma.performanceFact.findMany({
       where: {
         year,
-        dimensionCode: { in: ['worksite.ticket-execution', 'worksite.defect-governance'] },
+        dimensionCode: { in: FACT_DIMENSION_CODES },
       },
     }),
     loadTicketTierMaxRaw(prisma, year),

@@ -10,8 +10,9 @@ import {
   type SafetyContributionFactLine,
   type SafetyContributionImportResult,
 } from '@/lib/safety-contribution';
+import { computeLevel, type DeclarationLevel } from '@/lib/declaration-level';
 
-export type DeclarationTier = '一级' | '二级' | '三级';
+export type DeclarationTier = DeclarationLevel;
 
 export interface QuantitativeReportRow {
   seq: number;
@@ -87,13 +88,6 @@ export interface QuantitativeReportBundle {
   rosterCsvPath: string;
 }
 
-function assignTier(cappedScore: number): DeclarationTier {
-  if (cappedScore >= 10) return '二级';
-  if (cappedScore >= 3) return '三级';
-  if (cappedScore > 0) return '一级';
-  return '一级';
-}
-
 function emptyReportRow(
   employeeNo: string,
   fullName: string,
@@ -126,7 +120,7 @@ function emptyReportRow(
     defectGovernance,
     violationSevere: 0,
     violationGeneral: 0,
-    tier: assignTier(defectGovernance),
+    tier: computeLevel(Number(personal.workYears)),
     rawDefectScore,
     rawSafetyScore: 0,
     rawTicketScore: 0,

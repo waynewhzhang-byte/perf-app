@@ -2,8 +2,8 @@ import ExcelJS from 'exceljs';
 import type { DeclarationTier, QuantitativeReportBundle, QuantitativeReportRow } from '@/lib/quantitative-report';
 import type { DefectDetailExportRow } from '@/lib/quantitative-report';
 import { DEFECT_LIBRARY_DIMENSION, SAFETY_CONTRIBUTION_DIMENSION, TICKET_EXECUTION_DIMENSION } from '@/lib/evaluation-dimensions';
+import { DECLARATION_LEVELS } from '@/lib/declaration-level';
 
-const TIERS: DeclarationTier[] = ['一级', '二级', '三级'];
 
 function setHeaderRows(sheet: ExcelJS.Worksheet, titleYear: number, tier: DeclarationTier) {
   const title = `国网山西超高压变电公司${titleYear}年能级评价个人量化积分统计公示表`;
@@ -84,7 +84,6 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, titleYear: number, tier: Declar
 function appendDataRow(sheet: ExcelJS.Worksheet, rowIndex: number, data: QuantitativeReportRow) {
   const r = sheet.getRow(rowIndex);
   r.values = [
-    undefined,
     data.seq,
     data.fullName,
     data.gender,
@@ -125,6 +124,13 @@ function autoWidth(sheet: ExcelJS.Worksheet) {
   sheet.getColumn(2).width = 10;
   sheet.getColumn(4).width = 16;
   sheet.getColumn(5).width = 28;
+  sheet.pageSetup = {
+    orientation: 'landscape',
+    paperSize: 9,
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+  };
 }
 
 export async function writeQuantitativeReportXlsx(
@@ -135,7 +141,7 @@ export async function writeQuantitativeReportXlsx(
   wb.creator = 'perf-app';
   wb.created = new Date();
 
-  for (const tier of TIERS) {
+  for (const tier of DECLARATION_LEVELS) {
     const sheet = wb.addWorksheet(tier);
     setHeaderRows(sheet, bundle.reportTitleYear, tier);
     const tierRows = bundle.byTier[tier];

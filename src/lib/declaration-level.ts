@@ -1,11 +1,11 @@
 /**
  * 能级等级计算
  *
- * 基于入职时间到当前日期的整年工作年限计算申报能级。
- * 规则：类似 PreReviewRule 的工龄区间映射
- *   - 0 ≤ years < 5  → 一级
- *   - 5 ≤ years < 8  → 二级
- *   - 8 ≤ years       → 三级
+ * 基于参加工作时间到评价截止日的整年工作年限计算申报能级。
+ * 规则：
+ *   - 0 ≤ years < 5  → 三级
+ *   - 5 ≤ years < 9  → 二级
+ *   - 9 ≤ years       → 一级
  */
 
 export const DECLARATION_LEVELS = ['一级', '二级', '三级'] as const;
@@ -13,9 +13,9 @@ export type DeclarationLevel = (typeof DECLARATION_LEVELS)[number];
 
 /** 工作年限 → 能级等级 */
 export function computeLevel(workYears: number): DeclarationLevel {
-  if (workYears < 5) return '一级';
-  if (workYears < 8) return '二级';
-  return '三级';
+  if (workYears < 5) return '三级';
+  if (workYears < 9) return '二级';
+  return '一级';
 }
 
 /** 入职日期 → 能级等级（用截至当前日期的整数年限） */
