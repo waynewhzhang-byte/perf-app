@@ -6,10 +6,12 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
+import { levelFromHireDate } from '@/lib/declaration-level';
 
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
   id: string; title: string; hint?: string;
+  dimensionCode?: string | null;
   isRequired: boolean; requireAttachment: boolean; maxSelections: number;
   scoreMode?: 'TIERS' | 'COUNTED';
   maxScore?: number | null;
@@ -30,6 +32,7 @@ interface OptionReview { optionId: string; status: string; label: string; reject
 interface SubItem {
   id?: string; itemId: string;
   selected: Selected[];
+  declaredScore?: number | null;
   content?: string;
   status?: string; rejectReason?: string | null;
   attachments?: Attachment[];
@@ -79,6 +82,7 @@ export default function SubmissionPage() {
         tierValue?: string;
         label?: string;
         yearBreakdown?: unknown;
+        sourceFile?: string | null;
       }[];
     }[];
   } | null>(null);
@@ -113,6 +117,7 @@ export default function SubmissionPage() {
           sections: [{
             id: 's', title: '申报项', items: existing.items.map((si: any) => ({
               id: si.item.id, title: si.item.title, hint: si.item.hint,
+              dimensionCode: si.item.dimensionCode,
               isRequired: si.item.isRequired, requireAttachment: si.item.requireAttachment,
               maxSelections: si.item.maxSelections, scoreOptions: si.item.scoreOptions,
               scoreMode: si.item.scoreMode, maxScore: si.item.maxScore,
@@ -140,7 +145,9 @@ export default function SubmissionPage() {
         const ex = existing?.items?.find((x: any) => x.itemId === it.id);
         if (ex && (ex as any).isSystemFilled) return;
         map[it.id] = ex ? {
-          id: ex.id, itemId: it.id, selected: ex.selected ?? [], content: ex.content ?? '',
+          id: ex.id, itemId: it.id, selected: ex.selected ?? [],
+          declaredScore: ex.selected?.find((row: Selected) => row.optionId === 'employee-declared-score')?.score ?? null,
+          content: ex.content ?? '',
           status: ex.status, rejectReason: ex.rejectReason, attachments: ex.attachments,
           optionReviews: ex.optionReviews ?? [],
         } : { itemId: it.id, selected: [], content: '' };
@@ -221,6 +228,11 @@ export default function SubmissionPage() {
     return Math.max(0, years);
   }, [header.hireDate]);
 
+  const calculatedDeclarationLevel = useMemo(() => {
+    if (!header.hireDate) return null;
+    return levelFromHireDate(new Date(`${header.hireDate}T00:00:00`));
+  }, [header.hireDate]);
+
   const isLocked = (itemId: string): boolean => {
     if (sub?.status !== 'REJECTED') return false;
     return !!(answers[itemId]?.status && answers[itemId]?.status !== 'REJECTED');
@@ -271,6 +283,14 @@ export default function SubmissionPage() {
     setAnswers((prev) => ({ ...prev, [itemId]: { ...prev[itemId], content: val } }));
   };
 
+  const setDeclaredScore = (itemId: string, value: string) => {
+    const score = value === '' ? null : Number(value);
+    setAnswers((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], declaredScore: Number.isFinite(score) ? score : null },
+    }));
+  };
+
   const upload = async (itemId: string, files: FileList | null, opts?: { isFact?: boolean }) => {
     if (!files || !files.length) return;
     if (!sub?.id) { alert('请先保存草稿后再上传附件'); return; }
@@ -307,6 +327,13 @@ export default function SubmissionPage() {
       tpl.sections.forEach((s) => s.items.forEach((it) => {
         if (isLocked(it.id) || systemFilledItemIds.has(it.id)) return;
         const a = answers[it.id];
+        const employeeFactItem = Boolean(it.dimensionCode);
+        if (employeeFactItem) {
+          if (!a?.content?.trim()) missing.push(`${it.title}（缺事实说明）`);
+          if (a?.declaredScore == null) missing.push(`${it.title}（缺申报分数）`);
+          if (!(a?.attachments?.length)) missing.push(`${it.title}（缺截图证明）`);
+          return;
+        }
         if (it.isRequired && !a.selected.length) missing.push(it.title);
         else if (a.selected.length && it.requireAttachment && !(a.attachments?.length)) missing.push(`${it.title}（缺附件）`);
       }));
@@ -343,6 +370,7 @@ export default function SubmissionPage() {
         items: [
           ...Object.values(answers).map((a) => ({
             itemId: a.itemId, selected: a.selected, content: a.content,
+            declaredScore: a.declaredScore ?? undefined,
             confirmationStatus: (a as any).confirmationStatus,
             disputeReason: (a as any).disputeReason,
             isSystemFilled: (a as any).isSystemFilled ?? false,
@@ -478,13 +506,16 @@ export default function SubmissionPage() {
                 </label>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">工作年限（年）</span>
-                  <input type="number" min={0} max={60}
-                    key={`wy-${header.hireDate}`}
-                    defaultValue={workYears ?? undefined}
-                    disabled={!editable}
-                    placeholder="由入职时间自动计算，可手动修改"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
-                  <p className="mt-0.5 text-xs text-slate-400">提交时根据入职日期自动重算，手动填写仅用于预览参考</p>
+                  <input type="text" value={workYears ?? ''} readOnly
+                    placeholder="填写入职时间后自动计算"
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600" />
+                </label>
+                <label className="text-sm">
+                  <span className="font-medium text-slate-600">自动计算的能级评价等级</span>
+                  <input type="text" value={calculatedDeclarationLevel ?? ''} readOnly
+                    placeholder="填写入职时间后自动计算"
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm font-medium text-slate-700" />
+                  <p className="mt-0.5 text-xs text-slate-400">系统按入职时间自动计算，不能手工选择。</p>
                 </label>
               </>
             )}
@@ -557,6 +588,7 @@ export default function SubmissionPage() {
                             </>
                           ) : (
                             <>
+                              {f.label && <span className="font-medium">{f.label}</span>}
                               {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
                               {f.role && (
                                 <>
@@ -566,6 +598,7 @@ export default function SubmissionPage() {
                               {f.defectRef && <> {' · '}{f.defectRef}</>}
                               {f.eventDate && ` · ${String(f.eventDate).slice(0, 10)}`}
                               {' → '}<b>{f.score} 分</b>
+                              {f.sourceFile && <span className="text-slate-400"> · 来源：{f.sourceFile}</span>}
                             </>
                           )}
                         </p>
@@ -643,6 +676,8 @@ export default function SubmissionPage() {
               {sec.items.filter((it) => !systemFilledItemIds.has(it.id)).map((it) => {
                 const a = answers[it.id]; const locked = isLocked(it.id);
                 const rejected = a?.status === 'REJECTED';
+                const employeeFactItem = Boolean(it.dimensionCode);
+                const deductionItem = it.dimensionCode?.startsWith('special.');
                 return (
                   <div key={it.id} className={`rounded-lg border p-4 ${
                     rejected ? 'border-red-300 bg-red-50' : locked ? 'bg-slate-50 opacity-70' : 'border-slate-200'
@@ -674,7 +709,21 @@ export default function SubmissionPage() {
                       </p>
                     )}
 
-                    {it.scoreMode === 'COUNTED' ? (
+                    {employeeFactItem ? (
+                      <div className="mt-3 grid gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 sm:grid-cols-[1fr_160px]">
+                        <div>
+                          <p className="text-sm font-semibold text-blue-950">暂无系统导入事实，请自行申报</p>
+                          <p className="mt-1 text-xs leading-relaxed text-blue-800">填写可核验的事实经过，并按上方评分标准填写申报分数；提交前须先保存草稿并上传截图证明。一级、二级审核通过后计入最终总分。</p>
+                        </div>
+                        <label className="text-xs font-medium text-blue-900">{deductionItem ? '申报扣分（不得大于 0 分）' : `申报分数（最高 ${it.maxScore ?? 0} 分）`}
+                          <input type="number" min={deductionItem ? undefined : 0} max={deductionItem ? 0 : it.maxScore ?? undefined} step="0.1"
+                            value={a?.declaredScore ?? ''}
+                            disabled={!itemEditable || locked}
+                            onChange={(e) => setDeclaredScore(it.id, e.target.value)}
+                            className="mt-1 block w-full rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-100" />
+                        </label>
+                      </div>
+                    ) : it.scoreMode === 'COUNTED' ? (
                       <div className="mt-3 space-y-2">
                         {it.scoreOptions.map((o, idx) => {
                           const cur = a?.selected.find((s) => s.index === idx);
@@ -747,13 +796,13 @@ export default function SubmissionPage() {
 
                     <textarea value={a?.content ?? ''} onChange={(e) => setContent(it.id, e.target.value)}
                       disabled={!itemEditable || locked}
-                      placeholder="备注说明（可选）"
+                      placeholder={employeeFactItem ? '事实说明（必填：时间、事项、本人角色及可核验依据）' : '备注说明（可选）'}
                       rows={2}
                       className="mt-3 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50" />
 
-                    {it.requireAttachment && (
+                    {(it.requireAttachment || employeeFactItem) && (
                       <div className="mt-3">
-                        <p className="text-xs font-semibold text-slate-600">证明材料</p>
+                        <p className="text-xs font-semibold text-slate-600">{employeeFactItem ? '截图证明（提交前必传，上传至 MinIO）' : '证明材料'}</p>
                         <ul className="mt-1 space-y-0.5">
                           {(a?.attachments ?? []).map((at) => (
                             <li key={at.id} className="flex items-center gap-1.5 text-xs text-slate-600">
@@ -770,12 +819,12 @@ export default function SubmissionPage() {
                         {itemEditable && !locked && (
                           <div className="mt-2">
                             <p className="text-xs text-slate-400">
-                              仅支持 PDF、图片、Word/Excel、TXT，单文件 ≤10MB
+                              {employeeFactItem ? '请上传截图或扫描件；单文件 ≤10MB' : '仅支持 PDF、图片、Word/Excel、TXT，单文件 ≤10MB'}
                             </p>
                             <input
                               type="file"
                               multiple
-                              accept={UPLOAD_ACCEPT}
+                              accept={employeeFactItem ? 'image/*' : UPLOAD_ACCEPT}
                               onChange={(e) => upload(it.id, e.target.files)}
                               className="mt-1 block text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-xs file:font-medium file:text-slate-700 file:transition-colors hover:file:bg-slate-200 cursor-pointer"
                             />

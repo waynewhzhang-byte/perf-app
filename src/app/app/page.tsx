@@ -1,15 +1,12 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { getSession, getUserRoles } from '@/lib/auth';
+import { getSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { LogoutButton } from '@/components/logout-button';
 
 export default async function EmployeeHome() {
   const s = await getSession(false);
   if (!s) redirect('/login');
-  const roles = await getUserRoles(s.userId);
-  const isReviewer = roles.includes('REVIEWER_L1') || roles.includes('REVIEWER_L2');
-
   const templates = await prisma.formTemplate.findMany({ where: { status: 'PUBLISHED' } });
   const subs = await prisma.submission.findMany({
     where: { userId: s.userId }, include: { template: true },
@@ -29,9 +26,6 @@ export default async function EmployeeHome() {
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <Link href="/app/profile" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">个人资料</Link>
-          {isReviewer && (
-            <Link href="/app/review" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">审核工作台</Link>
-          )}
           {records.length > 0 && (
             <Link href="/app/records" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">绩效档案</Link>
           )}

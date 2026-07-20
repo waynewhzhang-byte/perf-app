@@ -7,7 +7,7 @@ import { useAuthConfig } from '@/lib/use-auth-config';
 export default function EmployeeLogin() {
   const router = useRouter();
   const { config, loaded } = useAuthConfig();
-  const [contact, setContact] = useState('');
+  const [employeeNo, setEmployeeNo] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [counter, setCounter] = useState(0);
@@ -27,7 +27,7 @@ export default function EmployeeLogin() {
     const r = await fetch('/api/auth/send-code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: contact, purpose: 'LOGIN' }),
+      body: JSON.stringify({ target: employeeNo, purpose: 'LOGIN' }),
     });
     const d = await r.json();
     setSending(false);
@@ -46,7 +46,7 @@ export default function EmployeeLogin() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contact,
+        employeeNo,
         password,
         code: config.loginRequiresVerification ? code : undefined,
       }),
@@ -65,6 +65,7 @@ export default function EmployeeLogin() {
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-bold tracking-tight">员工登录</h1>
+          <p className="mt-2 text-sm text-slate-500">首次登录默认密码为本人职工号</p>
           {loaded && !config.loginRequiresVerification && (
             <p className="mt-2 text-sm text-slate-500">账号密码登录，无需验证码</p>
           )}
@@ -72,15 +73,15 @@ export default function EmployeeLogin() {
 
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label htmlFor="contact" className="mb-1.5 block text-sm font-medium text-slate-700">
-              联系方式
+            <label htmlFor="employeeNo" className="mb-1.5 block text-sm font-medium text-slate-700">
+              员工工号
             </label>
             <input
-              id="contact"
+              id="employeeNo"
               className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              placeholder="手机号 或 邮箱"
-              value={contact}
-              onChange={(e) => setContact(e.target.value)}
+              placeholder="请输入员工工号"
+              value={employeeNo}
+              onChange={(e) => setEmployeeNo(e.target.value)}
               required
             />
           </div>
@@ -116,7 +117,7 @@ export default function EmployeeLogin() {
                 />
                 <button
                   type="button"
-                  disabled={counter > 0 || !contact || sending}
+                  disabled={counter > 0 || !employeeNo || sending}
                   onClick={sendCode}
                   className="shrink-0 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
