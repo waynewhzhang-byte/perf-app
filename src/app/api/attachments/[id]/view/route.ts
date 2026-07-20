@@ -24,7 +24,7 @@ export async function GET(
   req: Request,
   { params }: { params: { id: string } },
 ) {
-  const s = await getSession(false);
+  const s = await getSession(false) ?? await getSession(true);
   if (!s) return NextResponse.json({ error: '未授权' }, { status: 401 });
 
   const att = await loadAttachmentForView(params.id);

@@ -7,11 +7,13 @@ import { prisma } from '@/lib/prisma';
 import { getSession, AuthError } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
+import { levelFromHireDate } from '@/lib/declaration-level';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import {
   extractSystemFilledFromSheet,
+  isFactDataSourceDimension,
   systemItemStatusOnSubmit,
   type ConfirmationStatus,
 } from '@/lib/system-filled-items';
@@ -53,6 +55,7 @@ const UpsertSchema = z.object({
       count: z.number().int().min(0).optional(),
     })),
     content: z.string().optional(),
+    declaredScore: z.number().finite().optional(),
     confirmationStatus: z.enum(['CONFIRMED', 'DISPUTED']).optional(),
     disputeReason: z.string().optional(),
     isSystemFilled: z.boolean().optional(),
@@ -121,13 +124,14 @@ export async function POST(req: Request) {
   }
 
   // 构建模板 items 的快速索引：itemId → 元数据（含计分方式与封顶）
-  const itemMeta = new Map<string, { isRequired: boolean; requireAttachment: boolean; title: string; scoreMode: string; maxScore: number | null; scoreOptions: ScoreOptionLike[] }>();
+  const itemMeta = new Map<string, { isRequired: boolean; requireAttachment: boolean; title: string; dimensionCode: string | null; scoreMode: string; maxScore: number | null; scoreOptions: ScoreOptionLike[] }>();
   for (const sec of template.sections) {
     for (const it of sec.items) {
       itemMeta.set(it.id, {
         isRequired: it.isRequired,
         requireAttachment: it.requireAttachment,
         title: it.title,
+        dimensionCode: it.dimensionCode,
         scoreMode: it.scoreMode,
         maxScore: it.maxScore == null ? null : Number(it.maxScore),
         scoreOptions: (Array.isArray(it.scoreOptions) ? it.scoreOptions : []) as unknown as ScoreOptionLike[],
@@ -139,6 +143,9 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: '用户不存在' }, { status: 404 });
 
   const parsedHireDate = parseDateOnly(hireDate);
+  const inferredDeclarationLevelName = !hfEnabled('declarationLevel') && parsedHireDate
+    ? levelFromHireDate(parsedHireDate)
+    : null;
   if (submit) {
     if (hfRequired('workArea') && !workAreaId) return NextResponse.json({ error: '请选择工区' }, { status: 400 });
     if (hfRequired('hireDate') && !parsedHireDate) return NextResponse.json({ error: '请选择有效的入职时间' }, { status: 400 });
@@ -157,7 +164,11 @@ export async function POST(req: Request) {
     await prisma.$transaction(async (tx) => {
       const [workArea, declarationLevel, declarationSpecialty] = await Promise.all([
         workAreaId ? tx.branch.findUnique({ where: { id: workAreaId } }) : Promise.resolve(null),
-        declarationLevelId ? tx.declarationLevel.findUnique({ where: { id: declarationLevelId } }) : Promise.resolve(null),
+        inferredDeclarationLevelName
+          ? tx.declarationLevel.findFirst({ where: { name: inferredDeclarationLevelName } })
+          : declarationLevelId
+            ? tx.declarationLevel.findUnique({ where: { id: declarationLevelId } })
+            : Promise.resolve(null),
         declarationSpecialtyId ? tx.declarationSpecialty.findUnique({ where: { id: declarationSpecialtyId } }) : Promise.resolve(null),
       ]);
 
@@ -169,7 +180,7 @@ export async function POST(req: Request) {
 
       const workYears = parsedHireDate ? calculateFullWorkYears(parsedHireDate, new Date()) : null;
       let preReview = { passed: true, messages: [] as string[], matchedRuleIds: [] as string[] };
-      if (submit && parsedHireDate && declarationLevelId) {
+      if (submit && parsedHireDate && declarationLevel) {
         const dbRules = await tx.autoReviewRule.findMany({ where: { enabled: true }, orderBy: { createdAt: 'asc' } });
         const rules: PreReviewRule[] = dbRules.map((rule) => ({
           id: rule.id,
@@ -182,7 +193,7 @@ export async function POST(req: Request) {
         }));
         preReview = evaluatePreReviewRules({
           workYears: workYears ?? 0,
-          declarationLevelId,
+          declarationLevelId: declarationLevel.id,
           rules,
         });
         preReviewRejectedMessages = preReview.messages;
@@ -365,7 +376,17 @@ export async function POST(req: Request) {
             .filter((review) => review.status === 'L2_APPROVED')
             .map((review) => review.optionId),
         );
-        const normalizedInput = normalizeSelectedOptions(it.itemId, meta.scoreOptions, it.selected);
+        const isEmployeeDeclaredFact = isFactDataSourceDimension(meta.dimensionCode);
+        const isDeduction = meta.dimensionCode?.startsWith('special.') ?? false;
+        if (it.declaredScore != null && !isEmployeeDeclaredFact) {
+          throw new EditableError(`「${meta.title}」不允许直接填写分数`);
+        }
+        if (it.declaredScore != null && (isDeduction ? it.declaredScore > 0 : it.declaredScore < 0 || (meta.maxScore != null && it.declaredScore > meta.maxScore))) {
+          throw new EditableError(`「${meta.title}」申报分数不符合该评分项的分值范围`);
+        }
+        const normalizedInput = it.declaredScore != null
+          ? [{ index: 0, optionId: 'employee-declared-score', label: '员工申报分数', score: it.declaredScore }]
+          : normalizeSelectedOptions(it.itemId, meta.scoreOptions, it.selected);
         const existingSelectedByOption = new Map<string, { index: number; optionId: string; label: string; score: number; count?: number }>();
         for (const selected of existingSelected) {
           const normalizedExisting = normalizeSelectedOptions(it.itemId, meta.scoreOptions, [selected]);
@@ -386,6 +407,12 @@ export async function POST(req: Request) {
         if (submit) {
           if (meta.isRequired && normalizedSelected.length === 0) {
             throw new EditableError(`「${meta.title}」为必填项，请选择分值`);
+          }
+          if (isEmployeeDeclaredFact) {
+            if (!it.content?.trim()) throw new EditableError(`请填写「${meta.title}」的事实说明`);
+            if (it.declaredScore == null) throw new EditableError(`请填写「${meta.title}」的申报分数`);
+            const attCount = attachmentCounts?.get(it.itemId) ?? 0;
+            if (attCount === 0) throw new EditableError(`「${meta.title}」须上传截图证明材料`);
           }
           if (meta.requireAttachment && normalizedSelected.length > 0) {
             const attCount = attachmentCounts?.get(it.itemId) ?? 0;

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { levelFromHireDate } from '@/lib/declaration-level';
+import { hashPassword } from '@/lib/password';
 
 const RowSchema = z.object({
   employeeNo: z.string().min(1, '工号不能为空'),
@@ -65,11 +66,11 @@ export async function POST(req: Request) {
           });
           results.push({ employeeNo: row.employeeNo, name: row.name, level: level ?? '—', created: false });
         } else {
-          // 创建新用户：用工号作为临时 contact，员工注册时用手机号认领
+          // 创建新用户：工号作为登录标识，默认密码同工号
           await tx.user.create({
             data: {
-              contact: row.employeeNo, // 临时，注册时更新为手机号
-              passwordHash: '',        // 无密码，必须通过注册认领
+              contact: row.employeeNo,
+              passwordHash: await hashPassword(row.employeeNo),
               fullName: row.name,
               employeeNo: row.employeeNo,
               hireDate: row.hireDate ? new Date(row.hireDate) : undefined,

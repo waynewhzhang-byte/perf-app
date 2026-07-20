@@ -13,6 +13,7 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import { sourceDimensionCodes } from '@/lib/scoring-standards';
 import {
   extractSystemFilledFromSheet,
   isFactDataSourceDimension,
@@ -65,7 +66,8 @@ export async function GET(req: Request) {
 
   const perfCodes = factBoundItems
     .map(({ dimensionCode }) => dimensionCode!)
-    .filter((c) => !isBasicDimensionCode(c));
+    .filter((c) => !isBasicDimensionCode(c))
+    .flatMap((code) => sourceDimensionCodes(code));
   const basicCodes = factBoundItems
     .map(({ dimensionCode }) => dimensionCode!)
     .filter((c) => isBasicDimensionCode(c));
@@ -128,7 +130,7 @@ export async function GET(req: Request) {
         };
       }
 
-      const facts = perfFacts.filter((f) => f.dimensionCode === code);
+      const facts = perfFacts.filter((f) => sourceDimensionCodes(code).includes(f.dimensionCode));
       if (facts.length === 0) return null;
 
       return {
@@ -143,6 +145,7 @@ export async function GET(req: Request) {
         requiresConfirmation: true,
         facts: facts.map((f) => ({
           id: f.id,
+          label: f.dimensionTitle || f.dimensionCode,
           role: f.role,
           eventType: f.eventType,
           score: Number(f.score),
@@ -150,6 +153,7 @@ export async function GET(req: Request) {
           defectLevel: f.defectLevel,
           eventDate: f.eventDate,
           metadata: f.metadata,
+          sourceFile: f.sourceFile,
         })),
         totalScore: sys.score,
       };

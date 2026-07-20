@@ -19,7 +19,9 @@ export async function GET(req: Request) {
     const result = await batchComputeImportedScores(prisma, year, {
       page: employeeNo ? 1 : page,
       pageSize: employeeNo ? 1 : 30,
-      search: employeeNo || search || undefined,
+      employeeNo: employeeNo || undefined,
+      search: employeeNo ? undefined : search || undefined,
+      requireBasic: employeeNo ? false : undefined,
       includeSheet: !!employeeNo,
     });
 
@@ -34,7 +36,7 @@ export async function GET(req: Request) {
       page,
       pageSize: employeeNo ? 1 : 30,
       total: employeeNo ? rows.length : result.total,
-      note: '基于已导入基本素质、两票执行、缺陷治理事实，按《评分标准 对应表》计算；工作业绩等手工维度未含在内。',
+      note: '基于已导入基本素质及各项绩效事实，按《评分标准 对应表》计算；无事实数据的评分点按 0 分展示。',
       rows: rows.map(({ sheet, ...rest }) => ({
         ...rest,
         ...(employeeNo ? { sheet } : {}),

@@ -6,6 +6,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { optionWithFallbackId, type ScoreOptionLike } from '@/lib/form-options';
+import {
+  HQ_BRANCH_NAME,
+  SECOND_LEVEL_REVIEW_DEPARTMENT_NAMES,
+  isSecondLevelReviewDepartment,
+} from '@/lib/review-departments';
 
 export async function GET(req: Request) {
   try {
@@ -15,7 +20,7 @@ export async function GET(req: Request) {
     const templateId = new URL(req.url).searchParams.get('templateId');
     if (!templateId) return NextResponse.json({ error: '缺少模板 ID' }, { status: 400 });
 
-    const [template, hq, allDepartments] = await Promise.all([
+    const [template, departments] = await Promise.all([
       prisma.formTemplate.findUnique({
         where: { id: templateId },
         include: {
@@ -30,14 +35,16 @@ export async function GET(req: Request) {
           },
         },
       }),
-      prisma.branch.findFirst({ where: { name: '公司总部' }, select: { id: true } }),
-      prisma.department.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, branchId: true } }),
+      prisma.department.findMany({
+        where: {
+          branch: { name: HQ_BRANCH_NAME },
+          name: { in: [...SECOND_LEVEL_REVIEW_DEPARTMENT_NAMES] },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, name: true, branchId: true },
+      }),
     ]);
     if (!template) return NextResponse.json({ error: '模板不存在' }, { status: 404 });
-
-    const departments = hq
-      ? allDepartments.filter((department) => department.branchId === hq.id)
-      : allDepartments;
 
     const sections = template.sections.map((section) => ({
       id: section.id,
@@ -94,8 +101,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true });
     }
 
-    const department = await prisma.department.findUnique({ where: { id: departmentId } });
+    const department = await prisma.department.findUnique({
+      where: { id: departmentId },
+      include: { branch: true },
+    });
     if (!department) return NextResponse.json({ error: '部门不存在' }, { status: 404 });
+    if (
+      department.branch.name !== HQ_BRANCH_NAME ||
+      !isSecondLevelReviewDepartment(department.name)
+    ) {
+      return NextResponse.json({ error: '只能分配给公司组织部、公司安监部或公司运检部' }, { status: 400 });
+    }
 
     await prisma.formOptionReviewer.upsert({
       where: { itemId_optionId: { itemId, optionId } },

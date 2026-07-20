@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { getSession, getUserRoles } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
-import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import {
   computeSectionScores,
   computeTemplateMaxScore,
@@ -14,8 +13,10 @@ import {
 import { persistSubmissionDimensionFacts } from '@/lib/submission-fact-persistence';
 import {
   isReviewSkippedSystemItem,
-  shouldCreateOptionReviews,
+  resolveFormItemDimension,
 } from '@/lib/system-filled-items';
+import { buildL1SubmissionScopeWhere, matchesL1Scope } from '@/lib/reviewer-scope';
+import { dimensionReviewOptionId } from '@/lib/dimension-review-routing';
 
 const DecisionSchema = z.object({
   submissionItemId: z.string().optional(),
@@ -158,7 +159,7 @@ async function archiveSubmission(tx: typeof prisma, submissionId: string, review
 }
 
 export async function GET(req: Request) {
-  const s = await getSession(false);
+  const s = await getSession(true);
   if (!s) return NextResponse.json({ error: '未授权' }, { status: 401 });
   const roles = await getUserRoles(s.userId);
   const isL1 = roles.includes('REVIEWER_L1');
@@ -175,7 +176,7 @@ export async function GET(req: Request) {
     isL1 ? prisma.userRole.findMany({ where: { userId: s.userId, role: 'REVIEWER_L1' } }) : Promise.resolve([]),
     prisma.user.findUnique({ where: { id: s.userId }, select: { departmentId: true } }),
   ]);
-  const branchIds = l1Scopes.map((r) => r.scopeBranchId).filter(Boolean) as string[];
+  const l1ScopeWhere = buildL1SubmissionScopeWhere(l1Scopes);
   const departmentId = user?.departmentId ?? null;
 
   if (filter === 'completed') {
@@ -192,7 +193,10 @@ export async function GET(req: Request) {
     const completedWhere: any = { id: { in: reviewedIds } };
     if (isL1) {
       completedWhere.status = { not: 'SUBMITTED' };
-      if (branchIds.length > 0) completedWhere.branchId = { in: branchIds };
+      if (!l1ScopeWhere) {
+        return NextResponse.json({ success: true, submissions: [], level: 1, filter: 'completed' });
+      }
+      Object.assign(completedWhere, l1ScopeWhere);
     } else if (departmentId) {
       completedWhere.NOT = {
         items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } },
@@ -220,9 +224,9 @@ export async function GET(req: Request) {
     where.status = 'L1_APPROVED';
     where.items = { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } };
   } else {
-    if (branchIds.length === 0) return NextResponse.json({ success: true, submissions: [], level: 1 });
+    if (!l1ScopeWhere) return NextResponse.json({ success: true, submissions: [], level: 1 });
     where.status = 'SUBMITTED';
-    where.branchId = { in: branchIds };
+    Object.assign(where, l1ScopeWhere);
   }
 
   const [submissions, total] = await Promise.all([
@@ -239,7 +243,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const s = await getSession(false);
+  const s = await getSession(true);
   if (!s) return NextResponse.json({ error: '未授权' }, { status: 401 });
   const roles = await getUserRoles(s.userId);
   const isL1 = roles.includes('REVIEWER_L1');
@@ -252,7 +256,7 @@ export async function POST(req: Request) {
   const sub = await prisma.submission.findUnique({
     where: { id: parsed.data.submissionId },
     include: {
-      items: { include: { item: { include: { optionReviewers: true } }, optionReviews: true } },
+      items: { include: { item: true, optionReviews: true } },
       user: true,
     },
   });
@@ -265,8 +269,7 @@ export async function POST(req: Request) {
 
   if (level === 1) {
     const l1Scopes = await prisma.userRole.findMany({ where: { userId: s.userId, role: 'REVIEWER_L1' } });
-    const scopedBranchIds = l1Scopes.map((r) => r.scopeBranchId).filter(Boolean) as string[];
-    if (scopedBranchIds.length === 0 || !scopedBranchIds.includes(sub.branchId!)) {
+    if (!matchesL1Scope(l1Scopes, { branchId: sub.branchId, departmentId: sub.user.departmentId })) {
       return NextResponse.json({ error: '该申报不在您的审核范围内' }, { status: 403 });
     }
 
@@ -358,54 +361,56 @@ export async function POST(req: Request) {
         data: { status: 'L1_APPROVED', l1ReviewerId: s.userId, l1ReviewedAt: new Date() },
       });
 
+      const dimensionCodes = sub.items
+        .map((item) => resolveFormItemDimension(item.item))
+        .filter((dimensionCode): dimensionCode is string => Boolean(dimensionCode));
+      const routes = await tx.dimensionReviewRoute.findMany({
+        where: { dimensionCode: { in: dimensionCodes } },
+      });
+      const routeByDimension = new Map(
+        routes.map((route) => [route.dimensionCode, route.departmentId]),
+      );
+
       for (const item of sub.items) {
-        if (
-          !shouldCreateOptionReviews({
-            isSystemFilled: !!(item as { isSystemFilled?: boolean }).isSystemFilled,
-          })
-        ) {
-          continue;
+        const dimensionCode = resolveFormItemDimension(item.item);
+        if (!dimensionCode) {
+          throw new ReviewError(`「${item.item.title}」缺少稳定评分点代码，无法进入二审`);
         }
-        const selected = normalizeSelectedOptions(
-          item.itemId,
-          (Array.isArray(item.item.scoreOptions) ? item.item.scoreOptions : []) as unknown as ScoreOptionLike[],
-          Array.isArray(item.selected) ? item.selected as any[] : [],
-        );
-        const selectedOptionIds = new Set(selected.map((row) => row.optionId));
+        const departmentId = routeByDimension.get(dimensionCode);
+        if (!departmentId) {
+          throw new ReviewError(`「${item.item.title}」尚未配置二审归属，请联系管理员在「二审归属配置」中补全`);
+        }
+        const optionId = dimensionReviewOptionId(dimensionCode);
         await tx.submissionOptionReview.deleteMany({
           where: {
             submissionItemId: item.id,
             status: { not: 'L2_APPROVED' },
-            optionId: { notIn: Array.from(selectedOptionIds) },
+            optionId: { not: optionId },
           },
         });
-        for (const row of selected) {
-          const assignment = item.item.optionReviewers.find((reviewer) => reviewer.optionId === row.optionId);
-          if (!assignment) throw new ReviewError(`「${item.item.title} / ${row.label}」尚未配置二级审核部门，请联系管理员在「申报表配置 → 二级子项分配」中补全`);
-          const existing = item.optionReviews.find((review) => review.optionId === row.optionId);
-          if (existing?.status === 'L2_APPROVED') continue;
-          await tx.submissionOptionReview.upsert({
-            where: { submissionItemId_optionId: { submissionItemId: item.id, optionId: row.optionId } },
-            update: {
-              label: row.label,
-              score: row.score,
-              count: row.count ?? null,
-              departmentId: assignment.departmentId,
-              status: 'PENDING_L2',
-              rejectReason: null,
-              reviewedBy: null,
-              reviewedAt: null,
-            },
-            create: {
-              submissionItemId: item.id,
-              optionId: row.optionId,
-              label: row.label,
-              score: row.score,
-              count: row.count ?? null,
-              departmentId: assignment.departmentId,
-            },
-          });
-        }
+        const existing = item.optionReviews.find((review) => review.optionId === optionId);
+        if (existing?.status === 'L2_APPROVED') continue;
+        await tx.submissionOptionReview.upsert({
+          where: { submissionItemId_optionId: { submissionItemId: item.id, optionId } },
+          update: {
+            label: item.item.title,
+            score: item.score,
+            count: null,
+            departmentId,
+            status: 'PENDING_L2',
+            rejectReason: null,
+            reviewedBy: null,
+            reviewedAt: null,
+          },
+          create: {
+            submissionItemId: item.id,
+            optionId,
+            label: item.item.title,
+            score: item.score,
+            count: null,
+            departmentId,
+          },
+        });
       }
 
       const items = await tx.submissionItem.findMany({
