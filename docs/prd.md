@@ -305,9 +305,10 @@ SUBMITTED → L1_REVIEWING → L1_APPROVED → L2_REVIEWING → APPROVED → 归
 
 ### 3.11 量化积分报告生成（脚本）
 
-- `scripts/generate-quantitative-report.ts`: 从缺陷库 Excel 生成「量化积分表积分报送表」格式 Excel
+- `scripts/generate-2026-quantitative-report.ts`: 按 2026 维度布局生成「量化积分表积分报送表」格式 Excel
 - 自动生成随机工号名册、gender、specialty 等个人信息
 - 按能级等级分页输出
+- （2024 版脚本与 `src/lib/quantitative-report.ts` / `ticket-execution.ts` 已在 2026 重构中移除）
 
 ---
 

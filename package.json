@@ -12,13 +12,13 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "npx tsx prisma/seed.ts",
     "test": "npx tsx --test src/lib/*.test.ts",
+    "e2e": "npx playwright test",
     "import:defect-facts": "npx tsx scripts/import-defect-facts-2024.ts",
     "import:facts-pipeline": "npx tsx scripts/import-facts-pipeline.ts",
     "compute:imported-scores": "npx tsx scripts/compute-imported-scores.ts",
     "export:imported-scores": "npx tsx scripts/export-imported-scores.ts",
     "seed:scoring-rules": "npx tsx scripts/seed-scoring-rules.ts",
-    "generate:quantitative-report": "npx tsx scripts/generate-quantitative-report.ts",
-    "generate:quantitative-report:2026": "npx tsx scripts/generate-2026-quantitative-report.ts",
+    "generate:quantitative-report": "npx tsx scripts/generate-2026-quantitative-report.ts",
     "migrate:2026": "npx tsx scripts/migrate-to-2026.ts",
     "clean:old-users": "npx tsx scripts/clean-old-users.ts",
     "seed:2026-fact-template": "npx tsx scripts/seed-2026-fact-template.ts"
@@ -41,6 +41,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/archiver": "^6.0.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.9.0",

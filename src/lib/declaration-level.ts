@@ -11,6 +11,12 @@
 export const DECLARATION_LEVELS = ['一级', '二级', '三级'] as const;
 export type DeclarationLevel = (typeof DECLARATION_LEVELS)[number];
 
+/**
+ * `DeclarationTier` 是 `DeclarationLevel` 的历史别名（早期模块用 "tier" 命名）。
+ * 保留别名以兼容现有引用；新代码请直接使用 `DeclarationLevel`。
+ */
+export type DeclarationTier = DeclarationLevel;
+
 /** 工作年限 → 能级等级 */
 export function computeLevel(workYears: number): DeclarationLevel {
   if (workYears < 5) return '三级';

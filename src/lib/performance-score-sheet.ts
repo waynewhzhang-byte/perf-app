@@ -9,7 +9,7 @@ import {
   basicDimensionFromCode,
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
-import type { DeclarationTier } from '@/lib/quantitative-report';
+import type { DeclarationTier } from '@/lib/declaration-level';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
@@ -17,7 +17,10 @@ import {
   type DimensionScoringStandard,
   type ScoringDataSource,
 } from '@/lib/scoring-standards';
-import { levelFromHireDate, parseMockDeclarationTier } from '@/lib/declaration-level';
+import {
+  levelFromHireDate,
+  parseMockDeclarationTier,
+} from '@/lib/declaration-level';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 

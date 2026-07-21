@@ -1,8 +1,11 @@
 import type { PrismaClient } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { computeLevel, DECLARATION_LEVELS, type DeclarationLevel } from './declaration-level';
-import { ALL_QUANTITATIVE_REPORT_UNITS, quantitativeReportUnitLabel } from './quantitative-report-contract';
-import type { QuantitativeReportRow } from './quantitative-report';
+import {
+  ALL_QUANTITATIVE_REPORT_UNITS,
+  quantitativeReportUnitLabel,
+  type QuantitativeReportRow,
+} from './quantitative-report-contract';
 
 const DIMENSIONS = {
   safety: 'performance.safety-contribution',

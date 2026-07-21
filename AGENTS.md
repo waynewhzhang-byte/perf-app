@@ -23,7 +23,7 @@ pnpm import:facts-pipeline           # full facts import pipeline
 pnpm compute:imported-scores         # compute scores from imported data
 pnpm export:imported-scores          # export computed scores to XLSX
 pnpm seed:scoring-rules              # seed scoring rule templates
-pnpm generate:quantitative-report    # generate quantitative report
+pnpm generate:quantitative-report    # generate quantitative report (2026 data layout)
 ```
 
 PostgreSQL and MinIO are required locally. Keep `.env` aligned with
