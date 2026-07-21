@@ -7,8 +7,10 @@ import type { PerformanceFactRole, Prisma, PrismaClient } from '@prisma/client';
 import type { DefectFactLine } from '@/lib/defect-governance';
 import type { TicketExecutionAggregate } from '@/lib/ticket-execution-import';
 import type { SafetyContributionFactLine } from '@/lib/safety-contribution';
-import { SAFETY_CONTRIBUTION_DIMENSION } from '@/lib/evaluation-dimensions';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/evaluation-dimensions';
+import {
+  SAFETY_CONTRIBUTION_DIMENSION,
+  TICKET_EXECUTION_DIMENSION,
+} from '@/lib/performance-dimension-registry';
 
 export interface PersistPerformanceFactsResult {
   deleted: number;

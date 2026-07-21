@@ -6,7 +6,33 @@
  * - dataSource=manual：无导入数据，由员工在申报表选择档次/次数计分
  * - dataSource=deduction：扣分项，从总分扣减
  */
-import type { EvaluationDimensionCode } from '@/lib/evaluation-dimensions';
+
+/**
+ * 绩效维度代码（dotted code）：一级 `basic|performance|worksite|special` + 二级标识。
+ * 这是模板/事实/审核三方共用的绑定键（见 ADR-0007）。
+ *
+ * 本类型是 `SCORING_STANDARDS` 的派生投影——若要新增/删除维度，改 `SCORING_STANDARDS`
+ * 一处即可，不要在派生模块里硬编码。
+ */
+export type EvaluationDimensionCode =
+  | 'basic.skill-level'
+  | 'basic.title-level'
+  | 'basic.performance-level'
+  | 'performance.safety-contribution'
+  | 'performance.technical-contribution'
+  | 'performance.technical-contribution.textbook'
+  | 'performance.technical-contribution.regulation'
+  | 'performance.technical-contribution.ticket-revision'
+  | 'performance.competition'
+  | 'performance.competition.competition'
+  | 'performance.competition.exam'
+  | 'performance.innovation'
+  | 'performance.innovation.award'
+  | 'performance.innovation.paper-patent'
+  | 'worksite.ticket-execution'
+  | 'worksite.defect-governance'
+  | 'special.violation-severe'
+  | 'special.violation-general';
 
 export type ScoringDataSource = 'fact' | 'manual' | 'deduction';
 

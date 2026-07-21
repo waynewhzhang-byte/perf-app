@@ -2,10 +2,8 @@ import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import { parseYear } from '@/lib/defect-governance';
 import { normalizePersonName } from '@/lib/employee-resolver';
-import {
-  SAFETY_CONTRIBUTION_DIMENSION,
-  type EvaluationDimensionCode,
-} from '@/lib/evaluation-dimensions';
+import { SAFETY_CONTRIBUTION_DIMENSION } from '@/lib/performance-dimension-registry';
+import { type EvaluationDimensionCode } from '@/lib/scoring-standards';
 import type { NameResolver } from '@/lib/defect-governance';
 
 export type SafetyContributionRole = 'FIRST_DISCOVERER' | 'CO_DISCOVERER';

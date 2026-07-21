@@ -1,12 +1,12 @@
 /**
  * 从《工作现场-两票执行》原始明细（操作票 + 工作票）聚合每人原始分。
- * 原始分在申报时按能级内最高分比例折算为满分 30（见 ticket-execution.ts）。
+ * 原始分在申报时按能级内最高分比例折算为满分 30。
  */
 import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import { normalizePersonName } from '@/lib/employee-resolver';
 import { parsePersonList } from '@/lib/defect-governance';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/evaluation-dimensions';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
 
 export interface TicketScoreBreakdown {
   /** 操作票角色项数（每行每角色每人计 1 项） */

@@ -18,12 +18,11 @@ pnpm prisma:seed                     # seed development data
 pnpm prisma:studio                   # Prisma Studio GUI
 
 # Data import/export pipeline scripts
-pnpm import:defect-facts             # import 2024 defect facts
-pnpm import:facts-pipeline           # full facts import pipeline
 pnpm compute:imported-scores         # compute scores from imported data
 pnpm export:imported-scores          # export computed scores to XLSX
 pnpm seed:scoring-rules              # seed scoring rule templates
 pnpm generate:quantitative-report    # generate quantitative report (2026 data layout)
+pnpm migrate:2026                    # 2026 annual data migration (multi-step)
 ```
 
 PostgreSQL and MinIO are required locally. Keep `.env` aligned with

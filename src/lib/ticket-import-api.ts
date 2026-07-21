@@ -2,12 +2,13 @@
  * 两票导入 API 共用：名册解析 + 明细聚合
  */
 import type { PrismaClient } from '@prisma/client';
-import { loadTicketPrices } from '@/lib/import-pipeline';
 import { createRosterResolverFromUsers } from '@/lib/roster-resolver';
+import { defaultScoringRuleConfigs } from '@/lib/scoring-standards';
 import {
   aggregateTicketExecutionRows,
   DEFAULT_TICKET_PRICES,
   type TicketExecutionParseResult,
+  type TicketPriceConfig,
 } from '@/lib/ticket-execution-import';
 
 export const TICKET_SHEET_NAMES = ['操作票', '工作票'] as const;
@@ -18,6 +19,43 @@ export interface TicketImportPayload {
   operationRows: Record<string, string>[];
   workRows: Record<string, string>[];
   unitFilter?: string;
+}
+
+/**
+ * 读两票单价表（DB 优先，回退默认种子）。
+ *
+ * 历史上此函数与 `loadRuleConfig` / `loadDefectScoreMatrix` / `loadSafetyScoreConfig`
+ * 一起住在 src/lib/import-pipeline.ts；2024 流水线整体移除后，仅两票导入 API 还需要它，
+ * 故就近内联（单一 adapter = 假 seam，不值得为它保留独立模块）。
+ */
+async function loadTicketPrices(prisma: PrismaClient): Promise<TicketPriceConfig> {
+  const row = await prisma.scoringRule.findUnique({
+    where: { dimensionCode: 'worksite.ticket-execution' },
+  });
+  let cfg: Record<string, unknown> = {};
+  if (row?.config) {
+    cfg = row.config as Record<string, unknown>;
+  } else {
+    const seed = defaultScoringRuleConfigs().find(
+      (c) => c.dimensionCode === 'worksite.ticket-execution',
+    );
+    cfg = (seed?.config as Record<string, unknown>) ?? {};
+  }
+  const ticketPrices =
+    (cfg.ticketPrices as {
+      workLeader?: Record<string, number>;
+      workPermitter?: Record<string, number>;
+      workMember?: Record<string, number>;
+    } | undefined) ?? undefined;
+  const operationStepPrice =
+    (cfg.operationStepPrice as number | undefined) ??
+    DEFAULT_TICKET_PRICES.operationStepPrice;
+  return {
+    operationStepPrice,
+    workLeader: ticketPrices?.workLeader ?? DEFAULT_TICKET_PRICES.workLeader,
+    workPermitter: ticketPrices?.workPermitter ?? DEFAULT_TICKET_PRICES.workPermitter,
+    workMember: ticketPrices?.workMember ?? DEFAULT_TICKET_PRICES.workMember,
+  };
 }
 
 export async function aggregateTicketsForImport(
