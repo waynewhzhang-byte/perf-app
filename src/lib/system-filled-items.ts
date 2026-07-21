@@ -25,7 +25,8 @@ export function resolveFormItemDimension(item: {
 
 export function isFactDataSourceDimension(code: string | null | undefined): boolean {
   if (!code) return false;
-  return SCORING_STANDARD_BY_CODE[code]?.dataSource === 'fact';
+  const source = SCORING_STANDARD_BY_CODE[code]?.dataSource;
+  return source === 'fact' || source === 'deduction';
 }
 
 export interface SystemFilledItemPayload {
@@ -88,13 +89,6 @@ export function isReviewSkippedSystemItem(item: {
   confirmationStatus?: ConfirmationStatus | null;
 }): boolean {
   return item.isSystemFilled && item.confirmationStatus === 'CONFIRMED';
-}
-
-/** 系统填充项不参与 L2 子项分配审核 */
-export function shouldCreateOptionReviews(item: {
-  isSystemFilled: boolean;
-}): boolean {
-  return !item.isSystemFilled;
 }
 
 export function scoreSheetToItemScores(

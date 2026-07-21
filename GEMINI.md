@@ -2,6 +2,10 @@
 
 Enterprise employee performance declaration system with dual-portal access, structured hierarchical reviews, and automated performance archival.
 
+> **Agent tool-usage conventions** (e.g. how/when to use codegraph) are the
+> canonical source in [`AGENTS.md`](./AGENTS.md). Refer there instead of
+> duplicating those rules here; edit only `AGENTS.md` when they change.
+
 ## Project Overview
 
 - **Framework:** Next.js 14 (App Router)

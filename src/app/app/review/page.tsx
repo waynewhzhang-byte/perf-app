@@ -2,7 +2,6 @@
 // 审核工作台
 import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 
 interface Att { id: string; filename: string; mimeType?: string | null }
@@ -124,7 +123,6 @@ export default function ReviewPage() {
     if (!active) return;
     const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
     const pendingOptions = pendingOptionReviews(active);
-    if (level === 1 && pendingItems.length === 0) { alert('当前没有待审申报项'); return; }
     if (level === 2 && pendingOptions.length === 0) { alert('当前没有属于您部门的待审子项'); return; }
     const decs = level === 1
       ? pendingItems.map((it) => {
@@ -160,14 +158,18 @@ export default function ReviewPage() {
     const missingNote = decs.find((d) => d.action === 'REJECT' && !d.note?.trim());
     if (missingNote) { alert('驳回的项必须填写原因'); return; }
     setBusy(true);
-    const r = await fetch('/api/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: active.id, decisions: decs }),
-    });
-    setBusy(false);
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
-    setDecisions({}); load();
+    try {
+      const r = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissionId: active.id, decisions: decs }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
+      setDecisions({});
+      await load();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const reviewTimeline = useMemo(() => {
@@ -216,17 +218,14 @@ export default function ReviewPage() {
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <div className="flex items-center justify-between">
         <div>
-          <Link href="/app" className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-700 cursor-pointer">
-            ← 返回
-          </Link>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             审核工作台
             <span className="ml-2 text-sm font-normal text-slate-400">
               （{level === 2 ? '二级 / 总公司' : '一级 / 工区'}）
             </span>
           </h1>
         </div>
-        <LogoutButton />
+        <LogoutButton isAdmin />
       </div>
 
       <div className="mt-4 inline-flex gap-1 rounded-lg bg-slate-100 p-1">

@@ -63,7 +63,7 @@ export async function POST(req: Request) {
 
   await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await hashPassword(newPassword) },
+    data: { passwordHash: await hashPassword(newPassword), tokenVersion: { increment: 1 } },
   });
   if (vc) {
     await prisma.verifyCode.update({ where: { id: vc.id }, data: { consumed: true } });

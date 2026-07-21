@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AdminPageActions } from '@/components/admin-page-actions';
 import { SectionRadarPanel } from '@/components/section-radar-panel';
+import type { ReviewProgress } from '@/lib/review-progress';
 
 interface BranchFilter { id: string; name: string }
+interface TemplateFilter { id: string; title: string; year: number }
 interface Stats { total: number; draft: number; preReviewRejected: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
 interface SubUser { id: string; fullName: string; contact: string; employeeNo?: string | null; branch?: { id: string; name: string } | null }
 interface SubTemplate { id: string; title: string; year: number }
@@ -46,47 +48,23 @@ export default function ReviewAuditPage() {
   const [submissions, setSubmissions] = useState<AuditSubmission[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [branches, setBranches] = useState<BranchFilter[]>([]);
+  const [templates, setTemplates] = useState<TemplateFilter[]>([]);
   const [branchId, setBranchId] = useState('all');
+  const [templateId, setTemplateId] = useState('all');
   const [year, setYear] = useState('all');
   const [status, setStatus] = useState('all');
+  const [progress, setProgress] = useState<ReviewProgress | null>(null);
   const [detail, setDetail] = useState<AuditDetail | null>(null);
   const [record, setRecord] = useState<AuditRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [overrideItemId, setOverrideItemId] = useState<string | null>(null);
-  const [overrideScore, setOverrideScore] = useState('');
-  const [overrideReason, setOverrideReason] = useState('');
-  const [overrideBusy, setOverrideBusy] = useState(false);
-
-  const submitOverride = async () => {
-    if (!overrideItemId || !overrideScore.trim() || !overrideReason.trim()) {
-      alert('请填写覆盖分数和原因');
-      return;
-    }
-    const score = parseFloat(overrideScore);
-    if (isNaN(score) || score < 0) { alert('请输入有效的分数'); return; }
-    setOverrideBusy(true);
-    try {
-      const r = await fetch('/api/admin/override', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissionItemId: overrideItemId, overrideScore: score, overrideReason: overrideReason.trim() }),
-      });
-      const d = await r.json();
-      if (!r.ok) { alert(d.error || '覆盖失败'); return; }
-      alert('覆盖成功');
-      setOverrideItemId(null); setOverrideScore(''); setOverrideReason('');
-      // 刷新详情
-      if (detail) openDetail(detail.id);
-    } finally { setOverrideBusy(false); }
-  };
-
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams();
       if (branchId !== 'all') params.set('branchId', branchId);
+      if (templateId !== 'all') params.set('templateId', templateId);
       if (year !== 'all') params.set('year', year);
       if (status !== 'all') params.set('status', status);
       const r = await fetch(`/api/admin/review-audit?${params}`);
@@ -96,9 +74,11 @@ export default function ReviewAuditPage() {
       setSubmissions(d.submissions ?? []);
       setStats(d.stats ?? null);
       setBranches(d.branches ?? []);
+      setTemplates(d.templates ?? []);
+      setProgress(d.progress ?? null);
     } catch { setError('网络错误'); }
     finally { setLoading(false); }
-  }, [branchId, year, status]);
+  }, [branchId, templateId, year, status]);
 
   useEffect(() => { loadList(); }, [loadList]);
 
@@ -147,6 +127,13 @@ export default function ReviewAuditPage() {
       {/* 筛选栏 */}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-white p-3">
         <label className="text-xs text-slate-500">
+          申报表
+          <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
+            <option value="all">最新申报表</option>
+            {templates.map((template) => <option key={template.id} value={template.id}>{template.title}（{template.year}）</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-500">
           工区
           <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
             <option value="all">全部</option>
@@ -178,6 +165,42 @@ export default function ReviewAuditPage() {
       </div>
 
       {error && <p className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+      {progress && (
+        <section className={`mt-4 rounded-xl border p-5 ${
+          progress.complete ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'
+        }`}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-slate-900">当前审核进度</h2>
+              <p className="mt-1 text-xs text-slate-600">{progress.templateTitle}（{progress.year}）</p>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              progress.complete ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+            }`}>
+              {progress.complete ? '全员审核完成' : '存在审核卡点'}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <ProgressMetric label="应审核员工" value={progress.totalEmployees} />
+            <ProgressMetric label="已提交" value={progress.submittedEmployees} />
+            <ProgressMetric label="终审通过" value={progress.approvedEmployees} />
+            <ProgressMetric label="待完成" value={Math.max(progress.totalEmployees - progress.approvedEmployees, 0)} />
+          </div>
+          {!progress.complete && progress.blockers.length > 0 && (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-white/70 p-3">
+              <p className="text-xs font-semibold text-amber-800">一级 / 二级审核卡点</p>
+              <ul className="mt-2 grid gap-1 text-xs text-amber-900 sm:grid-cols-2">
+                {progress.blockers.map((blocker) => (
+                  <li key={`${blocker.level}-${blocker.code}-${blocker.scope ?? 'all'}`}>
+                    {blocker.level === 'L1' ? '一级' : '二级'} · {blocker.label}{blocker.scope ? `（${blocker.scope}）` : ''}：{blocker.count} 项
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* 统计卡片 */}
       {stats && (
@@ -322,58 +345,13 @@ export default function ReviewAuditPage() {
                                     {it.attachments.length > 0 && (
                                       <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
                                     )}
-                                    {/* 管理员覆盖表单 */}
-                                    {it.disputeL2Result === 'APPROVED' && it.overrideScore == null && (
-                                      <div className="mt-2 rounded border border-orange-200 bg-orange-50 p-3">
-                                        <p className="text-xs font-semibold text-orange-700 mb-2">申诉已确认有效，可覆盖分数</p>
-                                        {overrideItemId === it.id ? (
-                                          <div className="space-y-2">
-                                            <div>
-                                              <label className="text-xs font-medium text-orange-700">覆盖分数（当前 {Number(it.score).toFixed(1)} 分）</label>
-                                              <input
-                                                type="number"
-                                                step="0.1"
-                                                min="0"
-                                                value={overrideScore}
-                                                onChange={(e) => setOverrideScore(e.target.value)}
-                                                className="mt-0.5 w-32 rounded border border-orange-300 px-2 py-1 text-sm"
-                                                placeholder="新分数"
-                                              />
-                                            </div>
-                                            <div>
-                                              <label className="text-xs font-medium text-orange-700">覆盖原因</label>
-                                              <input
-                                                value={overrideReason}
-                                                onChange={(e) => setOverrideReason(e.target.value)}
-                                                className="mt-0.5 w-full rounded border border-orange-300 px-2 py-1 text-sm"
-                                                placeholder="请填写覆盖原因（审计用）"
-                                              />
-                                            </div>
-                                            <div className="flex gap-2">
-                                              <button
-                                                onClick={submitOverride}
-                                                disabled={overrideBusy}
-                                                className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50"
-                                              >
-                                                {overrideBusy ? '提交中…' : '确认覆盖'}
-                                              </button>
-                                              <button
-                                                onClick={() => { setOverrideItemId(null); setOverrideScore(''); setOverrideReason(''); }}
-                                                className="rounded border border-orange-300 px-3 py-1 text-xs text-orange-700 hover:bg-orange-100"
-                                              >
-                                                取消
-                                              </button>
-                                            </div>
-                                          </div>
-                                        ) : (
-                                          <button
-                                            onClick={() => { setOverrideItemId(it.id); setOverrideScore(''); setOverrideReason(''); }}
-                                            className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
-                                          >
-                                            覆盖分数
-                                          </button>
-                                        )}
-                                      </div>
+                                    {it.disputeL2Result === 'APPROVED' && (
+                                      <Link
+                                        href={`/admin/fact-corrections/${detail!.id}`}
+                                        className="mt-2 inline-block rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
+                                      >
+                                        查看并修正事实数据
+                                      </Link>
                                     )}
                                   </div>
                                   <span className="ml-3 shrink-0 rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
@@ -447,6 +425,15 @@ function StatCard({ label, value, color }: { label: string; value: number; color
     <div className="rounded-lg border bg-white p-3 text-center">
       <p className={`text-xl font-bold ${color}`}>{value}</p>
       <p className="text-xs text-slate-500">{label}</p>
+    </div>
+  );
+}
+
+function ProgressMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{value}</p>
     </div>
   );
 }

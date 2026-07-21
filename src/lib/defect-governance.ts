@@ -1,7 +1,5 @@
-import {
-  DEFECT_LIBRARY_DIMENSION,
-  type EvaluationDimensionCode,
-} from '@/lib/evaluation-dimensions';
+import { DEFECT_LIBRARY_DIMENSION } from '@/lib/performance-dimension-registry';
+import { type EvaluationDimensionCode } from '@/lib/scoring-standards';
 
 export type DefectLevel = '危急' | '严重' | '一般';
 

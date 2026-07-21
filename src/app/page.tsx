@@ -40,8 +40,8 @@ export default function HomePage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </div>
-            <h2 className="text-lg font-semibold">管理员入口</h2>
-            <p className="mt-1 text-sm text-slate-500">组织架构、表单配置、审核分配、数据导出</p>
+            <h2 className="text-lg font-semibold">管理与审核入口</h2>
+            <p className="mt-1 text-sm text-slate-500">管理员配置系统；一级、二级审核员处理审核任务</p>
           </Link>
         </div>
       </div>

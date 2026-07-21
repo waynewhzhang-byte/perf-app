@@ -20,7 +20,7 @@ const tiers = {
 };
 
 describe('parseBasicQualityFile', () => {
-  it.skipIf(!existsSync(XLSX))('11401630：技师3 + 初级2 + 无考核4', () => {
+  it('11401630：技师3 + 初级2 + 无考核4', { skip: !existsSync(XLSX) }, () => {
     const parsed = parseBasicQualityFile(XLSX);
     const emp = parsed.employees.find((e) => e.employeeNo === '11401630');
     assert.ok(emp);
@@ -34,7 +34,7 @@ describe('parseBasicQualityFile', () => {
     assert.equal(byDim.PERFORMANCE_LEVEL.score, 4);
   });
 
-  it.skipIf(!existsSync(XLSX))('11425664：三年 3B → 4.5', () => {
+  it('11425664：三年 3B → 4.5', { skip: !existsSync(XLSX) }, () => {
     const parsed = parseBasicQualityFile(XLSX);
     const assess = parsed.assessments.get('11425664');
     assert.ok(assess);

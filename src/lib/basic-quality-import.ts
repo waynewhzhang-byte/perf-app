@@ -17,6 +17,7 @@ import {
   DEFAULT_PERFORMANCE_TIERS,
 } from '@/lib/basic-quality';
 import { parseOrgFromExcelRow, type OrgBootstrapPlan, buildOrgBootstrapPlan } from '@/lib/org-mapping';
+import { hashPassword } from '@/lib/password';
 
 /**
  * 基本素质三维度档位表（来自 ScoringRule.config.tiers）。
@@ -321,7 +322,7 @@ export async function importBasicQualityData(
       const created = await prisma.user.create({
         data: {
           contact: emp.employeeNo,
-          passwordHash: '',
+          passwordHash: await hashPassword(emp.employeeNo),
           ...userData,
         },
       });

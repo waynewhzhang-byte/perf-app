@@ -3,6 +3,7 @@ export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
+import { getReviewProgress } from '@/lib/review-progress';
 
 export async function GET(req: Request) {
   try {
@@ -14,6 +15,7 @@ export async function GET(req: Request) {
     const branchId = url.searchParams.get('branchId');
     const year = url.searchParams.get('year');
     const status = url.searchParams.get('status');
+    const templateId = url.searchParams.get('templateId');
 
     // 详情模式：查看单个申报的完整报告
     if (submissionId) {
@@ -54,6 +56,7 @@ export async function GET(req: Request) {
     // 列表模式：分页查询
     const where: any = {};
     if (branchId && branchId !== 'all') where.branchId = branchId;
+    if (templateId && templateId !== 'all') where.templateId = templateId;
     if (year && year !== 'all') {
       where.template = { year: parseInt(year) };
     }
@@ -94,7 +97,28 @@ export async function GET(req: Request) {
       orderBy: { createdAt: 'asc' },
     });
 
-    return NextResponse.json({ success: true, submissions, stats, branches });
+    const templates = await prisma.formTemplate.findMany({
+      where: {
+        status: { in: ['PUBLISHED', 'ARCHIVED'] },
+        ...(year && year !== 'all' ? { year: parseInt(year, 10) } : {}),
+      },
+      select: { id: true, title: true, year: true },
+      orderBy: [{ year: 'desc' }, { title: 'asc' }],
+    });
+    const progressTemplate = templates.find((template) => !templateId || templateId === 'all' || template.id === templateId) ?? null;
+    const progress = progressTemplate
+      ? await getReviewProgress(progressTemplate.id, { branchId: branchId && branchId !== 'all' ? branchId : undefined })
+      : null;
+
+    return NextResponse.json({
+      success: true,
+      submissions,
+      stats,
+      branches,
+      templates,
+      progressTemplateId: progressTemplate?.id ?? null,
+      progress,
+    });
   } catch (e) {
     console.error('GET /api/admin/review-audit:', e);
     return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });

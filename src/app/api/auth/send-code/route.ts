@@ -9,12 +9,13 @@ import { sendVerifyCode, getActiveChannel } from '@/lib/notify';
 import { isRateLimited, recordAttempt, extractIP } from '@/lib/rate-limit';
 
 const Schema = z.object({
-  target: z.string().min(3).max(255),
+  target: z.string().min(1).max(255),
   purpose: z.enum(['REGISTER', 'RESET_PASSWORD', 'LOGIN']),
 });
 
 export async function POST(req: Request) {
   try {
+    const isStaff = new URL(req.url).searchParams.get('staff') === '1';
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) {
       return NextResponse.json({ error: '参数无效' }, { status: 400 });
@@ -30,6 +31,18 @@ export async function POST(req: Request) {
     }
     if (purpose === 'LOGIN' && !authCfg.loginRequiresVerification) {
       return NextResponse.json({ error: '当前系统未开启登录验证码' }, { status: 400 });
+    }
+
+    let deliveryTarget = target;
+    if (purpose === 'LOGIN' && !isStaff) {
+      const user = await prisma.user.findUnique({
+        where: { employeeNo: target },
+        select: { contact: true },
+      });
+      if (!user) {
+        return NextResponse.json({ error: '工号不存在' }, { status: 404 });
+      }
+      deliveryTarget = user.contact;
     }
 
     // --- Rate limiting ---
@@ -51,7 +64,7 @@ export async function POST(req: Request) {
 
     // 60s 限频 (DB-backed, survives multi-instance)
     const recent = await prisma.verifyCode.findFirst({
-      where: { target, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
+      where: { target: deliveryTarget, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
     });
     if (recent) {
       return NextResponse.json({ error: '请求过于频繁，请 60 秒后再试' }, { status: 429 });
@@ -61,7 +74,7 @@ export async function POST(req: Request) {
     const code = String(randomInt(100000, 1000000));
     await prisma.verifyCode.create({
       data: {
-        target,
+        target: deliveryTarget,
         code,
         purpose,
         expiresAt: new Date(Date.now() + 5 * 60_000),
@@ -70,7 +83,7 @@ export async function POST(req: Request) {
 
     try {
       await sendVerifyCode(
-        target,
+        deliveryTarget,
         code,
         purpose === 'REGISTER' ? 'register' : purpose === 'RESET_PASSWORD' ? 'reset' : 'login',
       );

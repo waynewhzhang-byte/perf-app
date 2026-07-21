@@ -6,7 +6,33 @@
  * - dataSource=manual：无导入数据，由员工在申报表选择档次/次数计分
  * - dataSource=deduction：扣分项，从总分扣减
  */
-import type { EvaluationDimensionCode } from '@/lib/evaluation-dimensions';
+
+/**
+ * 绩效维度代码（dotted code）：一级 `basic|performance|worksite|special` + 二级标识。
+ * 这是模板/事实/审核三方共用的绑定键（见 ADR-0007）。
+ *
+ * 本类型是 `SCORING_STANDARDS` 的派生投影——若要新增/删除维度，改 `SCORING_STANDARDS`
+ * 一处即可，不要在派生模块里硬编码。
+ */
+export type EvaluationDimensionCode =
+  | 'basic.skill-level'
+  | 'basic.title-level'
+  | 'basic.performance-level'
+  | 'performance.safety-contribution'
+  | 'performance.technical-contribution'
+  | 'performance.technical-contribution.textbook'
+  | 'performance.technical-contribution.regulation'
+  | 'performance.technical-contribution.ticket-revision'
+  | 'performance.competition'
+  | 'performance.competition.competition'
+  | 'performance.competition.exam'
+  | 'performance.innovation'
+  | 'performance.innovation.award'
+  | 'performance.innovation.paper-patent'
+  | 'worksite.ticket-execution'
+  | 'worksite.defect-governance'
+  | 'special.violation-severe'
+  | 'special.violation-general';
 
 export type ScoringDataSource = 'fact' | 'manual' | 'deduction';
 
@@ -35,162 +61,96 @@ export interface DimensionScoringStandard {
   notes?: string;
 }
 
-/** 完整评分标准表（与 Excel 序号 1–4 对齐） */
+/** 完整评分标准表（与《2026年能级评价量化积分表》完全对齐） */
 export const SCORING_STANDARDS: DimensionScoringStandard[] = [
   // ── 1. 基本素质 14 ──
   {
-    code: 'basic.skill-level',
-    title: '技能等级',
-    sectionCode: 'basic',
-    sectionTitle: '基本素质',
-    maxScore: 4,
-    dataSource: 'fact',
-    ruleType: 'BASIC_TIER',
+    code: 'basic.skill-level', title: '技能等级',
+    sectionCode: 'basic', sectionTitle: '基本素质', maxScore: 4,
+    dataSource: 'fact', ruleType: 'BASIC_TIER',
     ownerDepartment: '组织部',
     scoringSummary: '高级技师及以上4；技师3；高级工2；其他1',
-    referenceFile: '《基本素质信息》.xlsx',
+    referenceFile: '1.能级评价员工花名册.xlsx',
   },
   {
-    code: 'basic.title-level',
-    title: '职称等级',
-    sectionCode: 'basic',
-    sectionTitle: '基本素质',
-    maxScore: 4,
-    dataSource: 'fact',
-    ruleType: 'BASIC_TIER',
+    code: 'basic.title-level', title: '职称等级',
+    sectionCode: 'basic', sectionTitle: '基本素质', maxScore: 4,
+    dataSource: 'fact', ruleType: 'BASIC_TIER',
     ownerDepartment: '组织部',
     scoringSummary: '高级工程师及以上4；工程师3；助理工程师2',
-    referenceFile: '《基本素质信息》.xlsx',
+    referenceFile: '1.能级评价员工花名册.xlsx',
   },
   {
-    code: 'basic.performance-level',
-    title: '绩效等级',
-    sectionCode: 'basic',
-    sectionTitle: '基本素质',
-    maxScore: 6,
-    dataSource: 'fact',
-    ruleType: 'BASIC_TIER',
+    code: 'basic.performance-level', title: '绩效等级',
+    sectionCode: 'basic', sectionTitle: '基本素质', maxScore: 6,
+    dataSource: 'fact', ruleType: 'BASIC_TIER',
     ownerDepartment: '组织部',
-    scoringSummary: '3A→6；2A1B→5.5；1A2B→5；3B→4.5；其他→4',
-    referenceFile: '《基本素质信息》.xlsx',
+    scoringSummary: '3A→6；2A1B→5.5；1A2B→5；3B→4.5；含C或其他→4',
+    referenceFile: '2.人员考核结果.xlsx',
   },
   // ── 2. 工作业绩 44 ──
   {
-    code: 'performance.safety-contribution',
-    title: '安全贡献',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 12,
-    dataSource: 'fact',
-    ruleType: 'SHARE',
-    engineRuleType: 'SHARE',
+    code: 'performance.safety-contribution', title: '安全贡献',
+    sectionCode: 'performance', sectionTitle: '工作业绩', maxScore: 12,
+    dataSource: 'fact', ruleType: 'SHARE', engineRuleType: 'SHARE',
     ownerDepartment: '安监部',
-    scoringSummary: '第一发现人3分/次；其他发现人合计3分/次均分（×N处故障）',
-    referenceFile: '2024年突出贡献奖明细表.xlsx',
+    scoringSummary: '第一发现人3分/次；其他发现人合计3分/次均分',
+    referenceFile: '3.突出贡献奖人员汇总.xlsx',
   },
   {
-    code: 'performance.technical-contribution.standard',
-    title: '技术贡献（国标行标企标）',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 12,
-    dataSource: 'manual',
-    ruleType: 'MANUAL_TIERS',
+    code: 'performance.technical-contribution', title: '技术贡献',
+    sectionCode: 'performance', sectionTitle: '工作业绩', maxScore: 12,
+    dataSource: 'fact', ruleType: 'MANUAL_COUNTED',
     ownerDepartment: '组织部/安监部/运检部',
-    scoringSummary: '国标行标4；地标企标3；规程编制2（分/项）',
+    scoringSummary: '教材/题库/课件3分/次；运规/两票修订2分/项；封顶12',
+    referenceFile: '4-6.技术贡献三文件.xlsx',
   },
   {
-    code: 'performance.competition.competition',
-    title: '竞赛比武（竞赛）',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 10,
-    dataSource: 'manual',
-    ruleType: 'MANUAL_TIERS',
+    code: 'performance.competition', title: '竞赛比武',
+    sectionCode: 'performance', sectionTitle: '工作业绩', maxScore: 10,
+    dataSource: 'fact', ruleType: 'MANUAL_TIERS',
     ownerDepartment: '组织部',
-    scoringSummary: '国网竞赛10；省公司竞赛5；知识竞赛国网5/省2',
+    scoringSummary: '国网竞赛10分/次；省公司竞赛5分/次',
+    referenceFile: '7.竞赛比武.xlsx',
   },
   {
-    code: 'performance.competition.exam',
-    title: '竞赛比武（调考）',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 10,
-    dataSource: 'manual',
-    ruleType: 'MANUAL_TIERS',
-    ownerDepartment: '组织部',
-    scoringSummary: '国网调考5；省公司调考2',
-  },
-  {
-    code: 'performance.innovation.award',
-    title: '发明创新（奖项）',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 10,
-    dataSource: 'manual',
-    ruleType: 'MANUAL_TIERS',
+    code: 'performance.innovation', title: '发明创新',
+    sectionCode: 'performance', sectionTitle: '工作业绩', maxScore: 10,
+    dataSource: 'fact', ruleType: 'MANUAL_TIERS',
     ownerDepartment: '各部门',
-    scoringSummary: '国网管理/科技/QC/五小 4–5；省公司 2–3',
-  },
-  {
-    code: 'performance.innovation.paper-patent',
-    title: '发明创新（论文专利）',
-    sectionCode: 'performance',
-    sectionTitle: '工作业绩',
-    maxScore: 10,
-    dataSource: 'manual',
-    ruleType: 'MANUAL_TIERS',
-    ownerDepartment: '各部门',
-    scoringSummary: '论文/专利前3作者：4/3/2分',
+    scoringSummary: '管理/科技创新国网5省3；QC/五小国网4省2；发明专利4/3/2/1',
+    referenceFile: '8-9.创新奖项+发明专利.xlsx',
   },
   // ── 3. 工作现场 42 ──
   {
-    code: 'worksite.ticket-execution',
-    title: '两票执行',
-    sectionCode: 'worksite',
-    sectionTitle: '工作现场',
-    maxScore: 30,
-    dataSource: 'fact',
-    ruleType: 'NORMALIZE',
-    engineRuleType: 'NORMALIZE',
+    code: 'worksite.ticket-execution', title: '两票执行',
+    sectionCode: 'worksite', sectionTitle: '工作现场', maxScore: 30,
+    dataSource: 'fact', ruleType: 'NORMALIZE', engineRuleType: 'NORMALIZE',
     ownerDepartment: '安监部',
-    scoringSummary: '操作票0.01分/项（按行）；工作票按负责人/许可人计分；导入存原始分，汇总阶段折算',
-    referenceFile: '《工作现场-两票执行》.xlsx',
+    scoringSummary: '操作票0.01分/项；工作票按负责人/许可人/班成员计分；按能级归一化',
+    referenceFile: '10-13.两票数据汇总.xlsx',
   },
   {
-    code: 'worksite.defect-governance',
-    title: '缺陷治理',
-    sectionCode: 'worksite',
-    sectionTitle: '工作现场',
-    maxScore: 12,
-    dataSource: 'fact',
-    ruleType: 'MATRIX_SUM',
-    engineRuleType: 'MATRIX',
+    code: 'worksite.defect-governance', title: '缺陷治理',
+    sectionCode: 'worksite', sectionTitle: '工作现场', maxScore: 12,
+    dataSource: 'fact', ruleType: 'MATRIX_SUM', engineRuleType: 'MATRIX',
     ownerDepartment: '运检部',
     scoringSummary: '危急3/1；严重1/0.5；一般0.5；同人兼发现处理取高；封顶12',
-    referenceFile: '《工作现场-缺陷治理》.xlsx',
+    referenceFile: '14.问题清单数据2025年.xlsx',
     notes: '不可与安全贡献重复加分',
   },
   // ── 4. 特殊事项 ──
   {
-    code: 'special.violation-severe',
-    title: '严重违章扣分',
-    sectionCode: 'special',
-    sectionTitle: '特殊事项',
-    maxScore: 0,
-    dataSource: 'deduction',
-    ruleType: 'DEDUCTION',
+    code: 'special.violation-severe', title: '严重违章扣分',
+    sectionCode: 'special', sectionTitle: '特殊事项', maxScore: 0,
+    dataSource: 'deduction', ruleType: 'DEDUCTION',
     ownerDepartment: '安监部',
     scoringSummary: '直接责任人-10/次；连带-5/次',
   },
   {
-    code: 'special.violation-general',
-    title: '一般违章扣分',
-    sectionCode: 'special',
-    sectionTitle: '特殊事项',
-    maxScore: 0,
-    dataSource: 'deduction',
-    ruleType: 'DEDUCTION',
+    code: 'special.violation-general', title: '一般违章扣分',
+    sectionCode: 'special', sectionTitle: '特殊事项', maxScore: 0,
+    dataSource: 'deduction', ruleType: 'DEDUCTION',
     ownerDepartment: '安监部',
     scoringSummary: '直接责任人-5/次；连带-2.5/次',
   },
@@ -204,13 +164,37 @@ export function getScoringStandard(code: string): DimensionScoringStandard | und
   return SCORING_STANDARD_BY_CODE[code];
 }
 
+/**
+ * 模板二级项与导入事实的对应关系。技术、竞赛、创新在原始台账中按更细的
+ * 事实类型存储，但员工表单只展示 Excel 定义的二级评分项，因此读取时必须聚合。
+ */
+export function sourceDimensionCodes(code: string): string[] {
+  switch (code) {
+    case 'performance.technical-contribution':
+      return [
+        'performance.technical-contribution.textbook',
+        'performance.technical-contribution.regulation',
+        'performance.technical-contribution.ticket-revision',
+      ];
+    case 'performance.competition':
+      return ['performance.competition.competition', 'performance.competition.exam'];
+    case 'performance.innovation':
+      return ['performance.innovation.award', 'performance.innovation.paper-patent'];
+    default:
+      return [code];
+  }
+}
+
 /** 申报项标题 → dimensionCode（模板未绑 dimensionCode 时的兜底） */
 export const TITLE_DIMENSION_HINTS: { pattern: RegExp; code: EvaluationDimensionCode }[] = [
   { pattern: /技能等级/, code: 'basic.skill-level' },
   { pattern: /职称等级/, code: 'basic.title-level' },
   { pattern: /绩效等级/, code: 'basic.performance-level' },
   { pattern: /安全贡献/, code: 'performance.safety-contribution' },
-  { pattern: /技术贡献/, code: 'performance.technical-contribution.standard' },
+  { pattern: /教材|题库|课件/, code: 'performance.technical-contribution.textbook' },
+  { pattern: /运规|规程编写|规程会审/, code: 'performance.technical-contribution.regulation' },
+  { pattern: /两票.*修订|两票.*审查/, code: 'performance.technical-contribution.ticket-revision' },
+  { pattern: /技术贡献/, code: 'performance.technical-contribution.textbook' }, // fallback
   { pattern: /竞赛比武|竞赛/, code: 'performance.competition.competition' },
   { pattern: /调考/, code: 'performance.competition.exam' },
   { pattern: /发明创新|创新/, code: 'performance.innovation.award' },
@@ -273,6 +257,28 @@ export function defaultScoringRuleConfigs(): Array<{
         },
         groupBy: 'incidentId',
       },
+    },
+    // ── 技术贡献 — COUNTED（按人次计数 × 单次分值）──
+    {
+      dimensionCode: 'performance.technical-contribution.textbook',
+      dimensionName: '技术贡献（教材/题库/课件）',
+      ruleType: 'BASIC_TIER',
+      cap: 12,
+      config: { tiers: {}, defaultScore: 3, countMode: true },
+    },
+    {
+      dimensionCode: 'performance.technical-contribution.regulation',
+      dimensionName: '技术贡献（运规编写/会审）',
+      ruleType: 'BASIC_TIER',
+      cap: 12,
+      config: { tiers: {}, defaultScore: 2, countMode: true },
+    },
+    {
+      dimensionCode: 'performance.technical-contribution.ticket-revision',
+      dimensionName: '技术贡献（两票修订/审查）',
+      ruleType: 'BASIC_TIER',
+      cap: 12,
+      config: { tiers: {}, defaultScore: 2, countMode: true },
     },
     // ── 3. 工作现场（42）──
     {

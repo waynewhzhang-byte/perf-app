@@ -49,11 +49,13 @@ export default async function AdminHome() {
         <NavCard href="/admin/organization" title="组织架构" desc="工区 / 部门 / 申报字典" />
         <NavCard href="/admin/scoring" title="绩效算法配置" desc="评分规则与导入维度算法设置" />
         <NavCard href="/admin/import" title="基础事实导入" desc="基本素质 / 两票 / 缺陷治理 一键导入与查看" />
+        <NavCard href="/admin/employee-score-sheet" title="员工事实绩效表" desc="按工号查看事实数据自动生成的年度绩效表" />
         <NavCard href="/admin/auto-review-rules" title="自动预审规则" desc="工作年限与申报等级校验" />
+        <NavCard href="/admin/review-routing" title="二审归属配置" desc="最终评分点分配至总部审核部门" />
         <NavCard href="/admin/templates" title="申报表配置" desc="设计与发布申报模板" />
         <NavCard href="/admin/users" title="用户与角色" desc="审核员分配、角色管理" />
-        <NavCard href="/admin/review-audit" title="审核审计" desc="审核进度、结果与评价报告" />
-        <NavCard href="/admin/reports" title="报表分析" desc="已通过员工分值按表单统计" />
+        <NavCard href="/admin/review-audit" title="审核审计" desc="一级/二级审核进度、卡点与结果" />
+        <NavCard href="/admin/reports" title="报表分析" desc="全员终审完成后的完整绩效报表" />
         <NavCard href="/admin/export" title="数据导出" desc="条件筛选 CSV / 单人 ZIP / 归档" />
       </nav>
     </main>

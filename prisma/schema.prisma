@@ -12,28 +12,28 @@ datasource db {
 
 // ========== 通知渠道（系统级单例配置） ==========
 enum NotifyChannel {
-  SMS        // 阿里云短信
-  EMAIL      // SMTP 邮件
+  SMS // 阿里云短信
+  EMAIL // SMTP 邮件
 }
 
 model NotifyConfig {
-  id            Int           @id @default(1)            // 单例：永远 id=1
-  channel       NotifyChannel
+  id           Int           @id @default(1) // 单例：永远 id=1
+  channel      NotifyChannel
   // 加密后的 JSON（AES-256-GCM）。
   // SMS: { accessKeyId, accessKeySecret, signName, templateCode }
   // EMAIL: { host, port, secure, user, pass, from }
-  configCipher  String        @db.Text
-  updatedAt     DateTime      @updatedAt
-  updatedBy     String?
+  configCipher String        @db.Text
+  updatedAt    DateTime      @updatedAt
+  updatedBy    String?
 }
 
 // ========== 认证策略（系统级单例） ==========
 model AuthConfig {
   id                           Int      @id @default(1)
-  registerRequiresVerification Boolean  @default(true)   // 注册是否需短信/邮件验证码
-  loginRequiresVerification    Boolean  @default(false)  // 登录是否需二次验证码（关闭则仅密码）
-  resetRequiresVerification    Boolean  @default(true)   // 找回密码是否需验证码
-  enforceStrongPassword        Boolean  @default(true)   // 启用强密码（8位+大小写+特殊符号）
+  registerRequiresVerification Boolean  @default(true) // 注册是否需短信/邮件验证码
+  loginRequiresVerification    Boolean  @default(false) // 登录是否需二次验证码（关闭则仅密码）
+  resetRequiresVerification    Boolean  @default(true) // 找回密码是否需验证码
+  enforceStrongPassword        Boolean  @default(true) // 启用强密码（8位+大小写+特殊符号）
   updatedAt                    DateTime @updatedAt
   updatedBy                    String?
 }
@@ -46,81 +46,85 @@ enum CodePurpose {
 }
 
 model VerifyCode {
-  id        String       @id @default(cuid())
-  target    String                                  // 手机号或邮箱
+  id        String      @id @default(cuid())
+  target    String // 手机号或邮箱
   code      String
   purpose   CodePurpose
-  consumed  Boolean      @default(false)
+  consumed  Boolean     @default(false)
   expiresAt DateTime
-  createdAt DateTime     @default(now())
+  createdAt DateTime    @default(now())
 
   @@index([target, purpose, createdAt])
 }
 
 // ========== 用户与角色 ==========
 model User {
-  id              String   @id @default(cuid())
-  contact         String   @unique                  // 手机号或邮箱（取决于系统主联系方式）
+  id              String    @id @default(cuid())
+  contact         String    @unique // 手机号或邮箱（取决于系统主联系方式）
   passwordHash    String
   fullName        String
-  employeeNo      String?  @unique
+  employeeNo      String?   @unique
   branchId        String?
   departmentId    String?
   teamId          String?
   positionId      String?
   jobTypeId       String?
   employeeLevelId String?
-  hireDate        DateTime?                // 入职时间，导入时设定，申报时预填充
-  gender          String?                  // 性别（导入自《基本素质信息》）
+  hireDate        DateTime? // 入职时间，导入时设定，申报时预填充
+  gender          String? // 性别（导入自《基本素质信息》）
+  tokenVersion    Int      @default(0) // 密码修改时递增，使旧 JWT 失效
   // Sheet1 全列原始快照（班组、岗位分类代码、岗位分类、工作负责人标识、技能等级工种、
   // 专业技术资格系列等系统未单独建表的列），保留原始信息便于后续扩展
-  profile         Json     @default("{}")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  profile         Json      @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  branch         Branch?         @relation(fields: [branchId], references: [id])
-  department     Department?     @relation(fields: [departmentId], references: [id])
-  team           Team?           @relation(fields: [teamId], references: [id])
-  position       Position?       @relation(fields: [positionId], references: [id])
-  jobType        JobType?        @relation(fields: [jobTypeId], references: [id])
-  employeeLevel  EmployeeLevel?  @relation(fields: [employeeLevelId], references: [id])
+  branch        Branch?        @relation(fields: [branchId], references: [id])
+  department    Department?    @relation(fields: [departmentId], references: [id])
+  team          Team?          @relation(fields: [teamId], references: [id])
+  position      Position?      @relation(fields: [positionId], references: [id])
+  jobType       JobType?       @relation(fields: [jobTypeId], references: [id])
+  employeeLevel EmployeeLevel? @relation(fields: [employeeLevelId], references: [id])
 
-  roles            UserRole[]
-  submissions      Submission[]
-  records          PerformanceRecord[]
-  sectionReviews   SectionReviewer[]
-  performanceFacts PerformanceFact[]
-  employeeBasicFacts EmployeeBasicFact[]
+  roles                    UserRole[]
+  submissions              Submission[]
+  records                  PerformanceRecord[]
+  sectionReviews           SectionReviewer[]
+  performanceFacts         PerformanceFact[]
+  employeeBasicFacts       EmployeeBasicFact[]
   submissionDimensionFacts SubmissionDimensionFact[]
 }
 
 enum AppRole {
   EMPLOYEE
-  REVIEWER_L1   // 分公司一级审核员
-  REVIEWER_L2   // 总公司二级审核员
+  REVIEWER_L1 // 分公司一级审核员
+  REVIEWER_L2 // 总公司二级审核员
   ADMIN
 }
 
 model UserRole {
-  id            String   @id @default(cuid())
-  userId        String
-  role          AppRole
-  scopeBranchId String?                              // 仅 REVIEWER_L1 使用，限定分公司
-  createdAt     DateTime @default(now())
+  id                String   @id @default(cuid())
+  userId            String
+  role              AppRole
+  scopeBranchId     String? // REVIEWER_L1 工区范围
+  scopeDepartmentId String? // REVIEWER_L1 总部部门范围
+  createdAt         DateTime @default(now())
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  branch Branch? @relation(fields: [scopeBranchId], references: [id])
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch     Branch?     @relation(fields: [scopeBranchId], references: [id])
+  department Department? @relation(fields: [scopeDepartmentId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, role, scopeBranchId])
+  @@unique([userId, role, scopeBranchId, scopeDepartmentId])
   @@index([userId])
+  @@index([scopeDepartmentId])
 }
 
 // ========== 组织架构 ==========
 model Branch {
-  id          String       @id @default(cuid())
-  name        String
-  code        String?      @unique
-  createdAt   DateTime     @default(now())
+  id        String   @id @default(cuid())
+  name      String
+  code      String?  @unique
+  createdAt DateTime @default(now())
 
   departments Department[]
   users       User[]
@@ -164,11 +168,13 @@ model Department {
   name      String
   createdAt DateTime @default(now())
 
-  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  users  User[]
-  teams  Team[]
-  optionReviewers FormOptionReviewer[]
+  branch                  Branch                   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  users                   User[]
+  teams                   Team[]
+  optionReviewers         FormOptionReviewer[]
+  dimensionReviewRoutes   DimensionReviewRoute[]
   submissionOptionReviews SubmissionOptionReview[]
+  reviewers               UserRole[]
 }
 
 model Team {
@@ -213,35 +219,35 @@ enum TemplateStatus {
 }
 
 model FormTemplate {
-  id          String         @id @default(cuid())
-  year        Int
-  title       String
+  id           String         @id @default(cuid())
+  year         Int
+  title        String
   description  String?
   // 表头字段配置：控制员工填报时需要填写哪些表头信息（工区、入职时间等）
   // 格式：[{ key, enabled, required }]，默认全部启用且必填
-  headerFields Json         @default("[]")
+  headerFields Json           @default("[]")
   status       TemplateStatus @default(DRAFT)
-  publishedAt DateTime?
-  createdBy   String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  publishedAt  DateTime?
+  createdBy    String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   sections    FormSection[]
   submissions Submission[]
 }
 
 model FormSection {
-  id         String       @id @default(cuid())
-  templateId String
-  title      String
+  id          String   @id @default(cuid())
+  templateId  String
+  title       String
   description String?
   /// 一级绩效维度：basic | performance | worksite | special（对应《评分标准 对应表》评价维度）
   sectionCode String?
   /// 章节满分（与 sectionCode 对应的一级维度上限）
-  maxScore    Decimal?    @db.Decimal(10, 2)
-  sortOrder  Int          @default(0)
+  maxScore    Decimal? @db.Decimal(10, 2)
+  sortOrder   Int      @default(0)
 
-  template  FormTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  template  FormTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
   items     FormItem[]
   reviewers SectionReviewer[]
 }
@@ -262,8 +268,8 @@ model SectionReviewer {
 
 // 申报项计分方式
 enum ScoreMode {
-  TIERS     // 档次单选/多选：选中即得对应分值（原有行为）
-  COUNTED   // 子项按次数计分：每个子项单价分值 × 次数，汇总后封顶 maxScore
+  TIERS // 档次单选/多选：选中即得对应分值（原有行为）
+  COUNTED // 子项按次数计分：每个子项单价分值 × 次数，汇总后封顶 maxScore
 }
 
 model FormItem {
@@ -284,9 +290,9 @@ model FormItem {
   // 系统导入维度代码（系统自动填充项绑定）；null 表示手工填写项
   dimensionCode     String?
 
-  section          FormSection       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  submissionItems  SubmissionItem[]
-  optionReviewers  FormOptionReviewer[]
+  section         FormSection          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  submissionItems SubmissionItem[]
+  optionReviewers FormOptionReviewer[]
 }
 
 model FormOptionReviewer {
@@ -303,14 +309,27 @@ model FormOptionReviewer {
   @@index([departmentId])
 }
 
+// 系统动态生成的最终评分点 → 总部二审部门；不依赖申报模板或选项 ID
+model DimensionReviewRoute {
+  id            String   @id @default(cuid())
+  dimensionCode String   @unique
+  departmentId  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id])
+
+  @@index([departmentId])
+}
+
 // ========== 申报 ==========
 enum SubmissionStatus {
   DRAFT
   PRE_REVIEW_REJECTED // 自动预审未通过，员工修改固定表头后重提
   SUBMITTED
   L1_APPROVED
-  L2_APPROVED         // 终审通过 → 生成 PerformanceRecord
-  REJECTED            // 任一级别有项被驳回，退回员工
+  L2_APPROVED // 终审通过 → 生成 PerformanceRecord
+  REJECTED // 任一级别有项被驳回，退回员工
 }
 
 enum ItemStatus {
@@ -344,83 +363,113 @@ enum DisputeResult {
 }
 
 model Submission {
-  id          String           @id @default(cuid())
-  userId      String
-  templateId  String
-  branchId    String?
-  workAreaName String?
-  hireDate    DateTime?
-  workYears   Int?
-  declarationLevelId String?
-  declarationLevelName String?
-  declarationSpecialtyId String?
+  id                       String           @id @default(cuid())
+  userId                   String
+  templateId               String
+  branchId                 String?
+  workAreaName             String?
+  hireDate                 DateTime?
+  workYears                Int?
+  declarationLevelId       String?
+  declarationLevelName     String?
+  declarationSpecialtyId   String?
   declarationSpecialtyName String?
-  preReviewPassed Boolean?
-  preReviewMessages Json?
-  preReviewMatchedRules Json?
-  status      SubmissionStatus @default(DRAFT)
-  totalScore  Decimal          @default(0) @db.Decimal(10, 2)
-  submittedAt DateTime?
-  l1ReviewerId String?
-  l1ReviewedAt DateTime?
-  l2ReviewerId String?
-  l2ReviewedAt DateTime?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  preReviewPassed          Boolean?
+  preReviewMessages        Json?
+  preReviewMatchedRules    Json?
+  status                   SubmissionStatus @default(DRAFT)
+  totalScore               Decimal          @default(0) @db.Decimal(10, 2)
+  submittedAt              DateTime?
+  l1ReviewerId             String?
+  l1ReviewedAt             DateTime?
+  l2ReviewerId             String?
+  l2ReviewedAt             DateTime?
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
 
-  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  template FormTemplate     @relation(fields: [templateId], references: [id])
-  branch   Branch?          @relation(fields: [branchId], references: [id])
-  declarationLevel DeclarationLevel? @relation(fields: [declarationLevelId], references: [id])
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template             FormTemplate          @relation(fields: [templateId], references: [id])
+  branch               Branch?               @relation(fields: [branchId], references: [id])
+  declarationLevel     DeclarationLevel?     @relation(fields: [declarationLevelId], references: [id])
   declarationSpecialty DeclarationSpecialty? @relation(fields: [declarationSpecialtyId], references: [id])
-  items    SubmissionItem[]
-  logs     ReviewLog[]
+  items                SubmissionItem[]
+  logs                 ReviewLog[]
 
-  @@unique([userId, templateId])                    // 一人每个模板一份
+  @@unique([userId, templateId]) // 一人每个模板一份
   @@index([branchId, status])
 }
 
 model SubmissionItem {
-  id                 String              @id @default(cuid())
-  submissionId       String
-  itemId             String
+  id                  String              @id @default(cuid())
+  submissionId        String
+  itemId              String
   // 选中的 scoreOptions 索引数组 [{ index: 0, label, score }]
-  selected           Json                @default("[]")
-  content            String?             @db.Text
-  score              Decimal             @default(0) @db.Decimal(10, 2)
-  status             ItemStatus          @default(DRAFT)
-  rejectReason       String?             @db.Text
-  reviewedBy         String?
-  reviewedAt         DateTime?
+  selected            Json                @default("[]")
+  content             String?             @db.Text
+  score               Decimal             @default(0) @db.Decimal(10, 2)
+  status              ItemStatus          @default(DRAFT)
+  rejectReason        String?             @db.Text
+  reviewedBy          String?
+  reviewedAt          DateTime?
   // 系统填充项：员工确认/申诉状态；null 表示手工填写项
-  confirmationStatus ConfirmationStatus?
-  disputeReason      String?             @db.Text
+  confirmationStatus  ConfirmationStatus?
+  disputeReason       String?             @db.Text
   // 标记该项为系统自动填充（来自 PerformanceFact），不可编辑分值
-  isSystemFilled     Boolean             @default(false)
+  isSystemFilled      Boolean             @default(false)
   // 申诉一级审核：L1 对员工申诉的判断
-  disputeL1Result    DisputeResult?
-  disputeL1Note      String?             @db.Text
+  disputeL1Result     DisputeResult?
+  disputeL1Note       String?             @db.Text
   disputeL1ReviewerId String?
   disputeL1ReviewedAt DateTime?
   // 申诉二级审核：L2 对申诉的确认/驳回
-  disputeL2Result    DisputeResult?
-  disputeL2Note      String?             @db.Text
+  disputeL2Result     DisputeResult?
+  disputeL2Note       String?             @db.Text
   disputeL2ReviewerId String?
   disputeL2ReviewedAt DateTime?
   // 管理员手工覆盖分（仅在申诉经 L2 确认有效后可用）
-  overrideScore      Decimal?            @db.Decimal(10, 2)
-  overrideReason     String?             @db.Text
-  overrideBy         String?
-  overrideAt         DateTime?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  overrideScore       Decimal?            @db.Decimal(10, 2)
+  overrideReason      String?             @db.Text
+  overrideBy          String?
+  overrideAt          DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
-  submission  Submission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  item        FormItem     @relation(fields: [itemId], references: [id])
-  attachments Attachment[]
+  submission    Submission               @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  item          FormItem                 @relation(fields: [itemId], references: [id])
+  attachments   Attachment[]
   optionReviews SubmissionOptionReview[]
+  factCorrections FactCorrection[]
 
   @@unique([submissionId, itemId])
+}
+
+enum FactCorrectionKind {
+  BASIC
+  PERFORMANCE
+}
+
+enum FactCorrectionAction {
+  CREATE
+  UPDATE
+}
+
+// 申诉事实修正审计：保留导入前后事实快照，最终分数始终由事实重算得出。
+model FactCorrection {
+  id               String               @id @default(cuid())
+  submissionItemId String
+  kind             FactCorrectionKind
+  action           FactCorrectionAction
+  factId           String?
+  beforeData       Json?
+  afterData        Json
+  reason           String               @db.Text
+  evidenceNote     String?              @db.Text
+  correctedBy      String
+  correctedAt      DateTime             @default(now())
+
+  submissionItem SubmissionItem @relation(fields: [submissionItemId], references: [id], onDelete: Cascade)
+
+  @@index([submissionItemId, correctedAt])
 }
 
 model SubmissionOptionReview {
@@ -460,14 +509,14 @@ model Attachment {
 }
 
 model ReviewLog {
-  id                String       @id @default(cuid())
-  submissionId      String
-  submissionItemId  String?
-  reviewerId        String
-  level             Int                                // 1 或 2
-  action            ReviewAction
-  note              String?      @db.Text
-  createdAt         DateTime     @default(now())
+  id               String       @id @default(cuid())
+  submissionId     String
+  submissionItemId String?
+  reviewerId       String
+  level            Int // 1 或 2
+  action           ReviewAction
+  note             String?      @db.Text
+  createdAt        DateTime     @default(now())
 
   submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
@@ -516,14 +565,14 @@ model PerformanceFact {
 // 与 PerformanceFact（缺陷/事件类事实）分离：基本素质来自员工档案，
 // 无角色/事件概念，按年度+维度记录档位值与得分，供模板 basic.* 维度系统填充。
 enum BasicDimension {
-  SKILL_LEVEL        // 技能等级（满分4）
-  TITLE_LEVEL        // 职称等级（满分4）
-  PERFORMANCE_LEVEL  // 绩效等级（满分6，三年滚动）
+  SKILL_LEVEL // 技能等级（满分4）
+  TITLE_LEVEL // 职称等级（满分4）
+  PERFORMANCE_LEVEL // 绩效等级（满分6，三年滚动）
 }
 
 model EmployeeBasicFact {
   id            String         @id @default(cuid())
-  year          Int                                    // 评价年度（绩效=申报年；技能/职称=评价年）
+  year          Int // 评价年度（绩效=申报年；技能/职称=评价年）
   employeeNo    String
   employeeName  String
   userId        String?
@@ -579,12 +628,12 @@ model SubmissionDimensionFact {
 
 // ========== 评分规则配置（管理员可维护） ==========
 model ScoringRule {
-  id            String  @id @default(cuid())
-  dimensionCode String  @unique
+  id            String   @id @default(cuid())
+  dimensionCode String   @unique
   dimensionName String
-  ruleType      String  // MATRIX | SHARE | NORMALIZE
-  cap           Decimal @db.Decimal(10, 2)
-  enabled       Boolean @default(true)
+  ruleType      String // MATRIX | SHARE | NORMALIZE
+  cap           Decimal  @db.Decimal(10, 2)
+  enabled       Boolean  @default(true)
   // JSON 配置体：根据 ruleType 包含 matrix / roles / targetMaxScore 等
   config        Json
   createdAt     DateTime @default(now())

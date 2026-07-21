@@ -1,5 +1,6 @@
 import type { AppRole } from '@prisma/client';
 import { prisma } from './prisma';
+import { matchesL1Scope } from './reviewer-scope';
 
 export type AttachmentViewKind = 'image' | 'pdf' | 'other';
 
@@ -20,7 +21,12 @@ export async function loadAttachmentForView(attachmentId: string) {
       submissionItem: {
         include: {
           submission: {
-            select: { userId: true, status: true, branchId: true },
+            select: {
+              userId: true,
+              status: true,
+              branchId: true,
+              user: { select: { departmentId: true } },
+            },
           },
         },
       },
@@ -45,12 +51,12 @@ export async function canViewAttachment(
     if (!sub.branchId) return false;
     const scopes = await prisma.userRole.findMany({
       where: { userId, role: 'REVIEWER_L1' },
-      select: { scopeBranchId: true },
+      select: { scopeBranchId: true, scopeDepartmentId: true },
     });
-    const branchIds = scopes
-      .map((r) => r.scopeBranchId)
-      .filter((id): id is string => id != null);
-    return branchIds.includes(sub.branchId);
+    return matchesL1Scope(scopes, {
+      branchId: sub.branchId,
+      departmentId: sub.user.departmentId,
+    });
   }
 
   return false;

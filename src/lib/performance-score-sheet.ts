@@ -9,14 +9,19 @@ import {
   basicDimensionFromCode,
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
-import type { DeclarationTier } from '@/lib/quantitative-report';
+import type { DeclarationTier } from '@/lib/declaration-level';
+import { capToStandard, round1 } from '@/lib/dimension-aggregation';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
+  sourceDimensionCodes,
   type DimensionScoringStandard,
   type ScoringDataSource,
 } from '@/lib/scoring-standards';
-import { levelFromHireDate, parseMockDeclarationTier } from '@/lib/declaration-level';
+import {
+  levelFromHireDate,
+  parseMockDeclarationTier,
+} from '@/lib/declaration-level';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 
@@ -122,10 +127,6 @@ export interface ScoreSheetInput {
   mockDeclarationTier?: DeclarationTier | null;
 }
 
-function round1(n: number) {
-  return Math.round(n * 10) / 10;
-}
-
 function resolveTier(input: ScoreSheetInput): DeclarationTier | null {
   if (input.declarationTier) return input.declarationTier;
   if (input.mockDeclarationTier) return input.mockDeclarationTier;
@@ -158,13 +159,6 @@ function basicFactForDimension(
   return facts.find((f) => f.dimension === dim);
 }
 
-function perfFactsForDimension(
-  facts: ScoreSheetInput['performanceFacts'],
-  code: string,
-) {
-  return facts.filter((f) => f.dimensionCode === code);
-}
-
 function submissionFactsForDimension(
   facts: ScoreSheetInput['submissionFacts'],
   code: string,
@@ -183,6 +177,11 @@ function computeFactDimensionScore(
   basicFact?: ScoreSheetInput['basicFacts'][number],
 ): { score: number; lines: DimensionScoreLine[]; hasFacts: boolean } {
   if (standard.ruleType === 'BASIC_TIER' && basicFact) {
+    const tier = basicFact.tierValue.trim();
+    // 空值、花名册占位符不能伪装成“其他”或“无”并自动给分；此时应由员工申报事实。
+    if (!tier || tier === '//' || tier === '无') {
+      return { score: 0, lines: [], hasFacts: false };
+    }
     const score = Number(basicFact.score);
     return {
       score,
@@ -190,48 +189,11 @@ function computeFactDimensionScore(
       lines: [
         {
           id: basicFact.id,
-          label: basicFact.tierValue,
+          label: tier,
           score,
           detail: basicFact.yearBreakdown ? JSON.stringify(basicFact.yearBreakdown) : undefined,
         },
       ],
-    };
-  }
-
-  if (standard.code === 'worksite.defect-governance') {
-    if (perfFacts.length === 0) {
-      return { score: 0, lines: [], hasFacts: false };
-    }
-    const raw = perfFacts.reduce((s, f) => s + Number(f.score), 0);
-    const score = round1(Math.min(raw, standard.maxScore));
-    return {
-      score,
-      hasFacts: true,
-      lines: perfFacts.map((f) => ({
-        id: f.id,
-        label: `${f.defectLevel ?? ''} ${f.defectRef ?? ''}`.trim(),
-        score: Number(f.score),
-        detail: f.role,
-      })),
-    };
-  }
-
-  if (standard.code === 'performance.safety-contribution') {
-    // 安全贡献：系统导入维度（SHARE 计分后的 PerformanceFact，每人多条事件事实累加，封顶 maxScore）
-    if (perfFacts.length === 0) {
-      return { score: 0, lines: [], hasFacts: false };
-    }
-    const raw = perfFacts.reduce((s, f) => s + Number(f.score), 0);
-    const score = round1(Math.min(raw, standard.maxScore));
-    return {
-      score,
-      hasFacts: true,
-      lines: perfFacts.map((f) => ({
-        id: f.id,
-        label: `${f.defectRef ?? ''} ${f.role ?? ''}`.trim(),
-        score: Number(f.score),
-        detail: f.role,
-      })),
     };
   }
 
@@ -254,7 +216,25 @@ function computeFactDimensionScore(
     };
   }
 
-  return { score: 0, lines: [], hasFacts: false };
+  if (perfFacts.length === 0) {
+    return { score: 0, lines: [], hasFacts: false };
+  }
+
+  const raw = perfFacts.reduce((sum, fact) => sum + Number(fact.score), 0);
+  const score = capToStandard(standard.code, raw);
+  const lines: DimensionScoreLine[] = perfFacts.map((fact) => ({
+    id: fact.id,
+    label:
+      standard.code === 'worksite.defect-governance'
+        ? `${fact.defectLevel ?? ''} ${fact.defectRef ?? ''}`.trim()
+        : standard.code === 'performance.safety-contribution'
+          ? `${fact.defectRef ?? ''} ${fact.role ?? ''}`.trim()
+          : fact.defectRef || fact.eventType || standard.title,
+    score: Number(fact.score),
+    detail: fact.role,
+  }));
+
+  return { score, hasFacts: true, lines };
 }
 
 function buildDimensionRow(
@@ -266,7 +246,9 @@ function buildDimensionRow(
   const item = itemByDimension.get(standard.code);
   const sub = item ? subByItemId.get(item.id) : undefined;
   const basicFact = basicFactForDimension(input.basicFacts, standard.code);
-  const perfFacts = perfFactsForDimension(input.performanceFacts, standard.code);
+  const perfFacts = input.performanceFacts.filter((fact) =>
+    sourceDimensionCodes(standard.code).includes(fact.dimensionCode),
+  );
   const subFacts = submissionFactsForDimension(input.submissionFacts, standard.code);
 
   let score = 0;
@@ -282,12 +264,28 @@ function buildDimensionRow(
       source = 'FACT';
       hasImportedFacts = true;
     } else if (item && sub && !sub.isSystemFilled) {
-      // 无导入事实时不应手工填 fact 维度；若员工误填则忽略
-      score = 0;
-      source = 'NONE';
+      // 无导入事实时，员工可按同一评分标准申报事实和分数，供一、二审确认。
+      score = computeManualItemScore(item, sub);
+      source = 'MANUAL';
+      if (Array.isArray(sub.selected)) {
+        lines = (sub.selected as Array<{ label?: string; score?: number; count?: number }>).map((s, index) => ({
+          label: s.label ?? `员工申报事实 ${index + 1}`,
+          score: Number(s.score ?? 0) * (s.count ?? 1),
+        }));
+      }
     }
   } else if (standard.dataSource === 'deduction') {
-    if (subFacts.length > 0) {
+    if (perfFacts.length > 0) {
+      score = perfFacts.reduce((sum, fact) => sum + Number(fact.score), 0);
+      source = 'FACT';
+      hasImportedFacts = true;
+      lines = perfFacts.map((fact) => ({
+        id: fact.id,
+        label: fact.defectRef || fact.eventType || standard.title,
+        score: Number(fact.score),
+        detail: fact.role,
+      }));
+    } else if (subFacts.length > 0) {
       score = sumSubmissionFactScore(subFacts);
       source = 'FACT';
       lines = subFacts.map((f) => ({
@@ -332,7 +330,7 @@ function buildDimensionRow(
     && standard.maxScore > 0
     && standard.code !== 'worksite.ticket-execution'
   ) {
-    score = round1(Math.min(score, standard.maxScore));
+    score = capToStandard(standard.code, score);
   }
 
   return {
@@ -383,31 +381,7 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
     buildDimensionRow(std, input, itemByDimension, subByItemId),
   );
 
-  const violationItem = input.templateItems.find((it) => /违章|扣分/.test(it.title));
-  const mergedDeductionRows = violationItem
-    ? (() => {
-        const sub = subByItemId.get(violationItem.id);
-        const score = computeManualItemScore(violationItem, sub);
-        if (score >= 0) return [];
-        return [
-          {
-            dimensionCode: 'special.violation',
-            title: violationItem.title,
-            sectionCode: 'special',
-            sectionTitle: '特殊事项',
-            maxScore: 0,
-            score,
-            source: 'DEDUCTION' as ScoreSource,
-            dataSource: 'deduction' as ScoringDataSource,
-            ruleType: 'DEDUCTION',
-            ruleSummary: '安监部通报违章扣分',
-            itemId: violationItem.id,
-            hasImportedFacts: false,
-            lines: [{ label: violationItem.title, score }],
-          },
-        ];
-      })()
-    : deductionRows.filter((r) => r.score !== 0);
+  const mergedDeductionRows = deductionRows.filter((row) => row.score !== 0);
 
   const sectionMap = new Map<string, SectionScoreSheet>();
   for (const row of dimensionRows) {

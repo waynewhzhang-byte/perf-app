@@ -42,6 +42,7 @@ const sessionPayloadSchema = z.object({
   userId: z.string().min(1),
   contact: z.string(),
   fullName: z.string(),
+  tokenVersion: z.number().int().optional(),
 });
 
 export type SessionPayload = z.infer<typeof sessionPayloadSchema>;
@@ -64,7 +65,7 @@ export class ForbiddenError extends Error {
 
 // ---- Token & cookie helpers ----
 
-export async function signSession(payload: SessionPayload) {
+export async function signSession(payload: SessionPayload & { tokenVersion?: number }) {
   return await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -94,13 +95,19 @@ export async function getSession(isAdmin = false): Promise<SessionPayload | null
     const { payload } = await jwtVerify(token, getSecretKey());
     const result = sessionPayloadSchema.safeParse(payload);
     if (!result.success) return null;
-    // Verify the user still exists — prevents deleted/disabled users from
-    // using tokens that were issued before their account was removed.
+    // Verify the user still exists and the token hasn't been invalidated by
+    // a password change (tokenVersion is incremented on password reset).
     const exists = await prisma.user.findUnique({
       where: { id: result.data.userId },
-      select: { id: true },
+      select: { id: true, tokenVersion: true },
     });
     if (!exists) return null;
+    // If the token carries a version, it must match the current user version.
+    // Tokens issued before the tokenVersion field was added (undefined) are
+    // still accepted to avoid breaking existing sessions.
+    if (result.data.tokenVersion != null && result.data.tokenVersion !== exists.tokenVersion) {
+      return null;
+    }
     return result.data;
   } catch {
     return null;

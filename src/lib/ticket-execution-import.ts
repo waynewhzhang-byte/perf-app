@@ -1,12 +1,12 @@
 /**
  * 从《工作现场-两票执行》原始明细（操作票 + 工作票）聚合每人原始分。
- * 原始分在申报时按能级内最高分比例折算为满分 30（见 ticket-execution.ts）。
+ * 原始分在申报时按能级内最高分比例折算为满分 30。
  */
 import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import { normalizePersonName } from '@/lib/employee-resolver';
 import { parsePersonList } from '@/lib/defect-governance';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/evaluation-dimensions';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
 
 export interface TicketScoreBreakdown {
   /** 操作票角色项数（每行每角色每人计 1 项） */
@@ -285,6 +285,46 @@ export function aggregateTicketExecutionFromFile(
   const workRows = sheetMatrix(wb, '工作票');
   const result = aggregateTicketExecutionRows(opRows, workRows, resolveNo, options, priceConfig);
   return { ...result, sourceFile: filePath };
+}
+
+// ── Work Member Ticket Aggregation (files 12/13) ────────────────
+
+export interface WorkMemberRow {
+  票类型: string;
+  姓名: string;
+  人员编号: string | number;
+}
+
+export interface WorkMemberAggregate {
+  employeeNo: string;
+  employeeName: string;
+  type1Count: number;  // 一种票 count
+  type2Count: number;  // 二种票 count
+}
+
+/** Group rows from 二种票 (file 12) and 一种票 (file 13) by employeeNo and count ticket types. */
+export function aggregateWorkMemberTickets(rows: WorkMemberRow[]): WorkMemberAggregate[] {
+  const map = new Map<string, WorkMemberAggregate>();
+
+  for (const row of rows) {
+    const no = String(row.人员编号 ?? '').trim();
+    const name = (row.姓名 ?? '').trim();
+    if (!no) continue;
+
+    const key = no;
+    if (!map.has(key)) {
+      map.set(key, { employeeNo: no, employeeName: name, type1Count: 0, type2Count: 0 });
+    }
+
+    const agg = map.get(key)!;
+    if (row.票类型?.includes('一种')) {
+      agg.type1Count += 1;
+    } else if (row.票类型?.includes('二种')) {
+      agg.type2Count += 1;
+    }
+  }
+
+  return [...map.values()];
 }
 
 export const TICKET_DIMENSION = TICKET_EXECUTION_DIMENSION;

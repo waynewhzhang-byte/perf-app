@@ -3,20 +3,21 @@ import assert from 'node:assert/strict';
 import { computeLevel, levelFromHireDate } from './declaration-level';
 
 describe('computeLevel', () => {
-  it('0 年 → 一级', () => assert.equal(computeLevel(0), '一级'));
-  it('2 年 → 一级', () => assert.equal(computeLevel(2), '一级'));
-  it('4 年 → 一级', () => assert.equal(computeLevel(4), '一级'));
+  it('0 年 → 三级', () => assert.equal(computeLevel(0), '三级'));
+  it('2 年 → 三级', () => assert.equal(computeLevel(2), '三级'));
+  it('4 年 → 三级', () => assert.equal(computeLevel(4), '三级'));
   it('5 年 → 二级', () => assert.equal(computeLevel(5), '二级'));
+  it('8 年 → 二级', () => assert.equal(computeLevel(8), '二级'));
   it('7 年 → 二级', () => assert.equal(computeLevel(7), '二级'));
-  it('8 年 → 三级', () => assert.equal(computeLevel(8), '三级'));
-  it('15 年 → 三级', () => assert.equal(computeLevel(15), '三级'));
+  it('9 年 → 一级', () => assert.equal(computeLevel(9), '一级'));
+  it('15 年 → 一级', () => assert.equal(computeLevel(15), '一级'));
 });
 
 describe('levelFromHireDate', () => {
-  it('2024年入职 → 2026年年中 为 2 年 → 一级', () => {
+  it('2024年入职 → 2026年年中 为 2 年 → 三级', () => {
     const d = new Date('2024-06-01');
     const asOf = new Date('2026-06-13');
-    assert.equal(levelFromHireDate(d, asOf), '一级');
+    assert.equal(levelFromHireDate(d, asOf), '三级');
   });
 
   it('2021年6月入职 → 2026年6月 为 5 年 → 二级', () => {
@@ -25,10 +26,16 @@ describe('levelFromHireDate', () => {
     assert.equal(levelFromHireDate(d, asOf), '二级');
   });
 
-  it('2018年以前入职 → 三级', () => {
+  it('2017年入职 → 2026年满8年未满9年 → 二级', () => {
     const d = new Date('2017-12-31');
     const asOf = new Date('2026-06-13');
-    assert.equal(levelFromHireDate(d, asOf), '三级');
+    assert.equal(levelFromHireDate(d, asOf), '二级');
+  });
+
+  it('2016年入职 → 2026年满9年 → 一级', () => {
+    const d = new Date('2016-05-31');
+    const asOf = new Date('2026-05-31');
+    assert.equal(levelFromHireDate(d, asOf), '一级');
   });
 
   it('边界：入职周年当天不含', () => {

@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
 import { SectionRadarPanel } from '@/components/section-radar-panel';
+import type { ReviewProgress } from '@/lib/review-progress';
 
 interface Template { id: string; title: string; year: number }
 interface Stats { count: number; avgScore: number; maxScore: number; minScore: number }
@@ -18,7 +19,7 @@ interface EmployeeRecord {
 }
 interface Report {
   templateId: string; templateTitle: string; templateYear: number;
-  stats: Stats; records: EmployeeRecord[];
+  stats: Stats; records: EmployeeRecord[]; progress: ReviewProgress | null;
 }
 
 function distributionBuckets(min: number, max: number, buckets = 8) {
@@ -41,6 +42,11 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState<string | null>(null);
+
+  const active = useMemo(() => {
+    if (!selectedTpl) return reports[0] ?? null;
+    return reports.find((r) => r.templateId === selectedTpl) ?? null;
+  }, [reports, selectedTpl]);
 
   const downloadFile = useCallback(async (url: string, fallbackName: string) => {
     setError(null);
@@ -68,18 +74,18 @@ export default function ReportsPage() {
   }, []);
 
   const exportSummary = useCallback(async () => {
-    if (!selectedTpl) return;
+    if (!selectedTpl || !active?.progress?.complete) return;
     setExporting('csv');
-    await downloadFile(`/api/admin/reports/export?format=csv&templateId=${encodeURIComponent(selectedTpl)}`, 'summary.csv');
+    await downloadFile(`/api/admin/reports/export?format=csv&complete=1&templateId=${encodeURIComponent(selectedTpl)}`, 'summary.csv');
     setExporting(null);
-  }, [selectedTpl, downloadFile]);
+  }, [active, selectedTpl, downloadFile]);
 
   const exportZip = useCallback(async () => {
-    if (!selectedTpl) return;
+    if (!selectedTpl || !active?.progress?.complete) return;
     setExporting('zip');
-    await downloadFile(`/api/admin/reports/export?format=zip&templateId=${encodeURIComponent(selectedTpl)}`, 'export.zip');
+    await downloadFile(`/api/admin/reports/export?format=zip&complete=1&templateId=${encodeURIComponent(selectedTpl)}`, 'export.zip');
     setExporting(null);
-  }, [selectedTpl, downloadFile]);
+  }, [active, selectedTpl, downloadFile]);
 
   const exportEmployee = useCallback(async (submissionId: string, name: string) => {
     setExporting(submissionId);
@@ -102,11 +108,6 @@ export default function ReportsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  const active = useMemo(() => {
-    if (!selectedTpl) return reports[0] ?? null;
-    return reports.find((r) => r.templateId === selectedTpl) ?? null;
-  }, [reports, selectedTpl]);
 
   // Auto-select first template
   useEffect(() => {
@@ -181,14 +182,16 @@ export default function ReportsPage() {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={exportSummary}
-            disabled={!selectedTpl || exporting !== null}
+            disabled={!selectedTpl || !active?.progress?.complete || exporting !== null}
+            title={active?.progress?.complete ? '导出全员完整绩效报表' : '须等待全体员工完成两级审核'}
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             {exporting === 'csv' ? '导出中…' : '导出汇总表 (CSV)'}
           </button>
           <button
             onClick={exportZip}
-            disabled={!selectedTpl || exporting !== null}
+            disabled={!selectedTpl || !active?.progress?.complete || exporting !== null}
+            title={active?.progress?.complete ? '导出全员完整绩效档案' : '须等待全体员工完成两级审核'}
             className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
             {exporting === 'zip' ? '打包中…' : '导出完整档案 (ZIP)'}
@@ -207,6 +210,42 @@ export default function ReportsPage() {
 
       {active && (
         <>
+          {active.progress && (
+            <section className={`mb-6 rounded-xl border p-5 ${
+              active.progress.complete ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'
+            }`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-semibold text-slate-900">全员审核进度</h2>
+                  <p className="mt-1 text-xs text-slate-600">{active.templateTitle}（{active.templateYear}）</p>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  active.progress.complete ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {active.progress.complete ? '完整报表已就绪' : '完整报表尚未就绪'}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                <ProgressMetric label="应审核员工" value={active.progress.totalEmployees} />
+                <ProgressMetric label="已提交" value={active.progress.submittedEmployees} />
+                <ProgressMetric label="终审通过" value={active.progress.approvedEmployees} />
+                <ProgressMetric label="待完成" value={Math.max(active.progress.totalEmployees - active.progress.approvedEmployees, 0)} />
+              </div>
+              {!active.progress.complete && active.progress.blockers.length > 0 && (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-white/70 p-3">
+                  <p className="text-xs font-semibold text-amber-800">当前审核卡点</p>
+                  <ul className="mt-2 space-y-1 text-xs text-amber-900">
+                    {active.progress.blockers.slice(0, 8).map((blocker) => (
+                      <li key={`${blocker.level}-${blocker.code}-${blocker.scope ?? 'all'}`}>
+                        {blocker.level === 'L1' ? '一级' : '二级'} · {blocker.label}{blocker.scope ? `（${blocker.scope}）` : ''}：{blocker.count} 项
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* 汇总统计卡片 */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard label="审核通过人数" value={active.stats.count} unit="人" color="text-slate-900" />
@@ -383,6 +422,15 @@ function StatCard({ label, value, unit, color }: { label: string; value: number;
         {Number.isInteger(value) ? value : value.toFixed(1)}
       </p>
       <p className="mt-0.5 text-xs text-slate-400">{unit}</p>
+    </div>
+  );
+}
+
+function ProgressMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{value}</p>
     </div>
   );
 }

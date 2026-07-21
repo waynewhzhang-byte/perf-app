@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { levelFromHireDate } from '@/lib/declaration-level';
+import { hashPassword } from '@/lib/password';
 
 const RowSchema = z.object({
   employeeNo: z.string().min(1, '工号不能为空'),
@@ -37,24 +38,40 @@ export async function POST(req: Request) {
 
     const results: { employeeNo: string; name: string; level: string; created: boolean }[] = [];
 
+    // 预计算能级等级
+    const levelByNo = new Map<string, string>();
+    for (const row of parsed.data.rows) {
+      if (row.hireDate) {
+        const d = new Date(row.hireDate);
+        if (!Number.isNaN(d.getTime())) {
+          const level = levelFromHireDate(d);
+          if (level) levelByNo.set(row.employeeNo, level);
+        }
+      }
+    }
+
+    // 批量查询已有用户（1 次查询替代 N 次 findFirst）
+    const employeeNos = parsed.data.rows.map((r) => r.employeeNo);
+    const existingUsers = await prisma.user.findMany({
+      where: { employeeNo: { in: employeeNos } },
+      select: { id: true, employeeNo: true },
+    });
+    const existingByNo = new Map(existingUsers.map((u) => [u.employeeNo!, u]));
+
+    // 预计算密码哈希（bcrypt 是 CPU 密集型操作，不应在事务内执行）
+    const passwordHashes = new Map<string, string>();
+    for (const row of parsed.data.rows) {
+      if (!existingByNo.has(row.employeeNo)) {
+        passwordHashes.set(row.employeeNo, await hashPassword(row.employeeNo));
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       for (const row of parsed.data.rows) {
-        // 计算能级等级
-        let level: string | null = null;
-        if (row.hireDate) {
-          const d = new Date(row.hireDate);
-          if (!Number.isNaN(d.getTime())) {
-            level = levelFromHireDate(d);
-          }
-        }
-
-        const existing = await tx.user.findFirst({
-          where: { employeeNo: row.employeeNo },
-          select: { id: true },
-        });
+        const level = levelByNo.get(row.employeeNo) ?? null;
+        const existing = existingByNo.get(row.employeeNo);
 
         if (existing) {
-          // 更新已有用户
           await tx.user.update({
             where: { id: existing.id },
             data: {
@@ -65,11 +82,10 @@ export async function POST(req: Request) {
           });
           results.push({ employeeNo: row.employeeNo, name: row.name, level: level ?? '—', created: false });
         } else {
-          // 创建新用户：用工号作为临时 contact，员工注册时用手机号认领
           await tx.user.create({
             data: {
-              contact: row.employeeNo, // 临时，注册时更新为手机号
-              passwordHash: '',        // 无密码，必须通过注册认领
+              contact: row.employeeNo,
+              passwordHash: passwordHashes.get(row.employeeNo)!,
               fullName: row.name,
               employeeNo: row.employeeNo,
               hireDate: row.hireDate ? new Date(row.hireDate) : undefined,

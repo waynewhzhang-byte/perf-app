@@ -1,17 +1,19 @@
 // 员工：拉取自己的申报 / 创建草稿 / 保存项 / 提交
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getSession, AuthError } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
+import { levelFromHireDate } from '@/lib/declaration-level';
+import { UpsertSchema, parseDateOnly, computeItemScore } from '@/lib/submission-validator';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import {
   extractSystemFilledFromSheet,
+  isFactDataSourceDimension,
   systemItemStatusOnSubmit,
   type ConfirmationStatus,
 } from '@/lib/system-filled-items';
@@ -26,73 +28,38 @@ export async function GET(req: Request) {
   let s;
   try { s = await me(); } catch (e) {
     if (e instanceof AuthError) return NextResponse.json({ error: '未授权' }, { status: 401 });
-    throw e;
+    console.error('GET /api/submissions auth:', e);
+    return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
   }
   const templateId = new URL(req.url).searchParams.get('templateId') || undefined;
-  const list = await prisma.submission.findMany({
-    where: { userId: s.userId, ...(templateId ? { templateId } : {}) },
-    include: { template: true, items: { include: { item: true, attachments: true, optionReviews: true } } },
-    orderBy: { createdAt: 'desc' },
-  });
-  return NextResponse.json({ success: true, submissions: list });
-}
+  const page = Math.max(1, Number(new URL(req.url).searchParams.get('page') ?? 1));
+  const pageSize = Math.min(50, Math.max(1, Number(new URL(req.url).searchParams.get('pageSize') ?? 20)));
 
-const UpsertSchema = z.object({
-  templateId: z.string(),
-  workAreaId: z.string().optional(),
-  hireDate: z.string().optional(),
-  declarationLevelId: z.string().optional(),
-  declarationSpecialtyId: z.string().optional(),
-  items: z.array(z.object({
-    itemId: z.string(),
-    selected: z.array(z.object({
-      index: z.number(),
-      optionId: z.string().optional(),
-      label: z.string().optional(),
-      score: z.number().optional(),
-      count: z.number().int().min(0).optional(),
-    })),
-    content: z.string().optional(),
-    confirmationStatus: z.enum(['CONFIRMED', 'DISPUTED']).optional(),
-    disputeReason: z.string().optional(),
-    isSystemFilled: z.boolean().optional(),
-  })),
-  submit: z.boolean().default(false),     // true 表示从草稿 → 提交
-});
-
-function parseDateOnly(value: string | undefined): Date | null {
-  if (!value) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return null;
-  const [, y, m, d] = match;
-  const date = new Date(Number(y), Number(m) - 1, Number(d));
-  if (Number.isNaN(date.getTime())) return null;
-  return date;
-}
-
-// 服务端权威计分：COUNTED 按 单价×次数 汇总并封顶；TIERS 累加选中分值
-function computeItemScore(
-  meta: { scoreMode: string; maxScore: number | null } | undefined,
-  selected: Array<{ score: number; count?: number }>,
-): number {
-  if (meta?.scoreMode === 'COUNTED') {
-    const raw = selected.reduce((sum, s) => sum + s.score * (s.count ?? 0), 0);
-    const cap = meta.maxScore ?? Infinity;
-    return Math.min(raw, cap);
-  }
-  return selected.reduce((sum, s) => sum + s.score, 0);
+  const where = { userId: s.userId, ...(templateId ? { templateId } : {}) };
+  const [list, total] = await Promise.all([
+    prisma.submission.findMany({
+      where,
+      include: { template: true, items: { include: { item: true, attachments: true, optionReviews: true } } },
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.submission.count({ where }),
+  ]);
+  return NextResponse.json({ success: true, submissions: list, total, page, pageSize });
 }
 
 export async function POST(req: Request) {
   let s;
   try { s = await me(); } catch (e) {
     if (e instanceof AuthError) return NextResponse.json({ error: '未授权' }, { status: 401 });
-    throw e;
+    console.error('POST /api/submissions auth:', e);
+    return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
   }
   const parsed = UpsertSchema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
   const { templateId, items, submit } = parsed.data;
-  const workAreaId = parsed.data.workAreaId || undefined;
+  const requestedWorkAreaId = parsed.data.workAreaId || undefined;
   const hireDate = parsed.data.hireDate || undefined;
   const declarationLevelId = parsed.data.declarationLevelId || undefined;
   const declarationSpecialtyId = parsed.data.declarationSpecialtyId || undefined;
@@ -105,7 +72,7 @@ export async function POST(req: Request) {
   if (!template) return NextResponse.json({ error: '模板不存在' }, { status: 404 });
   if (template.status !== 'PUBLISHED') return NextResponse.json({ error: '该表单未发布，暂不可申报' }, { status: 400 });
 
-  const hfConfig = resolveHeaderFields((template as any).headerFields);
+  const hfConfig = resolveHeaderFields(template.headerFields);
   const hfEnabled = (key: HeaderFieldKey) => isFieldEnabled(hfConfig, key);
   const hfRequired = (key: HeaderFieldKey) => isFieldRequired(hfConfig, key);
 
@@ -121,13 +88,14 @@ export async function POST(req: Request) {
   }
 
   // 构建模板 items 的快速索引：itemId → 元数据（含计分方式与封顶）
-  const itemMeta = new Map<string, { isRequired: boolean; requireAttachment: boolean; title: string; scoreMode: string; maxScore: number | null; scoreOptions: ScoreOptionLike[] }>();
+  const itemMeta = new Map<string, { isRequired: boolean; requireAttachment: boolean; title: string; dimensionCode: string | null; scoreMode: string; maxScore: number | null; scoreOptions: ScoreOptionLike[] }>();
   for (const sec of template.sections) {
     for (const it of sec.items) {
       itemMeta.set(it.id, {
         isRequired: it.isRequired,
         requireAttachment: it.requireAttachment,
         title: it.title,
+        dimensionCode: it.dimensionCode,
         scoreMode: it.scoreMode,
         maxScore: it.maxScore == null ? null : Number(it.maxScore),
         scoreOptions: (Array.isArray(it.scoreOptions) ? it.scoreOptions : []) as unknown as ScoreOptionLike[],
@@ -138,9 +106,22 @@ export async function POST(req: Request) {
   const user = await prisma.user.findUnique({ where: { id: s.userId } });
   if (!user) return NextResponse.json({ error: '用户不存在' }, { status: 404 });
 
+  // 隐藏表头字段时，归属必须来自员工档案，不能接受客户端传入的默认/伪造工区。
+  const workAreaId = hfEnabled('workArea')
+    ? requestedWorkAreaId ?? user.branchId ?? undefined
+    : user.branchId ?? undefined;
+
   const parsedHireDate = parseDateOnly(hireDate);
+  const inferredDeclarationLevelName = !hfEnabled('declarationLevel') && parsedHireDate
+    ? levelFromHireDate(parsedHireDate)
+    : null;
   if (submit) {
-    if (hfRequired('workArea') && !workAreaId) return NextResponse.json({ error: '请选择工区' }, { status: 400 });
+    if (!workAreaId) {
+      return NextResponse.json(
+        { error: hfRequired('workArea') ? '请选择工区' : '员工未配置工区，无法提交申报' },
+        { status: 400 },
+      );
+    }
     if (hfRequired('hireDate') && !parsedHireDate) return NextResponse.json({ error: '请选择有效的入职时间' }, { status: 400 });
     if (hfRequired('declarationLevel') && !declarationLevelId) return NextResponse.json({ error: '请选择能级评价等级' }, { status: 400 });
     if (hfRequired('declarationSpecialty') && !declarationSpecialtyId) return NextResponse.json({ error: '请选择能级评价专业' }, { status: 400 });
@@ -157,7 +138,11 @@ export async function POST(req: Request) {
     await prisma.$transaction(async (tx) => {
       const [workArea, declarationLevel, declarationSpecialty] = await Promise.all([
         workAreaId ? tx.branch.findUnique({ where: { id: workAreaId } }) : Promise.resolve(null),
-        declarationLevelId ? tx.declarationLevel.findUnique({ where: { id: declarationLevelId } }) : Promise.resolve(null),
+        inferredDeclarationLevelName
+          ? tx.declarationLevel.findFirst({ where: { name: inferredDeclarationLevelName } })
+          : declarationLevelId
+            ? tx.declarationLevel.findUnique({ where: { id: declarationLevelId } })
+            : Promise.resolve(null),
         declarationSpecialtyId ? tx.declarationSpecialty.findUnique({ where: { id: declarationSpecialtyId } }) : Promise.resolve(null),
       ]);
 
@@ -169,7 +154,7 @@ export async function POST(req: Request) {
 
       const workYears = parsedHireDate ? calculateFullWorkYears(parsedHireDate, new Date()) : null;
       let preReview = { passed: true, messages: [] as string[], matchedRuleIds: [] as string[] };
-      if (submit && parsedHireDate && declarationLevelId) {
+      if (submit && parsedHireDate && declarationLevel) {
         const dbRules = await tx.autoReviewRule.findMany({ where: { enabled: true }, orderBy: { createdAt: 'asc' } });
         const rules: PreReviewRule[] = dbRules.map((rule) => ({
           id: rule.id,
@@ -182,7 +167,7 @@ export async function POST(req: Request) {
         }));
         preReview = evaluatePreReviewRules({
           workYears: workYears ?? 0,
-          declarationLevelId,
+          declarationLevelId: declarationLevel.id,
           rules,
         });
         preReviewRejectedMessages = preReview.messages;
@@ -230,7 +215,7 @@ export async function POST(req: Request) {
           lockedItemIds.add(it.itemId);
         }
         // 系统填充已确认项视为锁定 — 员工已确认的分数不可修改
-        if ((it as any).isSystemFilled && (it as any).confirmationStatus === 'CONFIRMED') {
+        if (it.isSystemFilled && it.confirmationStatus === 'CONFIRMED') {
           lockedItemIds.add(it.itemId);
         }
       }
@@ -365,7 +350,17 @@ export async function POST(req: Request) {
             .filter((review) => review.status === 'L2_APPROVED')
             .map((review) => review.optionId),
         );
-        const normalizedInput = normalizeSelectedOptions(it.itemId, meta.scoreOptions, it.selected);
+        const isEmployeeDeclaredFact = isFactDataSourceDimension(meta.dimensionCode);
+        const isDeduction = meta.dimensionCode?.startsWith('special.') ?? false;
+        if (it.declaredScore != null && !isEmployeeDeclaredFact) {
+          throw new EditableError(`「${meta.title}」不允许直接填写分数`);
+        }
+        if (it.declaredScore != null && (isDeduction ? it.declaredScore > 0 : it.declaredScore < 0 || (meta.maxScore != null && it.declaredScore > meta.maxScore))) {
+          throw new EditableError(`「${meta.title}」申报分数不符合该评分项的分值范围`);
+        }
+        const normalizedInput = it.declaredScore != null
+          ? [{ index: 0, optionId: 'employee-declared-score', label: '员工申报分数', score: it.declaredScore }]
+          : normalizeSelectedOptions(it.itemId, meta.scoreOptions, it.selected);
         const existingSelectedByOption = new Map<string, { index: number; optionId: string; label: string; score: number; count?: number }>();
         for (const selected of existingSelected) {
           const normalizedExisting = normalizeSelectedOptions(it.itemId, meta.scoreOptions, [selected]);
@@ -387,6 +382,12 @@ export async function POST(req: Request) {
           if (meta.isRequired && normalizedSelected.length === 0) {
             throw new EditableError(`「${meta.title}」为必填项，请选择分值`);
           }
+          if (isEmployeeDeclaredFact) {
+            if (!it.content?.trim()) throw new EditableError(`请填写「${meta.title}」的事实说明`);
+            if (it.declaredScore == null) throw new EditableError(`请填写「${meta.title}」的申报分数`);
+            const attCount = attachmentCounts?.get(it.itemId) ?? 0;
+            if (attCount === 0) throw new EditableError(`「${meta.title}」须上传截图证明材料`);
+          }
           if (meta.requireAttachment && normalizedSelected.length > 0) {
             const attCount = attachmentCounts?.get(it.itemId) ?? 0;
             if (attCount === 0) {
@@ -396,21 +397,21 @@ export async function POST(req: Request) {
         }
 
         const newStatus = submit ? 'PENDING_L1' : 'DRAFT';
-        const confStatus = (it as any).confirmationStatus as string | undefined;
-        const isSystem = !!(it as any).isSystemFilled;
+        const confStatus = it.confirmationStatus;
+        const isSystem = !!it.isSystemFilled;
         await (tx as any).submissionItem.upsert({
           where: { submissionId_itemId: { submissionId: sub.id, itemId: it.itemId } },
           update: {
-            selected: normalizedSelected as any, content: it.content, score, status: newStatus, rejectReason: null,
+            selected: normalizedSelected as unknown as Prisma.InputJsonValue, content: it.content, score, status: newStatus, rejectReason: null,
             ...(confStatus ? { confirmationStatus: confStatus } : {}),
-            disputeReason: (it as any).disputeReason ?? null,
+            disputeReason: it.disputeReason ?? null,
             isSystemFilled: isSystem,
           },
           create: {
             submissionId: sub.id, itemId: it.itemId,
-            selected: normalizedSelected as any, content: it.content, score, status: newStatus,
+            selected: normalizedSelected as unknown as Prisma.InputJsonValue, content: it.content, score, status: newStatus,
             ...(confStatus ? { confirmationStatus: confStatus } : {}),
-            disputeReason: (it as any).disputeReason ?? null,
+            disputeReason: it.disputeReason ?? null,
             isSystemFilled: isSystem,
           },
         });
@@ -454,8 +455,8 @@ export async function POST(req: Request) {
             declarationSpecialtyId: declarationSpecialty?.id ?? null,
             declarationSpecialtyName: declarationSpecialty?.name ?? null,
             preReviewPassed: preReview.passed,
-            preReviewMessages: preReview.messages as any,
-            preReviewMatchedRules: preReview.matchedRuleIds as any,
+            preReviewMessages: preReview.messages as unknown as Prisma.InputJsonValue,
+            preReviewMatchedRules: preReview.matchedRuleIds as unknown as Prisma.InputJsonValue,
             status: 'SUBMITTED',
             submittedAt: originalSubmittedAt ?? new Date(),
             totalScore,
@@ -487,14 +488,15 @@ export async function POST(req: Request) {
     if (e instanceof EditableError) {
       return NextResponse.json({ error: e.message }, { status: 400 });
     }
-    throw e;
+    console.error('POST /api/submissions:', e);
+    return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
   }
 
   if (submit) {
     const suffix = preReviewRejectedMessages.length > 0
       ? `\n自动预审提示：${preReviewRejectedMessages.join('；')}`
       : '';
-    sendNotice(user.contact, '【绩效申报】提交成功', `您的申报已提交，等待一级审核。${suffix}`).catch(() => {});
+    sendNotice(user.contact, '【绩效申报】提交成功', `您的申报已提交，等待一级审核。${suffix}`).catch((e) => console.error('sendNotice failed:', e));
   }
 
   return NextResponse.json({

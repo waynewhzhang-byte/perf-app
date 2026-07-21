@@ -6,8 +6,11 @@
  * - 二级「评价内容」→ FormItem.dimensionCode（申报项 / 计分维度）
  * - 三级「评价标准」→ FormItem.scoreOptions（档次或按次计分规则）
  */
-import type { EvaluationDimensionCode } from '@/lib/evaluation-dimensions';
-import { SCORING_STANDARDS, type ScoringDataSource } from '@/lib/scoring-standards';
+import {
+  SCORING_STANDARDS,
+  type EvaluationDimensionCode,
+  type ScoringDataSource,
+} from '@/lib/scoring-standards';
 
 export type PerformanceSectionCode = 'basic' | 'performance' | 'worksite' | 'special';
 
@@ -179,3 +182,15 @@ export const DIMENSION_CODE_LABELS: Record<string, string> = Object.fromEntries(
 export const SECTION_CODE_LABELS: Record<PerformanceSectionCode, string> = Object.fromEntries(
   PERFORMANCE_SECTIONS.map((s) => [s.code, s.title]),
 ) as Record<PerformanceSectionCode, string>;
+
+/**
+ * 外部台账维度快捷引用：从 `SUB_DIMENSION_BY_CODE` 取值，避免各调用方重复 `.find()`。
+ * 历史上这三个常量由 evaluation-dimensions.ts 的硬编码树派生；现在统一由
+ * `SCORING_STANDARDS` → `PERFORMANCE_SUB_DIMENSIONS` 派生，数据源唯一。
+ */
+const subDimension = (code: EvaluationDimensionCode): PerformanceSubDimensionDef =>
+  SUB_DIMENSION_BY_CODE[code];
+
+export const DEFECT_LIBRARY_DIMENSION = subDimension('worksite.defect-governance');
+export const TICKET_EXECUTION_DIMENSION = subDimension('worksite.ticket-execution');
+export const SAFETY_CONTRIBUTION_DIMENSION = subDimension('performance.safety-contribution');

@@ -73,6 +73,11 @@ export function rowsToFactInputs(
 
 import type { PrismaClient } from '@prisma/client';
 import { computeFactScores, type ScoringRule } from './scoring-engine';
+import {
+  replaceFactsBySource,
+  type PerformanceFactSeed,
+} from './performance-fact-repository';
+import { loadUserIdByEmployeeNo } from './fact-import-persistence';
 
 /** 从 DB 读维度 ScoringRule（无配置报错） */
 async function loadScoringRule(
@@ -94,14 +99,23 @@ async function loadScoringRule(
 export interface ScoreFactImportResult {
   total: number;
   created: number;
+  /** batch-replace 语义下，"updated" 永远为 0 —— 重新上传等同整体替换，不再复用旧行 */
   updated: number;
   skipped: number;
+  /** 该 scope 下被 deleteMany 清掉的旧事实条数（本次导入前存在的、本次文件未提及的） */
+  deleted: number;
   unmatched: { name: string; reason: string }[];
 }
 
 /**
- * 导入评分事实：行 → FactInput → computeFactScores → PerformanceFact upsert。
- * @param dimensionCode worksite.ticket-execution | worksite.defect-governance | performance.safety-contribution
+ * 导入评分事实：行 → FactInput → computeFactScores → PerformanceFact batch-replace。
+ *
+ * 写入语义：按 (year, dimensionCode, sourceFile) 整体替换。重新上传同一份文件，
+ * 文件中不再出现的旧事实会被删除（UI 之前看到的 incremental 行为是 bug——孤儿事实
+ * 会让后续归档分计算带上已清洗掉的记录）。
+ *
+ * @param dimensionCode worksite.defect-governance | performance.safety-contribution
+ *   （两票单独走 persistTicketAggregates，因为它先把工作票/操作票聚合成每人一条）
  */
 export async function importScoreFacts(
   prisma: PrismaClient,
@@ -120,41 +134,40 @@ export async function importScoreFacts(
 
   const scored = computeFactScores(inputs, [rule]);
 
-  let created = 0;
-  let updated = 0;
-  const skipped = 0;
+  // 一次性批量查 userId，避免逐行 findFirst 的 N+1
+  const userIdByNo = await loadUserIdByEmployeeNo(
+    prisma,
+    scored.map((s) => s.employeeNo),
+  );
 
-  for (const f of scored) {
-    const user = await prisma.user.findFirst({
-      where: { employeeNo: f.employeeNo },
-      select: { id: true },
-    });
+  const seeds: PerformanceFactSeed[] = scored.map((f) => ({
+    year,
+    employeeNo: f.employeeNo,
+    employeeName: f.employeeName,
+    dimensionCode,
+    dimensionTitle,
+    role: f.role,
+    eventType: f.eventType,
+    score: f.score,
+    defectRef: f.defectRef || f.employeeNo,
+    defectLevel: f.defectLevel ?? '',
+    eventDate: f.eventDate ?? null,
+    metadata: (f.metadata ?? {}) as Record<string, unknown>,
+  }));
 
-    const existing = await prisma.performanceFact.findFirst({
-      where: {
-        year, employeeNo: f.employeeNo, dimensionCode,
-        defectRef: f.defectRef || f.employeeNo,
-        role: f.role as never, eventType: f.eventType as never,
-      },
-    });
+  const result = await replaceFactsBySource(
+    prisma,
+    { year, dimensionCode, sourceFile },
+    seeds,
+    userIdByNo,
+  );
 
-    const data = {
-      year, employeeNo: f.employeeNo, employeeName: f.employeeName,
-      userId: user?.id ?? null, dimensionCode, dimensionTitle,
-      role: f.role as never, eventType: f.eventType as never,
-      score: f.score, defectRef: f.defectRef || f.employeeNo,
-      defectLevel: f.defectLevel ?? '', eventDate: f.eventDate ?? null,
-      sourceFile, metadata: (f.metadata ?? {}) as object,
-    };
-
-    if (existing) {
-      await prisma.performanceFact.update({ where: { id: existing.id }, data });
-      updated++;
-    } else {
-      await prisma.performanceFact.create({ data });
-      created++;
-    }
-  }
-
-  return { total: scored.length, created, updated, skipped, unmatched: [] };
+  return {
+    total: scored.length,
+    created: result.created,
+    updated: 0,
+    skipped: 0,
+    deleted: result.deleted,
+    unmatched: [],
+  };
 }

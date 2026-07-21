@@ -6,19 +6,22 @@ describe('defaultScoringRuleConfigs', () => {
   const cfgs = defaultScoringRuleConfigs();
   const codes = cfgs.map((c) => c.dimensionCode);
 
-  it('覆盖 4 个系统导入维度共 6 条规则', () => {
+  it('覆盖 7 个系统导入维度共 9 条规则（含拆分后的技术贡献）', () => {
     const expected = [
       'basic.skill-level',
       'basic.title-level',
       'basic.performance-level',
+      'performance.safety-contribution',
+      'performance.technical-contribution.textbook',
+      'performance.technical-contribution.regulation',
+      'performance.technical-contribution.ticket-revision',
       'worksite.defect-governance',
       'worksite.ticket-execution',
-      'performance.safety-contribution',
     ];
     for (const c of expected) {
       assert.ok(codes.includes(c), `missing ${c}`);
     }
-    assert.equal(cfgs.length, 6);
+    assert.equal(cfgs.length, 9);
   });
 
   it('每条规则携带 dimensionName', () => {
