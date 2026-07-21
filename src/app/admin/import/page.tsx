@@ -20,7 +20,7 @@ export default function ImportCenterPage() {
           >
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">
-                {['①', '②', '③', '④', '⑤'][idx]}
+                {idx + 1}
               </span>
               <h2 className="text-sm font-semibold">{item.title}</h2>
             </div>

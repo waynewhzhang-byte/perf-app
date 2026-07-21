@@ -65,7 +65,11 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
     if (rows.length === 0) { alert('请先选择文件'); return; }
     setBusy(true);
     try {
-      const r = await fetch(config.apiEndpoint, {
+      const endpoint = config.apiEndpointParams
+        && Object.keys(config.apiEndpointParams).length > 0
+        ? `${config.apiEndpoint}?${new URLSearchParams(config.apiEndpointParams).toString()}`
+        : config.apiEndpoint;
+      const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,4 +1,16 @@
-export type ItemCode = 'employees' | 'basic' | 'tickets' | 'defects' | 'safety';
+export type ItemCode =
+  | 'employees'
+  | 'basic'
+  | 'tickets'
+  | 'defects'
+  | 'safety'
+  | 'tech-textbook'
+  | 'tech-regulation'
+  | 'tech-ticket-revision'
+  | 'competition'
+  | 'innovation'
+  | 'patent'
+  | 'violation';
 
 export interface FieldSpec {
   key: string;
@@ -16,6 +28,8 @@ export interface ImportItemConfig {
   dependsOn: string;
   fields: FieldSpec[];
   apiEndpoint: string;
+  /** 查询参数（追加到 apiEndpoint，如 ?kind=regulation） */
+  apiEndpointParams?: Record<string, string>;
   requireFullBatch?: boolean;
   hasScorePreview: boolean;
 }
