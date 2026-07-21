@@ -21,8 +21,18 @@ async function main() {
   const year = Number(argValue('--year', '2026'));
   const unit = argValue('--unit', '变电检修中心');
   const outputPath = resolve(argValue('--output', `data/generated/${quantitativeReportFilename(unit)}`));
-  const rows = await loadAnnualQuantitativeReportRows(prisma, { year, unit });
+  const skipped: { employeeNo: string; reason: string }[] = [];
+  const rows = await loadAnnualQuantitativeReportRows(prisma, {
+    year,
+    unit,
+    onSkip: (employeeNo, reason) => skipped.push({ employeeNo, reason }),
+  });
   if (rows.length === 0) throw new Error(`${year}年度${unit}没有可导出的员工及事实数据`);
+  if (skipped.length > 0) {
+    console.warn(`⚠️  跳过 ${skipped.length} 个 profile 不全的员工（如 E2E 账号）：`);
+    for (const s of skipped.slice(0, 10)) console.warn(`     ${s.employeeNo}: ${s.reason}`);
+    if (skipped.length > 10) console.warn(`     ... 共 ${skipped.length} 个`);
+  }
 
   const workbook = buildAnnualQuantitativeReportWorkbook(rows, { year, unit });
   mkdirSync(dirname(outputPath), { recursive: true });

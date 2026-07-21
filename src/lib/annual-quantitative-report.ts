@@ -37,6 +37,11 @@ export interface AnnualQuantitativeReportOptions {
   unit: string;
   branchId?: string;
   asOf?: Date;
+  /**
+   * 软降级回调：员工因 profile 不全（如缺少「参加工作时间」）被跳过时触发。
+   * 不传时静默跳过——不再像以前那样 throw，避免一个 E2E/测试账号阻塞整份报表。
+   */
+  onSkip?: (employeeNo: string, reason: string) => void;
 }
 
 export interface AnnualReportUserSource {
@@ -113,7 +118,10 @@ export function buildAnnualQuantitativeReportRows(
     if (!user.employeeNo) return [];
     const workYears = workYearsAsOf(profileText(user.profile, '参加工作时间'), asOf);
     if (workYears === null) {
-      throw new Error(`员工${user.employeeNo}缺少有效的参加工作时间`);
+      // 软降级：profile 缺「参加工作时间」（常见于 E2E 账号或尚未申报的员工）。
+      // 历史 bug：原 throw 会让单个 profile 不全的员工阻塞整份报表生成。
+      options.onSkip?.(user.employeeNo, '缺少有效的参加工作时间');
+      return [];
     }
 
     const totals = aggregateEmployeeDimensions({

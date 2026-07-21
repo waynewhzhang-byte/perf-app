@@ -28,7 +28,7 @@ describe('aggregateTicketExecutionRows', () => {
     },
   };
 
-  it('操作票：每行每角色 0.01 分，与操作步数无关', () => {
+  it('操作票：同一员工在同一行的多个角色列只计一次分（规则 xlsx 行 38）', () => {
     const opRows = [{
       单位: '测试',
       票状态: '已执行',
@@ -41,8 +41,25 @@ describe('aggregateTicketExecutionRows', () => {
     const result = aggregateTicketExecutionRows(opRows, [], resolver);
     assert.equal(result.aggregates.length, 2);
     const zhang = result.byEmployeeNo.get('E001')!;
-    assert.equal(zhang.rawScore, 0.02); // 操作人 + 值班负责人 各 0.01
+    // 张三同时是「操作人」和「值班负责人」，但规则要求每人每条数据只计一次分
+    assert.equal(zhang.rawScore, 0.01);
+    assert.equal(zhang.breakdown.operationItems, 1);
+    assert.equal(zhang.breakdown.operationTicketCount, 1);
+    const li = result.byEmployeeNo.get('E002')!;
+    assert.equal(li.rawScore, 0.01);
+    assert.equal(li.breakdown.operationTicketCount, 1);
+  });
+
+  it('操作票：跨行累计（同一员工在多张票各计一次）', () => {
+    const opRows = [
+      { 单位: '测试', 票状态: '已归档', 操作人: '张三', 监护人: '', 值班负责人: '', 现场配合人员: '' },
+      { 单位: '测试', 票状态: '已归档', 操作人: '张三', 监护人: '', 值班负责人: '', 现场配合人员: '' },
+    ];
+    const result = aggregateTicketExecutionRows(opRows, [], resolver);
+    const zhang = result.byEmployeeNo.get('E001')!;
+    assert.equal(zhang.rawScore, 0.02); // 2 张票各 0.01
     assert.equal(zhang.breakdown.operationItems, 2);
+    assert.equal(zhang.breakdown.operationTicketCount, 2);
   });
 
   it('操作票：步数为 0 仍计分', () => {

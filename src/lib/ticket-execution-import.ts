@@ -179,6 +179,10 @@ export function aggregateTicketExecutionRows(
     if (unitFilter && cellString(row['单位']) !== unitFilter) continue;
     if (archivedOnly && !isOperationTicketEligible(cellString(row['票状态']))) continue;
 
+    // 规则（评分标准 对应表.xlsx 行 38）：
+    //   操作票中同一票号「操作人、监护人、值班负责人、现场配合人员」四列按人计数，
+    //   且每条数据中每人只计一次分。
+    // `touched` 同时承担两件事：① 保证同一员工在同一行只加一次分；② 统计唯一参与票数。
     const touched = new Set<string>();
     for (const col of OP_ROLE_COLUMNS) {
       for (const name of parsePersonList(row[col])) {
@@ -188,9 +192,9 @@ export function aggregateTicketExecutionRows(
           continue;
         }
         const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
-        addPoints(bucket, 'operationPoints', itemPrice);
-        bucket.breakdown.operationItems += 1;
         if (!touched.has(hit.employeeNo)) {
+          addPoints(bucket, 'operationPoints', itemPrice);
+          bucket.breakdown.operationItems += 1;
           bucket.breakdown.operationTicketCount += 1;
           touched.add(hit.employeeNo);
         }
