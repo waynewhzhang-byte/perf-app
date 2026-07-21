@@ -119,7 +119,7 @@ function normalizeSectionsForWrite(sections: z.infer<typeof SectionSchema>[]) {
     items: {
       create: s.items.map((it) => ({
         ...it,
-        scoreOptions: ensureScoreOptionIds(it.scoreOptions) as any,
+        scoreOptions: ensureScoreOptionIds(it.scoreOptions) as unknown as Prisma.InputJsonValue,
       })),
     },
   }));
@@ -164,7 +164,7 @@ export async function POST(req: Request) {
     const tpl = await prisma.formTemplate.create({
       data: {
         year, title, description, createdBy: session.userId,
-        headerFields: headerFields as any,
+        headerFields: headerFields as unknown as Prisma.InputJsonValue,
         sections: {
           create: normalizeSectionsForWrite(sections),
         },
@@ -230,7 +230,7 @@ export async function PUT(req: Request) {
       where: { id },
       data: {
         year, title, description,
-        headerFields: headerFields as any,
+        headerFields: headerFields as unknown as Prisma.InputJsonValue,
         sections: {
           create: normalizeSectionsForWrite(sections),
         },
@@ -320,7 +320,7 @@ async function handleTextEdit(body: unknown) {
             data: {
               title: it.title,
               hint: it.hint ?? null,
-              scoreOptions: mergedOptions as any,
+              scoreOptions: mergedOptions as unknown as Prisma.InputJsonValue,
             },
           });
         }

@@ -10,6 +10,7 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import type { DeclarationTier } from '@/lib/declaration-level';
+import { capToStandard, round1 } from '@/lib/dimension-aggregation';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
@@ -126,10 +127,6 @@ export interface ScoreSheetInput {
   mockDeclarationTier?: DeclarationTier | null;
 }
 
-function round1(n: number) {
-  return Math.round(n * 10) / 10;
-}
-
 function resolveTier(input: ScoreSheetInput): DeclarationTier | null {
   if (input.declarationTier) return input.declarationTier;
   if (input.mockDeclarationTier) return input.mockDeclarationTier;
@@ -200,43 +197,6 @@ function computeFactDimensionScore(
     };
   }
 
-  if (standard.code === 'worksite.defect-governance') {
-    if (perfFacts.length === 0) {
-      return { score: 0, lines: [], hasFacts: false };
-    }
-    const raw = perfFacts.reduce((s, f) => s + Number(f.score), 0);
-    const score = round1(Math.min(raw, standard.maxScore));
-    return {
-      score,
-      hasFacts: true,
-      lines: perfFacts.map((f) => ({
-        id: f.id,
-        label: `${f.defectLevel ?? ''} ${f.defectRef ?? ''}`.trim(),
-        score: Number(f.score),
-        detail: f.role,
-      })),
-    };
-  }
-
-  if (standard.code === 'performance.safety-contribution') {
-    // 安全贡献：系统导入维度（SHARE 计分后的 PerformanceFact，每人多条事件事实累加，封顶 maxScore）
-    if (perfFacts.length === 0) {
-      return { score: 0, lines: [], hasFacts: false };
-    }
-    const raw = perfFacts.reduce((s, f) => s + Number(f.score), 0);
-    const score = round1(Math.min(raw, standard.maxScore));
-    return {
-      score,
-      hasFacts: true,
-      lines: perfFacts.map((f) => ({
-        id: f.id,
-        label: `${f.defectRef ?? ''} ${f.role ?? ''}`.trim(),
-        score: Number(f.score),
-        detail: f.role,
-      })),
-    };
-  }
-
   if (standard.code === 'worksite.ticket-execution') {
     const agg = perfFacts[0];
     if (!agg) return { score: 0, lines: [], hasFacts: false };
@@ -256,21 +216,25 @@ function computeFactDimensionScore(
     };
   }
 
-  if (perfFacts.length > 0) {
-    const raw = perfFacts.reduce((sum, fact) => sum + Number(fact.score), 0);
-    return {
-      score: round1(Math.min(raw, standard.maxScore)),
-      hasFacts: true,
-      lines: perfFacts.map((fact) => ({
-        id: fact.id,
-        label: fact.defectRef || fact.eventType || standard.title,
-        score: Number(fact.score),
-        detail: fact.role,
-      })),
-    };
+  if (perfFacts.length === 0) {
+    return { score: 0, lines: [], hasFacts: false };
   }
 
-  return { score: 0, lines: [], hasFacts: false };
+  const raw = perfFacts.reduce((sum, fact) => sum + Number(fact.score), 0);
+  const score = capToStandard(standard.code, raw);
+  const lines: DimensionScoreLine[] = perfFacts.map((fact) => ({
+    id: fact.id,
+    label:
+      standard.code === 'worksite.defect-governance'
+        ? `${fact.defectLevel ?? ''} ${fact.defectRef ?? ''}`.trim()
+        : standard.code === 'performance.safety-contribution'
+          ? `${fact.defectRef ?? ''} ${fact.role ?? ''}`.trim()
+          : fact.defectRef || fact.eventType || standard.title,
+    score: Number(fact.score),
+    detail: fact.role,
+  }));
+
+  return { score, hasFacts: true, lines };
 }
 
 function buildDimensionRow(
@@ -366,7 +330,7 @@ function buildDimensionRow(
     && standard.maxScore > 0
     && standard.code !== 'worksite.ticket-execution'
   ) {
-    score = round1(Math.min(score, standard.maxScore));
+    score = capToStandard(standard.code, score);
   }
 
   return {

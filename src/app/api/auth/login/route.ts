@@ -114,7 +114,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '该账号无管理或审核权限' }, { status: 403 });
     }
 
-    const token = await signSession({ userId: user.id, contact: user.contact, fullName: user.fullName });
+    const token = await signSession({ userId: user.id, contact: user.contact, fullName: user.fullName, tokenVersion: user.tokenVersion });
     await setSessionCookie(token, isStaff);
 
     return NextResponse.json({ success: true, roles });

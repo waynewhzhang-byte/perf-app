@@ -72,6 +72,7 @@ model User {
   employeeLevelId String?
   hireDate        DateTime? // 入职时间，导入时设定，申报时预填充
   gender          String? // 性别（导入自《基本素质信息》）
+  tokenVersion    Int      @default(0) // 密码修改时递增，使旧 JWT 失效
   // Sheet1 全列原始快照（班组、岗位分类代码、岗位分类、工作负责人标识、技能等级工种、
   // 专业技术资格系列等系统未单独建表的列），保留原始信息便于后续扩展
   profile         Json      @default("{}")

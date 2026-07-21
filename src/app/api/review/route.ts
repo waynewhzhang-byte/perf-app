@@ -5,18 +5,13 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { getSession, getUserRoles } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
+import { buildL1SubmissionScopeWhere } from '@/lib/reviewer-scope';
 import {
-  computeSectionScores,
-  computeTemplateMaxScore,
-  type ScorableSection,
-} from '@/lib/score-calculation';
-import { persistSubmissionDimensionFacts } from '@/lib/submission-fact-persistence';
-import {
-  isReviewSkippedSystemItem,
-  resolveFormItemDimension,
-} from '@/lib/system-filled-items';
-import { buildL1SubmissionScopeWhere, matchesL1Scope } from '@/lib/reviewer-scope';
-import { dimensionReviewOptionId } from '@/lib/dimension-review-routing';
+  applyL1,
+  applyL2,
+  ReviewError,
+  type ReviewOutcome,
+} from '@/lib/review-workflow';
 
 const DecisionSchema = z.object({
   submissionItemId: z.string().optional(),
@@ -49,113 +44,15 @@ function includeFor(level: 1 | 2, departmentId?: string | null) {
   };
 }
 
-async function loadSectionsForArchive(tx: typeof prisma, templateId: string): Promise<ScorableSection[]> {
-  const sections = await tx.formSection.findMany({
-    where: { templateId },
-    orderBy: { sortOrder: 'asc' },
-    select: {
-      id: true,
-      title: true,
-      sortOrder: true,
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        select: {
-          id: true,
-          scoreMode: true,
-          maxScore: true,
-          maxSelections: true,
-          scoreOptions: true,
-          sortOrder: true,
-        },
-      },
-    },
-  });
-  return sections.map((sec) => ({
-    id: sec.id,
-    title: sec.title,
-    sortOrder: sec.sortOrder,
-    items: sec.items.map((it) => ({
-      id: it.id,
-      scoreMode: it.scoreMode,
-      maxScore: it.maxScore != null ? Number(it.maxScore) : null,
-      maxSelections: it.maxSelections,
-      scoreOptions: it.scoreOptions,
-      sortOrder: it.sortOrder,
-    })),
-  }));
-}
-
-async function archiveSubmission(tx: typeof prisma, submissionId: string, reviewerId: string) {
-  const sub = await tx.submission.findUnique({
-    where: { id: submissionId },
-    include: {
-      template: true,
-      items: { include: { item: true, attachments: true, optionReviews: { include: { department: true } } } },
-    },
-  });
-  if (!sub) return 0;
-  const total = sub.items.reduce((sum, item) => sum + Number(item.score), 0);
-  const templateSections = await loadSectionsForArchive(tx, sub.templateId);
-  const scoreByItemId = new Map(sub.items.map((it) => [it.itemId, Number(it.score)]));
-  const sectionRows = computeSectionScores(templateSections, scoreByItemId);
-  const templateMaxScore = computeTemplateMaxScore(templateSections);
-  const archived = {
-    submissionId: sub.id,
-    userId: sub.userId,
-    templateId: sub.templateId,
-    declarationHeader: {
-      workAreaId: sub.branchId,
-      workAreaName: sub.workAreaName,
-      hireDate: sub.hireDate,
-      workYears: sub.workYears,
-      declarationLevelId: sub.declarationLevelId,
-      declarationLevelName: sub.declarationLevelName,
-      declarationSpecialtyId: sub.declarationSpecialtyId,
-      declarationSpecialtyName: sub.declarationSpecialtyName,
-      preReviewPassed: sub.preReviewPassed,
-      preReviewMessages: sub.preReviewMessages,
-      preReviewMatchedRules: sub.preReviewMatchedRules,
-    },
-    items: sub.items.map((it) => ({
-      itemId: it.itemId,
-      itemTitle: it.item.title,
-      selected: it.selected,
-      content: it.content,
-      score: it.score,
-      optionReviews: it.optionReviews.map((review) => ({
-        optionId: review.optionId,
-        label: review.label,
-        score: review.score,
-        count: review.count,
-        departmentId: review.departmentId,
-        departmentName: review.department.name,
-        status: review.status,
-        rejectReason: review.rejectReason,
-        reviewerId: review.reviewedBy,
-        reviewedAt: review.reviewedAt,
-      })),
-      attachments: it.attachments.map((att) => ({
-        id: att.id,
-        filename: att.filename,
-        storageKey: att.storageKey,
-        mimeType: att.mimeType,
-      })),
-    })),
-    sections: sectionRows,
-    templateMaxScore,
-    finalizedAt: new Date(),
-  };
-  await tx.submission.update({
-    where: { id: sub.id },
-    data: { status: 'L2_APPROVED', l2ReviewerId: reviewerId, l2ReviewedAt: new Date(), totalScore: total },
-  });
-  await tx.performanceRecord.upsert({
-    where: { userId_year: { userId: sub.userId, year: sub.template.year } },
-    update: { submissionId: sub.id, totalScore: total, archivedData: archived as any },
-    create: { userId: sub.userId, year: sub.template.year, submissionId: sub.id, totalScore: total, archivedData: archived as any },
-  });
-  await persistSubmissionDimensionFacts(tx, sub.id, new Date());
-  return total;
+function noticeForOutcome(level: 1 | 2, outcome: ReviewOutcome): string | null {
+  if (outcome === 'rejected') {
+    return level === 1
+      ? '您的申报已被一级审核驳回，请登录系统修改后重新提交。'
+      : '您的申报有二级审核子项被驳回，请登录系统修改后重新提交。';
+  }
+  if (outcome === 'finalized') return '终审通过，已生成年度绩效档案。';
+  if (level === 1) return '一级审核通过，正在等待二级审核。';
+  return null;
 }
 
 export async function GET(req: Request) {
@@ -253,343 +150,46 @@ export async function POST(req: Request) {
   const parsed = Schema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: '参数无效' }, { status: 400 });
 
-  const sub = await prisma.submission.findUnique({
+  const statusRow = await prisma.submission.findUnique({
     where: { id: parsed.data.submissionId },
-    include: {
-      items: { include: { item: true, optionReviews: true } },
-      user: true,
-    },
+    select: { status: true },
   });
-  if (!sub) return NextResponse.json({ error: '申报不存在' }, { status: 404 });
+  if (!statusRow) return NextResponse.json({ error: '申报不存在' }, { status: 404 });
 
-  const level = sub.status === 'SUBMITTED' ? 1 : sub.status === 'L1_APPROVED' ? 2 : 0;
+  const level = statusRow.status === 'SUBMITTED' ? 1 : statusRow.status === 'L1_APPROVED' ? 2 : 0;
   if (level === 0) return NextResponse.json({ error: '当前状态不可审核' }, { status: 400 });
   if (level === 1 && !isL1) return NextResponse.json({ error: '非一级审核员' }, { status: 403 });
   if (level === 2 && !isL2) return NextResponse.json({ error: '非二级审核员' }, { status: 403 });
 
-  if (level === 1) {
-    const l1Scopes = await prisma.userRole.findMany({ where: { userId: s.userId, role: 'REVIEWER_L1' } });
-    if (!matchesL1Scope(l1Scopes, { branchId: sub.branchId, departmentId: sub.user.departmentId })) {
-      return NextResponse.json({ error: '该申报不在您的审核范围内' }, { status: 403 });
-    }
+  const cmd = {
+    submissionId: parsed.data.submissionId,
+    reviewerId: s.userId,
+    decisions: parsed.data.decisions,
+  };
 
-    const pendingItems = sub.items.filter(
-      (item) =>
-        item.status === 'PENDING_L1' &&
-        !isReviewSkippedSystemItem({
-          isSystemFilled: !!(item as { isSystemFilled?: boolean }).isSystemFilled,
-          confirmationStatus: (item as { confirmationStatus?: 'CONFIRMED' | 'DISPUTED' | null }).confirmationStatus,
-        }),
+  try {
+    const result = await prisma.$transaction((tx) =>
+      level === 1 ? applyL1(tx, cmd) : applyL2(tx, cmd),
     );
-    const decisionMap = new Map(parsed.data.decisions.map((d) => [d.submissionItemId, d]));
-    const uncovered = pendingItems.filter((item) => !decisionMap.has(item.id));
-    if (uncovered.length > 0) {
-      return NextResponse.json({ error: `以下申报项未做出审核决定：${uncovered.map((item) => item.item.title).join('、')}` }, { status: 400 });
-    }
-    const itemReject = parsed.data.decisions.find((d) => d.action === 'REJECT' && !d.note?.trim());
-    if (itemReject) return NextResponse.json({ error: '驳回的项必须填写原因' }, { status: 400 });
 
-    let rejected = false;
-    let finalized = false;
-    try {
-      await prisma.$transaction(async (tx) => {
-
-      for (const item of pendingItems) {
-        const decision = decisionMap.get(item.id)!;
-        if (decision.action === 'REJECT') rejected = true;
-        await tx.submissionItem.update({
-          where: { id: item.id },
-          data: {
-            status: decision.action === 'REJECT' ? 'REJECTED' : 'L1_APPROVED',
-            rejectReason: decision.action === 'REJECT' ? decision.note ?? null : null,
-            reviewedBy: s.userId,
-            reviewedAt: new Date(),
-          },
-        });
-        await tx.reviewLog.create({
-          data: {
-            submissionId: sub.id,
-            submissionItemId: item.id,
-            reviewerId: s.userId,
-            level: 1,
-            action: decision.action,
-            note: decision.note,
-          },
-        });
-
-        // 申诉判断：对员工申诉的系统填充项，L1 必须给出判断
-        if ((item as any).isSystemFilled && (item as any).confirmationStatus === 'DISPUTED') {
-          if (!decision.disputeAction) {
-            throw new ReviewError(`「${item.item.title}」存在员工申诉，请对申诉做出判断（申诉合理/申诉驳回）`);
-          }
-          if (decision.disputeAction === 'REJECT' && !decision.disputeNote?.trim()) {
-            throw new ReviewError('驳回申诉请填写原因');
-          }
-          const disputeResult: 'APPROVED' | 'REJECTED' = decision.disputeAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-          await tx.submissionItem.update({
-            where: { id: item.id },
-            data: {
-              disputeL1Result: disputeResult,
-              disputeL1Note: decision.disputeNote ?? null,
-              disputeL1ReviewerId: s.userId,
-              disputeL1ReviewedAt: new Date(),
-            },
-          });
-          await tx.reviewLog.create({
-            data: {
-              submissionId: sub.id,
-              submissionItemId: item.id,
-              reviewerId: s.userId,
-              level: 1,
-              action: decision.disputeAction,
-              note: `申诉判断：${decision.disputeAction === 'APPROVE' ? '认定合理' : '驳回'}${decision.disputeNote ? `。${decision.disputeNote}` : ''}`,
-            },
-          });
-        }
-      }
-
-      if (rejected) {
-        await tx.submission.update({
-          where: { id: sub.id },
-          data: { status: 'REJECTED', l1ReviewerId: s.userId, l1ReviewedAt: new Date() },
-        });
-        return;
-      }
-
-      await tx.submission.update({
-        where: { id: sub.id },
-        data: { status: 'L1_APPROVED', l1ReviewerId: s.userId, l1ReviewedAt: new Date() },
-      });
-
-      const dimensionCodes = sub.items
-        .map((item) => resolveFormItemDimension(item.item))
-        .filter((dimensionCode): dimensionCode is string => Boolean(dimensionCode));
-      const routes = await tx.dimensionReviewRoute.findMany({
-        where: { dimensionCode: { in: dimensionCodes } },
-      });
-      const routeByDimension = new Map(
-        routes.map((route) => [route.dimensionCode, route.departmentId]),
+    const notice = noticeForOutcome(level, result.outcome);
+    if (notice) {
+      sendNotice(result.employeeContact, '【绩效申报】审核结果', notice).catch((e) =>
+        console.error('sendNotice failed:', e),
       );
-
-      for (const item of sub.items) {
-        const dimensionCode = resolveFormItemDimension(item.item);
-        if (!dimensionCode) {
-          throw new ReviewError(`「${item.item.title}」缺少稳定评分点代码，无法进入二审`);
-        }
-        const departmentId = routeByDimension.get(dimensionCode);
-        if (!departmentId) {
-          throw new ReviewError(`「${item.item.title}」尚未配置二审归属，请联系管理员在「二审归属配置」中补全`);
-        }
-        const optionId = dimensionReviewOptionId(dimensionCode);
-        await tx.submissionOptionReview.deleteMany({
-          where: {
-            submissionItemId: item.id,
-            status: { not: 'L2_APPROVED' },
-            optionId: { not: optionId },
-          },
-        });
-        const existing = item.optionReviews.find((review) => review.optionId === optionId);
-        if (existing?.status === 'L2_APPROVED') continue;
-        await tx.submissionOptionReview.upsert({
-          where: { submissionItemId_optionId: { submissionItemId: item.id, optionId } },
-          update: {
-            label: item.item.title,
-            score: item.score,
-            count: null,
-            departmentId,
-            status: 'PENDING_L2',
-            rejectReason: null,
-            reviewedBy: null,
-            reviewedAt: null,
-          },
-          create: {
-            submissionItemId: item.id,
-            optionId,
-            label: item.item.title,
-            score: item.score,
-            count: null,
-            departmentId,
-          },
-        });
-      }
-
-      const items = await tx.submissionItem.findMany({
-        where: { submissionId: sub.id },
-        include: { optionReviews: true },
-      });
-      for (const item of items) {
-        if (item.optionReviews.length === 0) {
-          await tx.submissionItem.update({ where: { id: item.id }, data: { status: 'L2_APPROVED' } });
-          continue;
-        }
-        const allApproved = item.optionReviews.every((review) => review.status === 'L2_APPROVED');
-        await tx.submissionItem.update({
-          where: { id: item.id },
-          data: { status: allApproved ? 'L2_APPROVED' : 'PENDING_L2' },
-        });
-      }
-      const remaining = await tx.submissionOptionReview.count({
-        where: { submissionItem: { submissionId: sub.id }, status: 'PENDING_L2' },
-      });
-      if (remaining === 0) {
-        await archiveSubmission(tx as any, sub.id, s.userId);
-        finalized = true;
-      }
-      });
-    } catch (e) {
-      if (e instanceof ReviewError) return NextResponse.json({ error: e.message }, { status: 400 });
-      throw e;
     }
 
-    sendNotice(
-      sub.user.contact,
-      '【绩效申报】审核结果',
-      rejected ? '您的申报已被一级审核驳回，请登录系统修改后重新提交。' : finalized ? '终审通过，已生成年度绩效档案。' : '一级审核通过，正在等待二级审核。',
-    ).catch(() => {});
-    return NextResponse.json({ success: true, finalized });
-  }
-
-  const reviewer = await prisma.user.findUnique({ where: { id: s.userId }, select: { departmentId: true } });
-  if (!reviewer?.departmentId) return NextResponse.json({ error: '当前二级审核员未绑定部门' }, { status: 403 });
-
-  const pendingReviews = await prisma.submissionOptionReview.findMany({
-    where: {
-      submissionItem: { submissionId: sub.id },
-      departmentId: reviewer.departmentId,
-      status: 'PENDING_L2',
-    },
-    include: { submissionItem: { include: { item: true } } },
-  });
-  if (pendingReviews.length === 0) return NextResponse.json({ error: '当前没有属于您部门的待审子项' }, { status: 400 });
-
-  const decisionMap = new Map(parsed.data.decisions.map((d) => [d.optionReviewId, d]));
-  const uncovered = pendingReviews.filter((review) => !decisionMap.has(review.id));
-  if (uncovered.length > 0) {
-    return NextResponse.json({ error: `以下子项未做出审核决定：${uncovered.map((review) => review.label).join('、')}` }, { status: 400 });
-  }
-  const rejectWithoutNote = parsed.data.decisions.find((d) => d.action === 'REJECT' && !d.note?.trim());
-  if (rejectWithoutNote) return NextResponse.json({ error: '驳回的子项必须填写原因' }, { status: 400 });
-
-  let hasReject = false;
-  let l2Finalized = false;
-  await prisma.$transaction(async (tx) => {
-    for (const review of pendingReviews) {
-      const decision = decisionMap.get(review.id)!;
-      if (decision.action === 'REJECT') hasReject = true;
-      await tx.submissionOptionReview.update({
-        where: { id: review.id },
-        data: {
-          status: decision.action === 'APPROVE' ? 'L2_APPROVED' : 'REJECTED',
-          rejectReason: decision.action === 'REJECT' ? decision.note ?? null : null,
-          reviewedBy: s.userId,
-          reviewedAt: new Date(),
-        },
-      });
-      await tx.reviewLog.create({
-        data: {
-          submissionId: sub.id,
-          submissionItemId: review.submissionItemId,
-          reviewerId: s.userId,
-          level: 2,
-          action: decision.action,
-          note: `子项「${review.label}」${decision.note ? `：${decision.note}` : ''}`,
-        },
-      });
-      if (decision.action === 'REJECT') {
-        await tx.submissionItem.update({
-          where: { id: review.submissionItemId },
-          data: { status: 'REJECTED', rejectReason: decision.note ?? null, reviewedBy: s.userId, reviewedAt: new Date() },
-        });
-      }
-    }
-
-    if (hasReject) {
-      await tx.submission.update({
-        where: { id: sub.id },
-        data: { status: 'REJECTED', l2ReviewerId: s.userId, l2ReviewedAt: new Date() },
-      });
-      return;
-    }
-
-    const affectedItemIds = Array.from(new Set(pendingReviews.map((review) => review.submissionItemId)));
-    for (const itemId of affectedItemIds) {
-      const reviews = await tx.submissionOptionReview.findMany({ where: { submissionItemId: itemId } });
-      if (reviews.length > 0 && reviews.every((review) => review.status === 'L2_APPROVED')) {
-        await tx.submissionItem.update({
-          where: { id: itemId },
-          data: { status: 'L2_APPROVED', reviewedBy: s.userId, reviewedAt: new Date(), rejectReason: null },
-        });
-      }
-    }
-
-    // 申诉确认：对 L1 认定合理的申诉项，L2 必须给出确认判断
-    const disputeDecisionMap = new Map(
-      parsed.data.decisions
-        .filter((d) => d.submissionItemId && d.disputeAction)
-        .map((d) => [d.submissionItemId!, d]),
-    );
-    for (const itemId of affectedItemIds) {
-      const item = await tx.submissionItem.findUnique({ where: { id: itemId }, include: { item: true } });
-      if (!item || !(item as any).isSystemFilled || (item as any).confirmationStatus !== 'DISPUTED') continue;
-      if ((item as any).disputeL1Result !== 'APPROVED') continue;
-      if ((item as any).disputeL2Result) continue; // already processed
-
-      const disputeDecision = disputeDecisionMap.get(itemId);
-      if (!disputeDecision || !disputeDecision.disputeAction) {
-        throw new ReviewError(`「${(item as any).item?.title ?? item.itemId}」存在申诉（一级已认定合理），请对申诉做出确认判断`);
-      }
-      if (disputeDecision.disputeAction === 'REJECT' && !disputeDecision.disputeNote?.trim()) {
-        throw new ReviewError('驳回申诉请填写原因');
-      }
-
-      const disputeResult: 'APPROVED' | 'REJECTED' = disputeDecision.disputeAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-      await tx.submissionItem.update({
-        where: { id: itemId },
-        data: {
-          disputeL2Result: disputeResult,
-          disputeL2Note: disputeDecision.disputeNote ?? null,
-          disputeL2ReviewerId: s.userId,
-          disputeL2ReviewedAt: new Date(),
-        },
-      });
-      await tx.reviewLog.create({
-        data: {
-          submissionId: sub.id,
-          submissionItemId: itemId,
-          reviewerId: s.userId,
-          level: 2,
-          action: disputeDecision.disputeAction,
-          note: `申诉确认：${disputeDecision.disputeAction === 'APPROVE' ? '确认有效' : '认定无效'}${disputeDecision.disputeNote ? `。${disputeDecision.disputeNote}` : ''}`,
-        },
-      });
-    }
-
-    const remaining = await tx.submissionOptionReview.count({
-      where: { submissionItem: { submissionId: sub.id }, status: 'PENDING_L2' },
+    return NextResponse.json({
+      success: true,
+      outcome: result.outcome,
+      finalized: result.outcome === 'finalized',
+      ...(result.totalScore != null ? { totalScore: result.totalScore } : {}),
     });
-    if (remaining > 0) {
-      await tx.submission.update({
-        where: { id: sub.id },
-        data: { l2ReviewerId: s.userId, l2ReviewedAt: new Date() },
-      });
-      return;
+  } catch (e) {
+    if (e instanceof ReviewError) {
+      return NextResponse.json({ error: e.message }, { status: e.httpStatus });
     }
-    await archiveSubmission(tx as any, sub.id, s.userId);
-    l2Finalized = true;
-  });
-
-  const notice = hasReject
-    ? '您的申报有二级审核子项被驳回，请登录系统修改后重新提交。'
-    : l2Finalized
-      ? '终审通过，已生成年度绩效档案。'
-      : null;
-  if (notice) sendNotice(sub.user.contact, '【绩效申报】审核结果', notice).catch(() => {});
-  return NextResponse.json({ success: true, finalized: l2Finalized });
-}
-
-class ReviewError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ReviewError';
+    console.error(`POST /api/review L${level}:`, e);
+    return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
   }
 }

@@ -2,6 +2,16 @@ import type { PrismaClient } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { computeLevel, DECLARATION_LEVELS, type DeclarationLevel } from './declaration-level';
 import {
+  aggregateEmployeeDimensions,
+  applyTicketCohortNormalization,
+  cappedPair,
+  dimensionFactCount,
+  dimensionRaw,
+  dimensionScore,
+  parentCap,
+  round1,
+} from './dimension-aggregation';
+import {
   ALL_QUANTITATIVE_REPORT_UNITS,
   quantitativeReportUnitLabel,
   type QuantitativeReportRow,
@@ -78,40 +88,6 @@ export function workYearsAsOf(startDate: string | Date, asOf: Date): number | nu
   return Math.max(0, years);
 }
 
-function round1(value: number): number {
-  return Math.round(value * 10) / 10;
-}
-
-function cappedPair(first: number, second: number, cap: number): [number, number] {
-  const total = first + second;
-  if (total <= cap || total <= 0) return [round1(first), round1(second)];
-  const firstCapped = round1((first / total) * cap);
-  return [firstCapped, round1(cap - firstCapped)];
-}
-
-type ScoreAggregate = { score: number; count: number };
-
-function aggregateScores<T extends { employeeNo: string; score: unknown }>(
-  rows: T[],
-  dimension: (row: T) => string,
-): Map<string, Map<string, ScoreAggregate>> {
-  const grouped = new Map<string, Map<string, ScoreAggregate>>();
-  for (const row of rows) {
-    const byDimension = grouped.get(row.employeeNo) ?? new Map<string, ScoreAggregate>();
-    const code = dimension(row);
-    const current = byDimension.get(code) ?? { score: 0, count: 0 };
-    current.score += Number(row.score);
-    current.count += 1;
-    byDimension.set(code, current);
-    grouped.set(row.employeeNo, byDimension);
-  }
-  return grouped;
-}
-
-function aggregateValue(aggregates: Map<string, ScoreAggregate>, dimension: string): ScoreAggregate {
-  return aggregates.get(dimension) ?? { score: 0, count: 0 };
-}
-
 export function buildAnnualQuantitativeReportRows(
   users: AnnualReportUserSource[],
   basicFacts: AnnualBasicFactSource[],
@@ -119,8 +95,19 @@ export function buildAnnualQuantitativeReportRows(
   options: AnnualQuantitativeReportOptions,
 ): QuantitativeReportRow[] {
   const asOf = options.asOf ?? new Date(Date.UTC(options.year, 4, 31));
-  const basicByEmployee = aggregateScores(basicFacts, (fact) => fact.dimension);
-  const performanceByEmployee = aggregateScores(performanceFacts, (fact) => fact.dimensionCode);
+
+  const basicByEmployee = new Map<string, AnnualBasicFactSource[]>();
+  for (const fact of basicFacts) {
+    const list = basicByEmployee.get(fact.employeeNo) ?? [];
+    list.push(fact);
+    basicByEmployee.set(fact.employeeNo, list);
+  }
+  const performanceByEmployee = new Map<string, AnnualPerformanceFactSource[]>();
+  for (const fact of performanceFacts) {
+    const list = performanceByEmployee.get(fact.employeeNo) ?? [];
+    list.push(fact);
+    performanceByEmployee.set(fact.employeeNo, list);
+  }
 
   const provisional = users.flatMap((user) => {
     if (!user.employeeNo) return [];
@@ -128,28 +115,34 @@ export function buildAnnualQuantitativeReportRows(
     if (workYears === null) {
       throw new Error(`员工${user.employeeNo}缺少有效的参加工作时间`);
     }
-    const basics = basicByEmployee.get(user.employeeNo) ?? new Map<string, ScoreAggregate>();
-    const facts = performanceByEmployee.get(user.employeeNo) ?? new Map<string, ScoreAggregate>();
-    const basicScore = (dimension: string) => aggregateValue(basics, dimension).score;
-    const performance = (dimension: string) => aggregateValue(facts, dimension);
-    const safety = performance(DIMENSIONS.safety);
-    const defect = performance(DIMENSIONS.defect);
-    const ticket = performance(DIMENSIONS.ticket);
+
+    const totals = aggregateEmployeeDimensions({
+      employeeNo: user.employeeNo,
+      performanceFacts: (performanceByEmployee.get(user.employeeNo) ?? []).map((f) => ({
+        dimensionCode: f.dimensionCode,
+        score: Number(f.score),
+      })),
+      basicFacts: (basicByEmployee.get(user.employeeNo) ?? []).map((f) => ({
+        dimension: f.dimension,
+        score: Number(f.score),
+      })),
+    });
 
     const [technicalStandard, technicalResource] = cappedPair(
-      performance(DIMENSIONS.technicalRegulation).score + performance(DIMENSIONS.technicalTicket).score,
-      performance(DIMENSIONS.technicalTextbook).score,
-      12,
+      dimensionRaw(totals, DIMENSIONS.technicalRegulation)
+        + dimensionRaw(totals, DIMENSIONS.technicalTicket),
+      dimensionRaw(totals, DIMENSIONS.technicalTextbook),
+      parentCap('performance.technical-contribution'),
     );
     const [competitionEvent, competitionExam] = cappedPair(
-      performance(DIMENSIONS.competitionEvent).score,
-      performance(DIMENSIONS.competitionExam).score,
-      10,
+      dimensionRaw(totals, DIMENSIONS.competitionEvent),
+      dimensionRaw(totals, DIMENSIONS.competitionExam),
+      parentCap('performance.competition'),
     );
     const [innovationAward, innovationPaper] = cappedPair(
-      performance(DIMENSIONS.innovationAward).score,
-      performance(DIMENSIONS.innovationPaper).score,
-      10,
+      dimensionRaw(totals, DIMENSIONS.innovationAward),
+      dimensionRaw(totals, DIMENSIONS.innovationPaper),
+      parentCap('performance.innovation'),
     );
 
     const specialty = profileText(user.profile, '岗位分类')
@@ -167,10 +160,10 @@ export function buildAnnualQuantitativeReportRows(
       specialty,
       position: user.position?.name ?? profileText(user.profile, '岗位'),
       workYears: String(workYears),
-      skillLevel: basicScore('SKILL_LEVEL'),
-      titleLevel: basicScore('TITLE_LEVEL'),
-      performanceLevel: basicScore('PERFORMANCE_LEVEL'),
-      safetyContribution: Math.min(12, round1(safety.score)),
+      skillLevel: dimensionScore(totals, 'basic.skill-level'),
+      titleLevel: dimensionScore(totals, 'basic.title-level'),
+      performanceLevel: dimensionScore(totals, 'basic.performance-level'),
+      safetyContribution: dimensionScore(totals, DIMENSIONS.safety),
       technicalStandard,
       technicalResource,
       competitionEvent,
@@ -178,33 +171,38 @@ export function buildAnnualQuantitativeReportRows(
       innovationAward,
       innovationPaper,
       ticketExecution: 0,
-      defectGovernance: Math.min(12, round1(defect.score)),
-      violationSevere: round1(performance(DIMENSIONS.violationSevere).score),
-      violationGeneral: round1(performance(DIMENSIONS.violationGeneral).score),
+      defectGovernance: dimensionScore(totals, DIMENSIONS.defect),
+      violationSevere: dimensionScore(totals, DIMENSIONS.violationSevere),
+      violationGeneral: dimensionScore(totals, DIMENSIONS.violationGeneral),
       tier: computeLevel(workYears),
-      rawDefectScore: round1(defect.score),
-      rawSafetyScore: round1(safety.score),
-      rawTicketScore: ticket.score,
+      rawDefectScore: dimensionRaw(totals, DIMENSIONS.defect),
+      rawSafetyScore: dimensionRaw(totals, DIMENSIONS.safety),
+      rawTicketScore: totals.rawTicketScore,
       ticketTierMaxRaw: 0,
-      factCount: defect.count,
-      safetyFactCount: safety.count,
+      factCount: dimensionFactCount(totals, DIMENSIONS.defect),
+      safetyFactCount: dimensionFactCount(totals, DIMENSIONS.safety),
     } satisfies QuantitativeReportRow];
   });
 
-  const ticketSpecialtyMax = new Map<string, number>();
-  for (const row of provisional) {
-    ticketSpecialtyMax.set(
-      row.specialty,
-      Math.max(ticketSpecialtyMax.get(row.specialty) ?? 0, row.rawTicketScore),
-    );
-  }
+  const ticketNormalized = applyTicketCohortNormalization(
+    provisional.map((row) => ({
+      employeeNo: row.employeeNo,
+      cohortKey: row.specialty,
+      rawTicketScore: row.rawTicketScore,
+    })),
+    'specialty',
+  );
+  const ticketByEmployee = new Map(
+    ticketNormalized.map((row) => [row.employeeNo, row]),
+  );
+
   return provisional
     .map((row) => {
-      const max = ticketSpecialtyMax.get(row.specialty) ?? 0;
+      const ticket = ticketByEmployee.get(row.employeeNo);
       return {
         ...row,
-        ticketTierMaxRaw: max,
-        ticketExecution: max > 0 ? round1(Math.min(30, (row.rawTicketScore / max) * 30)) : 0,
+        ticketTierMaxRaw: ticket?.ticketCohortMax ?? 0,
+        ticketExecution: ticket?.ticketScore ?? 0,
       };
     })
     .sort((a, b) =>
