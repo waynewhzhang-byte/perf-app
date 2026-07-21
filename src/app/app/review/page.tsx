@@ -158,14 +158,18 @@ export default function ReviewPage() {
     const missingNote = decs.find((d) => d.action === 'REJECT' && !d.note?.trim());
     if (missingNote) { alert('驳回的项必须填写原因'); return; }
     setBusy(true);
-    const r = await fetch('/api/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: active.id, decisions: decs }),
-    });
-    setBusy(false);
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
-    setDecisions({}); load();
+    try {
+      const r = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissionId: active.id, decisions: decs }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
+      setDecisions({});
+      await load();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const reviewTimeline = useMemo(() => {

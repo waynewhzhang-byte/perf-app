@@ -234,9 +234,7 @@ export async function POST(req: Request) {
                   scopeBranchId: reviewerScope!.role === 'REVIEWER_L1'
                     ? reviewerScope!.branchId
                     : null,
-                  scopeDepartmentId: reviewerScope!.role === 'REVIEWER_L1'
-                    ? reviewerScope!.departmentId
-                    : null,
+                  scopeDepartmentId: reviewerScope!.departmentId,
                 }
               : { userId: created.id, role: 'EMPLOYEE' },
           });
@@ -315,19 +313,30 @@ export async function POST(req: Request) {
     }
 
     const { userId, role, action } = parsed.data;
-    const scopeBranchId = role === 'REVIEWER_L1' ? parsed.data.scopeBranchId ?? null : null;
-    const scopeDepartmentId = role === 'REVIEWER_L1' ? parsed.data.scopeDepartmentId ?? null : null;
-
     const targetUser = await prisma.user.findUnique({
       where: { id: userId },
       include: { branch: true, department: true },
     });
     if (!targetUser) return NextResponse.json({ error: '用户不存在' }, { status: 404 });
 
+    const scopeBranchId = role === 'REVIEWER_L1' ? parsed.data.scopeBranchId ?? null : null;
+    const scopeDepartmentId = role === 'REVIEWER_L1'
+      ? parsed.data.scopeDepartmentId ?? null
+      : role === 'REVIEWER_L2'
+        ? parsed.data.scopeDepartmentId ?? targetUser.departmentId ?? null
+        : null;
+
     if (action === 'add') {
       const boundary = validateRoleAccountBoundary(targetUser.employeeNo, role);
       if (!boundary.ok) {
         return NextResponse.json({ error: boundary.error }, { status: 400 });
+      }
+      if (
+        role === 'REVIEWER_L2' &&
+        parsed.data.scopeDepartmentId &&
+        parsed.data.scopeDepartmentId !== targetUser.departmentId
+      ) {
+        return NextResponse.json({ error: '二级审核员审核部门必须与账号所属部门一致' }, { status: 400 });
       }
     }
 

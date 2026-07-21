@@ -95,9 +95,10 @@ export default function SubmissionPage() {
 
   useEffect(() => {
     (async () => {
-      const [tplRes, subRes] = await Promise.all([
+      const [tplRes, subRes, profileRes] = await Promise.all([
         fetch(`/api/templates/${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json()),
+        fetch('/api/profile').then((r) => r.ok ? r.json() : null).catch(() => null),
       ]);
       const orgRes = await fetch('/api/public/organization').then((r) => r.json()).catch(() => ({}));
       const nextOptions: HeaderOptions = {
@@ -133,8 +134,11 @@ export default function SubmissionPage() {
         status: existing.status,
         preReviewMessages: Array.isArray(existing.preReviewMessages) ? existing.preReviewMessages : null,
       } : null);
+      const workAreaEnabled = isFieldEnabled(resolveHeaderFields(currentTemplate.headerFields), 'workArea');
       setHeader({
-        workAreaId: existing?.branchId ?? nextOptions.branches[0]?.id ?? '',
+        workAreaId: workAreaEnabled
+          ? existing?.branchId ?? nextOptions.branches[0]?.id ?? ''
+          : profileRes?.user?.branch?.id ?? '',
         hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
         declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
         declarationSpecialtyId: existing?.declarationSpecialtyId ?? nextOptions.declarationSpecialties[0]?.id ?? '',
@@ -378,7 +382,7 @@ export default function SubmissionPage() {
           // 系统填充项：根据确认/申诉状态构建 payload
           ...(factsData?.items ?? []).map((fi) => ({
             itemId: fi.itemId,
-            selected: fi.facts.map((f) => ({ label: `${f.defectLevel || f.role} ${f.defectRef}`, score: f.score })),
+            selected: fi.facts.map((f, index) => ({ index, label: `${f.defectLevel || f.role} ${f.defectRef}`, score: f.score })),
             isSystemFilled: true as any,
             confirmationStatus: factsConfirmations[fi.itemId] || undefined,
             disputeReason: factsDisputes[fi.itemId] || undefined,

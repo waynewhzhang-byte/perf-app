@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   const parsed = UpsertSchema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
   const { templateId, items, submit } = parsed.data;
-  const workAreaId = parsed.data.workAreaId || undefined;
+  const requestedWorkAreaId = parsed.data.workAreaId || undefined;
   const hireDate = parsed.data.hireDate || undefined;
   const declarationLevelId = parsed.data.declarationLevelId || undefined;
   const declarationSpecialtyId = parsed.data.declarationSpecialtyId || undefined;
@@ -106,12 +106,22 @@ export async function POST(req: Request) {
   const user = await prisma.user.findUnique({ where: { id: s.userId } });
   if (!user) return NextResponse.json({ error: '用户不存在' }, { status: 404 });
 
+  // 隐藏表头字段时，归属必须来自员工档案，不能接受客户端传入的默认/伪造工区。
+  const workAreaId = hfEnabled('workArea')
+    ? requestedWorkAreaId ?? user.branchId ?? undefined
+    : user.branchId ?? undefined;
+
   const parsedHireDate = parseDateOnly(hireDate);
   const inferredDeclarationLevelName = !hfEnabled('declarationLevel') && parsedHireDate
     ? levelFromHireDate(parsedHireDate)
     : null;
   if (submit) {
-    if (hfRequired('workArea') && !workAreaId) return NextResponse.json({ error: '请选择工区' }, { status: 400 });
+    if (!workAreaId) {
+      return NextResponse.json(
+        { error: hfRequired('workArea') ? '请选择工区' : '员工未配置工区，无法提交申报' },
+        { status: 400 },
+      );
+    }
     if (hfRequired('hireDate') && !parsedHireDate) return NextResponse.json({ error: '请选择有效的入职时间' }, { status: 400 });
     if (hfRequired('declarationLevel') && !declarationLevelId) return NextResponse.json({ error: '请选择能级评价等级' }, { status: 400 });
     if (hfRequired('declarationSpecialty') && !declarationSpecialtyId) return NextResponse.json({ error: '请选择能级评价专业' }, { status: 400 });
