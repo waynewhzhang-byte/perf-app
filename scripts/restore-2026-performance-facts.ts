@@ -1,52 +1,31 @@
-/** 从《人员考核结果（435人）》恢复 2026 年绩效等级事实。 */
-import { PrismaClient } from '@prisma/client';
-import * as XLSX from 'xlsx';
-import { scorePerformanceLevel } from '../src/lib/basic-quality';
+#!/usr/bin/env npx tsx
+/**
+ * 从《人员考核结果（435人）》.xlsx 恢复 2026 年绩效等级事实。
+ *
+ * **本脚本是 src/lib/restore-2026/performance-level.ts 的薄壳**。
+ * 真正的解析与写入逻辑在 lib 中，遵循事实写入规范（replaceBasicFactsBySource）。
+ *
+ * 历史背景：2026-07-19 生成报表时 PERFORMANCE_LEVEL 表为空（导入时序遗漏），
+ * 导致全员绩效=4 分；2026-07-20 用本脚本补导入后修复。
+ *
+ * 用法：npx tsx scripts/restore-2026-performance-facts.ts [--year 2026] [--source <path>]
+ */
+import { prisma } from '../src/lib/prisma';
+import { restorePerformanceLevel } from '../src/lib/restore-2026/performance-level';
 
-const prisma = new PrismaClient();
-const sourceFile = '20260716超高压人员信息表/2.人员考核结果（435人）.xlsx';
-const text = (value: unknown) => String(value ?? '').trim();
-
-async function main() {
-  const workbook = XLSX.readFile(sourceFile, { raw: false });
-  const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Sheet0!, { header: 1, defval: '' }) as unknown[][];
-  const sourceRows = rows.slice(2).map((row) => ({
-    employeeNo: text(row[1]),
-    employeeName: text(row[2]),
-    grades: [text(row[9]), text(row[10]), text(row[11])],
-  })).filter((row) => row.employeeNo && row.employeeName);
-  const users = await prisma.user.findMany({
-    where: { employeeNo: { in: sourceRows.map((row) => row.employeeNo) } },
-    select: { id: true, employeeNo: true },
-  });
-  const userIdByNo = new Map(users.flatMap((user) => user.employeeNo ? [[user.employeeNo, user.id] as const] : []));
-
-  for (const row of sourceRows) {
-    const score = scorePerformanceLevel(row.grades);
-    await prisma.employeeBasicFact.upsert({
-      where: { year_employeeNo_dimension: { year: 2026, employeeNo: row.employeeNo, dimension: 'PERFORMANCE_LEVEL' } },
-      update: {
-        employeeName: row.employeeName,
-        userId: userIdByNo.get(row.employeeNo) ?? null,
-        tierValue: score.code,
-        yearBreakdown: { '2023': row.grades[0] || null, '2024': row.grades[1] || null, '2025': row.grades[2] || null },
-        score: score.score,
-        sourceFile,
-      },
-      create: {
-        year: 2026,
-        employeeNo: row.employeeNo,
-        employeeName: row.employeeName,
-        userId: userIdByNo.get(row.employeeNo) ?? null,
-        dimension: 'PERFORMANCE_LEVEL',
-        tierValue: score.code,
-        yearBreakdown: { '2023': row.grades[0] || null, '2024': row.grades[1] || null, '2025': row.grades[2] || null },
-        score: score.score,
-        sourceFile,
-      },
-    });
-  }
-  console.log(JSON.stringify({ restored: sourceRows.length }, null, 2));
+function argValue(name: string, fallback: string): string {
+  const index = process.argv.indexOf(name);
+  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
 }
 
-main().finally(() => prisma.$disconnect());
+async function main() {
+  const year = Number(argValue('--year', '2026'));
+  const sourceFile = argValue('--source', '20260716超高压人员信息表/2.人员考核结果（435人）.xlsx');
+  console.log(`恢复 ${year} 年绩效等级事实：${sourceFile}`);
+  const result = await restorePerformanceLevel(prisma, { year, sourceFile });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+main()
+  .catch((e) => { console.error(e); process.exit(1); })
+  .finally(() => prisma.$disconnect());

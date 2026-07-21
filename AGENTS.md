@@ -70,6 +70,12 @@ changes should pass `pnpm lint` and `pnpm build`.
   submission-time snapshots.
 - MinIO server access uses `127.0.0.1`; browser presigned URLs use
   `MINIO_PUBLIC_*` variables.
+- **Fact writes must go through the batch-replace seam** — see
+  [`docs/agents/fact-import-conventions.md`](./docs/agents/fact-import-conventions.md).
+  Never call `prisma.performanceFact.create/upsert` or
+  `prisma.employeeBasicFact.create/upsert` directly in business code;
+  use `replaceFactsBySource` / `replaceBasicFactsBySource` instead.
+  The only exception is `fact-corrections/route.ts` (appeal audit, single-row).
 
 ## Commit & Pull Request Guidelines
 
