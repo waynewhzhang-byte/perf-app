@@ -115,13 +115,14 @@ export async function importTechContribFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: TechContribFieldMapping,
+  options: { replaceAcrossSourceFiles?: boolean } = {},
 ): Promise<SeedBasedImportResult> {
   const kind = TECH_CONTRIB_KINDS[kindKey];
   if (!kind) throw new Error(`未知技术贡献类别: ${kindKey}`);
   const seeds = buildTechContribSeeds(kind, rows, mapping, year);
   return persistSeedsBySource(
     prisma,
-    { year, dimensionCode: kind.dimensionCode, sourceFile },
+    { year, dimensionCode: kind.dimensionCode, sourceFile, replaceAcrossSourceFiles: options.replaceAcrossSourceFiles },
     seeds,
   );
 }

@@ -34,6 +34,8 @@ export interface PatentFieldMapping {
 }
 
 export interface PatentRow {
+  /** 行序号（1-based），作为 defectRef 兜底唯一键 */
+  rowIndex: number;
   patentName: string;
   inventors: Array<{ name: string; employeeNo: string; order: number }>;
 }
@@ -51,15 +53,19 @@ export const DEFAULT_PATENT_MAPPING: PatentFieldMapping = {
 /**
  * 把源数据行展开为发明人列表。跳过工号缺失的发明人位次。
  * 同一行内同一工号出现在多位次时，保留首次出现（按列顺序）。
+ *
+ * **rowIndex**：源数据中 patentName 列（原始申请人）可能重复（李勇 4 个专利的
+ * 申请人都是"国网山西省电力公司超高压变电分公司"），rowIndex 作为兜底唯一键
+ * 写入 defectRef，确保不同专利的不同行不被去重合并。
  */
 export function parsePatentRows(
   rows: Record<string, string>[],
   mapping: PatentFieldMapping = DEFAULT_PATENT_MAPPING,
 ): PatentRow[] {
   const out: PatentRow[] = [];
-  for (const row of rows) {
+  rows.forEach((row, idx) => {
     const patentName = cellStr(row[mapping.patentName]);
-    if (!patentName) continue;
+    if (!patentName) return;
     const inventors: PatentRow['inventors'] = [];
     const seenNos = new Set<string>();
     for (let i = 0; i < MAX_INVENTORS; i += 1) {
@@ -73,16 +79,17 @@ export function parsePatentRows(
       seenNos.add(employeeNo);
       inventors.push({ name: name || employeeNo, employeeNo, order: i + 1 });
     }
-    if (inventors.length > 0) out.push({ patentName, inventors });
-  }
+    if (inventors.length > 0) out.push({ rowIndex: idx + 1, patentName, inventors });
+  });
   return out;
 }
 
 /**
  * 把发明人列表转 PerformanceFactSeed[]。
  *
- * defectRef 格式：`patent:{order}:{patentName}` —— 必须包含 order 以避免同一员工
- * 在不同专利同序号被 dedupeSeeds 合并（B3 根因）。
+ * defectRef 格式：`patent:row{rowIndex}:order{order}:{patentName}`
+ * - rowIndex 兜底唯一性（同一员工在不同专利同序号，且 patentName 相同）
+ * - order 区分同一专利的不同发明人位次
  */
 export function buildPatentSeeds(
   parsed: PatentRow[],
@@ -103,11 +110,12 @@ export function buildPatentSeeds(
         role: 'FIRST_HANDLER',
         eventType: 'REMEDIATION',
         score,
-        defectRef: `patent:order${inv.order}:${row.patentName}`.slice(0, 200),
+        defectRef: `patent:row${row.rowIndex}:order${inv.order}:${row.patentName}`.slice(0, 200),
         defectLevel: '',
         eventDate: null,
         metadata: {
           patentName: row.patentName,
+          rowIndex: row.rowIndex,
           order: inv.order,
         },
       });
@@ -123,12 +131,13 @@ export async function importPatentFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: PatentFieldMapping = DEFAULT_PATENT_MAPPING,
+  options: { replaceAcrossSourceFiles?: boolean } = {},
 ): Promise<SeedBasedImportResult> {
   const parsed = parsePatentRows(rows, mapping);
   const seeds = buildPatentSeeds(parsed, year, sourceFile);
   return persistSeedsBySource(
     prisma,
-    { year, dimensionCode: 'performance.innovation.paper-patent', sourceFile },
+    { year, dimensionCode: 'performance.innovation.paper-patent', sourceFile, replaceAcrossSourceFiles: options.replaceAcrossSourceFiles },
     seeds,
   );
 }
