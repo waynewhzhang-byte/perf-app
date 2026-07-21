@@ -40,6 +40,7 @@ export async function POST(req: Request) {
       total: result.total,
       created: result.created,
       updated: result.updated,
+      deleted: result.deleted,
       skipped: 0,
     });
   } catch (e) {

@@ -1,5 +1,20 @@
 /**
- * 《基本素质信息》.xlsx 导入：
+ * @deprecated 本模块已被 src/lib/basic-fact-import.ts 取代。
+ *
+ * 历史背景：本文件是 2024 年的实现，使用硬编码列索引（SHEET1_COLUMNS/SHEET2_COLUMNS）
+ * 读取《基本素质信息》.xlsx，且使用逐行 upsert（N+1 查询）。2026 年数据布局变化后：
+ *   - 源文件结构改变（如 2.人员考核结果 的列序与 SHEET2_COLUMNS 不符）
+ *   - 事实写入规范统一到 replaceBasicFactsBySource（batch-replace）
+ *
+ * 当前生产路径：/api/admin/import/basic → basic-fact-import.ts.importBasicFacts
+ *   → replaceBasicFactsBySource（src/lib/basic-fact-repository.ts）
+ *
+ * 本文件保留作为参考，但**无任何调用方**（仅 basic-quality-import.test.ts 引用）。
+ * 不要在新代码中使用本模块；如需类似功能请用 basic-fact-import.ts。
+ *
+ * 计划：后续 PR 单独清理（删除本文件 + 同步删除测试）。
+ *
+ * 《基本素质信息》.xlsx 导入（旧实现，已废弃）：
  * - 创建/更新 User（员工档案）
  * - 写入 EmployeeBasicFact（技能/职称/绩效三维度）
  */

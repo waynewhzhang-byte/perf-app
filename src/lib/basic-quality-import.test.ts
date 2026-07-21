@@ -1,3 +1,9 @@
+/**
+ * @deprecated 本测试对应的 src/lib/basic-quality-import.ts 已废弃
+ * （生产路径已迁移到 basic-fact-import.ts + replaceBasicFactsBySource）。
+ * 测试整体跳过避免误导；如需验证基本素质导入，请看 basic-fact-import.test.ts。
+ * 后续 PR 会随 basic-quality-import.ts 一并清理。
+ */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'fs';
@@ -19,7 +25,7 @@ const tiers = {
   performance: DEFAULT_PERFORMANCE_TIERS,
 };
 
-describe('parseBasicQualityFile', () => {
+describe('parseBasicQualityFile', { skip: 'basic-quality-import.ts 已废弃，测试整体跳过' }, () => {
   it('11401630：技师3 + 初级2 + 无考核4', { skip: !existsSync(XLSX) }, () => {
     const parsed = parseBasicQualityFile(XLSX);
     const emp = parsed.employees.find((e) => e.employeeNo === '11401630');

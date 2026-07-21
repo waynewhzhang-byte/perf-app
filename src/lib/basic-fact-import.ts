@@ -105,7 +105,12 @@ export function buildBasicFactDrafts(
   return drafts;
 }
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient, BasicDimension } from '@prisma/client';
+import {
+  replaceBasicFactsBySource,
+  type BasicFactSeed,
+} from '@/lib/basic-fact-repository';
+import { loadUserIdByEmployeeNo } from '@/lib/fact-import-persistence';
 
 /** 从 DB 读三维度 tiers（无配置回退默认） */
 export async function loadBasicFactTiers(prisma: PrismaClient): Promise<BasicFactTiers> {
@@ -123,12 +128,39 @@ export async function loadBasicFactTiers(prisma: PrismaClient): Promise<BasicFac
 }
 
 export interface BasicFactImportResult {
-  total: number;      // 员工行数
+  /** 涉及的员工数（去重工号） */
+  total: number;
   created: number;
+  /** batch-replace 语义下永远为 0 —— 重新上传等同整体替换 */
   updated: number;
+  /** 该 scope 下被 deleteMany 清掉的旧事实条数 */
+  deleted: number;
 }
 
-/** 导入基本素质三维度：读 tiers → 草稿 → EmployeeBasicFact upsert */
+/** 把 BasicFactDraft 转为 BasicFactSeed（中立形态） */
+function toSeed(draft: BasicFactDraft, year: number): BasicFactSeed {
+  return {
+    year,
+    employeeNo: draft.employeeNo,
+    employeeName: draft.employeeName,
+    dimension: draft.dimension,
+    tierValue: draft.tierValue,
+    yearBreakdown: draft.yearBreakdown,
+    score: draft.score,
+  };
+}
+
+/**
+ * 导入基本素质三维度：读 tiers → 草稿 → 按 dimension 分组 → 一次性查 userId →
+ * 对每个 dimension 调 replaceBasicFactsBySource（batch-replace）。
+ *
+ * 写入语义：按 (year, dimension, sourceFile) 整体替换。重新上传同一份文件，
+ * 文件中不再出现的旧档位值视为已被清洗，删除。与 PerformanceFact 的
+ * replaceFactsBySource 语义对称。
+ *
+ * **规范**：所有 EmployeeBasicFact 业务写入必须经 replaceBasicFactsBySource
+ * （见 docs/agents/fact-import-conventions.md）。
+ */
 export async function importBasicFacts(
   prisma: PrismaClient,
   mapping: BasicFactFieldMapping,
@@ -139,40 +171,36 @@ export async function importBasicFacts(
   const tiers = await loadBasicFactTiers(prisma);
   const drafts = buildBasicFactDrafts(mapping, rows, evalYear, tiers);
 
-  // 统计涉及员工数
-  const employeeNos = new Set(drafts.map((d) => d.employeeNo));
-
-  let created = 0;
-  let updated = 0;
-  for (const f of drafts) {
-    const user = await prisma.user.findFirst({
-      where: { employeeNo: f.employeeNo },
-      select: { id: true },
-    });
-    // EmployeeBasicFact 无 updatedAt，用 findFirst 区分 create/update（与其它导入一致）
-    const existing = await prisma.employeeBasicFact.findUnique({
-      where: {
-        year_employeeNo_dimension: {
-          year: evalYear, employeeNo: f.employeeNo, dimension: f.dimension,
-        },
-      },
-      select: { id: true },
-    });
-    const data = {
-      year: evalYear, employeeNo: f.employeeNo, employeeName: f.employeeName,
-      userId: user?.id ?? null, dimension: f.dimension,
-      tierValue: f.tierValue,
-      yearBreakdown: f.yearBreakdown ?? undefined,
-      score: f.score, sourceFile,
-    };
-    if (existing) {
-      await prisma.employeeBasicFact.update({ where: { id: existing.id }, data });
-      updated++;
-    } else {
-      await prisma.employeeBasicFact.create({ data });
-      created++;
-    }
+  // 涉及员工数
+  const employeeNos = [...new Set(drafts.map((d) => d.employeeNo))];
+  if (employeeNos.length === 0) {
+    return { total: 0, created: 0, updated: 0, deleted: 0 };
   }
 
-  return { total: employeeNos.size, created, updated };
+  // 一次性批量查 userId，避免逐行 findFirst 的 N+1
+  const userIdByNo = await loadUserIdByEmployeeNo(prisma, employeeNos);
+
+  // 按 dimension 分组（3 组）
+  const byDim = new Map<BasicDimension, BasicFactSeed[]>();
+  for (const draft of drafts) {
+    const list = byDim.get(draft.dimension) ?? [];
+    list.push(toSeed(draft, evalYear));
+    byDim.set(draft.dimension, list);
+  }
+
+  // 对每个 dimension 调 batch-replace（3 个独立 scope，互不影响）
+  let created = 0;
+  let deleted = 0;
+  for (const [dimension, seeds] of byDim) {
+    const result = await replaceBasicFactsBySource(
+      prisma,
+      { year: evalYear, dimension, sourceFile },
+      seeds,
+      userIdByNo,
+    );
+    created += result.created;
+    deleted += result.deleted;
+  }
+
+  return { total: employeeNos.length, created, updated: 0, deleted };
 }
