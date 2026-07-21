@@ -34,6 +34,20 @@ test.describe('绩效申报完整业务闭环', () => {
     await expect(admin.getByText('安全贡献', { exact: true })).toBeVisible();
     await expect(admin.getByText('缺陷治理', { exact: true })).toBeVisible();
 
+    await admin.goto('/admin/review-audit');
+    await expect(admin.getByText('当前审核进度', { exact: true })).toBeVisible();
+    await expect(admin.getByText('一级 / 二级审核卡点', { exact: true })).toBeVisible();
+    await admin.goto('/admin/reports');
+    await expect(admin.getByText('全员审核进度', { exact: true })).toBeVisible();
+    await expect(admin.getByRole('button', { name: '导出汇总表 (CSV)' })).toBeDisabled();
+    const reportPayload = await (await admin.context().request.get('/api/admin/reports')).json();
+    const firstReport = reportPayload.reports?.[0];
+    expect(firstReport?.templateId).toBeTruthy();
+    const blockedExport = await admin.context().request.get(
+      `/api/admin/reports/export?format=csv&complete=1&templateId=${encodeURIComponent(firstReport.templateId)}`,
+    );
+    expect(blockedExport.status()).toBe(409);
+
     await createReviewer(admin, {
       name: 'E2E 工区一级审核员',
       account: accounts.l1EmployeeBranch,

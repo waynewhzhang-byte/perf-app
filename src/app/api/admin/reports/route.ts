@@ -3,6 +3,7 @@ export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
+import { getReviewProgress } from '@/lib/review-progress';
 
 export async function GET(req: Request) {
   try {
@@ -15,37 +16,37 @@ export async function GET(req: Request) {
     const where: Record<string, unknown> = { status: 'L2_APPROVED' as const };
     if (templateId) where.templateId = templateId;
 
-    const submissions = await prisma.submission.findMany({
-      where,
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            employeeNo: true,
-            contact: true,
-            branch: { select: { id: true, name: true } },
-            department: { select: { id: true, name: true } },
-          },
-        },
-        template: { select: { id: true, title: true, year: true } },
-        items: {
-          where: { status: 'L2_APPROVED' },
-          include: { item: { select: { id: true, title: true } } },
-        },
-      },
-      orderBy: { totalScore: 'desc' },
-    });
-
-    const tplIds = [...new Set(submissions.map((s) => s.templateId))];
     const templates = await prisma.formTemplate.findMany({
-      where: { id: { in: tplIds } },
+      where: {
+        status: { in: ['PUBLISHED', 'ARCHIVED'] },
+        ...(templateId ? { id: templateId } : {}),
+      },
       select: { id: true, title: true, year: true },
       orderBy: [{ year: 'desc' }, { title: 'asc' }],
     });
 
-    const reports = templates.map((tpl) => {
-      const tplSubs = submissions.filter((s) => s.templateId === tpl.id);
+    const reports = await Promise.all(templates.map(async (tpl) => {
+      const tplSubs = await prisma.submission.findMany({
+        where: { ...where, templateId: tpl.id },
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              employeeNo: true,
+              contact: true,
+              branch: { select: { id: true, name: true } },
+              department: { select: { id: true, name: true } },
+            },
+          },
+          template: { select: { id: true, title: true, year: true } },
+          items: {
+            where: { status: 'L2_APPROVED' },
+            include: { item: { select: { id: true, title: true } } },
+          },
+        },
+        orderBy: { totalScore: 'desc' },
+      });
       const scores = tplSubs.map((s) => Number(s.totalScore));
       return {
         templateId: tpl.id,
@@ -57,13 +58,14 @@ export async function GET(req: Request) {
           maxScore: scores.length > 0 ? Math.max(...scores) : 0,
           minScore: scores.length > 0 ? Math.min(...scores) : 0,
         },
+        progress: await getReviewProgress(tpl.id),
         records: tplSubs.map((sub) => ({
           submissionId: sub.id,
           userId: sub.user.id,
           userName: sub.user.fullName,
           employeeNo: sub.user.employeeNo,
           contact: sub.user.contact,
-          branch: sub.user.branch?.name || '',
+          branch: sub.workAreaName || sub.user.branch?.name || '',
           department: sub.user.department?.name || '',
           totalScore: Number(sub.totalScore),
           items: sub.items.map((it) => ({
@@ -74,7 +76,7 @@ export async function GET(req: Request) {
           })),
         })),
       };
-    });
+    }));
 
     return NextResponse.json({ success: true, templates, reports });
   } catch (e) {

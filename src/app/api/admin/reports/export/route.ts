@@ -12,6 +12,7 @@ import {
   parseExportFilters,
   exportFilenameSuffix,
 } from '@/lib/report-export';
+import { getReviewProgress } from '@/lib/review-progress';
 
 function contentDisposition(filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_');
@@ -48,6 +49,15 @@ export async function GET(req: Request) {
     const parsed = parseExportFilters(url);
     if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
     const filters = parsed;
+    if (url.searchParams.get('complete') === '1') {
+      const progress = await getReviewProgress(filters.templateId);
+      if (!progress?.complete) {
+        return NextResponse.json(
+          { error: '全体员工尚未完成两级审核，完整绩效报表暂不可导出', progress },
+          { status: 409 },
+        );
+      }
+    }
     const suffix = exportFilenameSuffix(filters);
 
     const tpl = await getTemplateLabel(filters.templateId);

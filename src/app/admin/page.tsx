@@ -54,8 +54,8 @@ export default async function AdminHome() {
         <NavCard href="/admin/review-routing" title="二审归属配置" desc="最终评分点分配至总部审核部门" />
         <NavCard href="/admin/templates" title="申报表配置" desc="设计与发布申报模板" />
         <NavCard href="/admin/users" title="用户与角色" desc="审核员分配、角色管理" />
-        <NavCard href="/admin/review-audit" title="审核审计" desc="审核进度、结果与评价报告" />
-        <NavCard href="/admin/reports" title="报表分析" desc="已通过员工分值按表单统计" />
+        <NavCard href="/admin/review-audit" title="审核审计" desc="一级/二级审核进度、卡点与结果" />
+        <NavCard href="/admin/reports" title="报表分析" desc="全员终审完成后的完整绩效报表" />
         <NavCard href="/admin/export" title="数据导出" desc="条件筛选 CSV / 单人 ZIP / 归档" />
       </nav>
     </main>
