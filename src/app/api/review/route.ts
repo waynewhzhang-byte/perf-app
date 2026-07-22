@@ -96,7 +96,19 @@ export async function GET(req: Request) {
       Object.assign(completedWhere, l1ScopeWhere);
     } else if (departmentId) {
       completedWhere.NOT = {
-        items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } },
+        OR: [
+          { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
+          {
+            items: {
+              some: {
+                isSystemFilled: true,
+                confirmationStatus: 'DISPUTED',
+                disputeL1Result: 'APPROVED',
+                disputeL2Result: null,
+              },
+            },
+          },
+        ],
       };
     }
 
@@ -119,7 +131,19 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: true, submissions: [], level: 2, assignedDepartmentId: null });
     }
     where.status = 'L1_APPROVED';
-    where.items = { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } };
+    where.OR = [
+      { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
+      {
+        items: {
+          some: {
+            isSystemFilled: true,
+            confirmationStatus: 'DISPUTED',
+            disputeL1Result: 'APPROVED',
+            disputeL2Result: null,
+          },
+        },
+      },
+    ];
   } else {
     if (!l1ScopeWhere) return NextResponse.json({ success: true, submissions: [], level: 1 });
     where.status = 'SUBMITTED';

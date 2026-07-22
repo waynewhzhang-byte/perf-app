@@ -42,6 +42,7 @@ export default function ReviewRoutingPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [savingCode, setSavingCode] = useState<string | null>(null);
+  const [savedDepartmentByCode, setSavedDepartmentByCode] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -56,12 +57,16 @@ export default function ReviewRoutingPage() {
         setLoadError(payload.error || '加载二审归属失败');
         return;
       }
+      const points = payload.points ?? [];
       setData({
-        points: payload.points ?? [],
+        points,
         departments: payload.departments ?? [],
         configuredCount: payload.configuredCount ?? 0,
         totalCount: payload.totalCount ?? 0,
       });
+      setSavedDepartmentByCode(Object.fromEntries(
+        points.map((point: ReviewPoint) => [point.dimensionCode, point.departmentId]),
+      ));
     } catch {
       setLoadError('加载失败，请检查网络连接');
     }
@@ -81,8 +86,7 @@ export default function ReviewRoutingPage() {
     return Array.from(groups.entries());
   }, [data.points]);
 
-  async function assign(point: ReviewPoint, departmentId: string) {
-    setSavingCode(point.dimensionCode);
+  function assign(point: ReviewPoint, departmentId: string) {
     setMessage(null);
     setData((current) => ({
       ...current,
@@ -90,11 +94,16 @@ export default function ReviewRoutingPage() {
         row.dimensionCode === point.dimensionCode ? { ...row, departmentId } : row
       ),
     }));
+  }
+
+  async function saveAssignment(point: ReviewPoint) {
+    setSavingCode(point.dimensionCode);
+    setMessage(null);
     try {
       const response = await fetch('/api/admin/review-routes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dimensionCode: point.dimensionCode, departmentId: departmentId || null }),
+        body: JSON.stringify({ dimensionCode: point.dimensionCode, departmentId: point.departmentId || null }),
       });
       if (response.status === 401) {
         window.location.href = '/admin/login';
@@ -106,8 +115,8 @@ export default function ReviewRoutingPage() {
         await load();
         return;
       }
+      setSavedDepartmentByCode((current) => ({ ...current, [point.dimensionCode]: point.departmentId }));
       setMessage(`已保存「${point.title}」的二审归属`);
-      await load();
     } catch {
       setMessage('保存失败，请检查网络连接');
       await load();
@@ -199,6 +208,17 @@ export default function ReviewRoutingPage() {
                         <option key={department.id} value={department.id}>{department.name}</option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      disabled={
+                        savingCode === point.dimensionCode
+                        || savedDepartmentByCode[point.dimensionCode] === point.departmentId
+                      }
+                      onClick={() => saveAssignment(point)}
+                      className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {savingCode === point.dimensionCode ? '保存中…' : '确认保存'}
+                    </button>
                   </label>
                 </div>
               ))}

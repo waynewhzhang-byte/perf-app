@@ -122,7 +122,13 @@ export default function ReviewPage() {
     if (!active) return;
     const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
     const pendingOptions = pendingOptionReviews(active);
-    if (level === 2 && pendingOptions.length === 0) { alert('当前没有属于您部门的待审子项'); return; }
+    const pendingDisputes = active.items.filter(
+      (it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED' && !it.disputeL2Result,
+    );
+    if (level === 2 && pendingOptions.length === 0 && pendingDisputes.length === 0) {
+      alert('当前没有待处理的二审子项或申诉');
+      return;
+    }
     const decs = level === 1
       ? pendingItems.map((it) => {
           const d = decisions[it.id];
@@ -394,6 +400,22 @@ export default function ReviewPage() {
                               <p className="mt-1 text-xs text-amber-700">
                                 L1 判断：已认定合理{it.disputeL1Note ? ` — ${it.disputeL1Note}` : ''}
                               </p>
+                              {it.attachments.length > 0 && (
+                                <ul className="mt-1 space-y-0.5">
+                                  {it.attachments.map((attachment) => (
+                                    <li key={attachment.id}>
+                                      <button
+                                        type="button"
+                                        onClick={() => openAttachment(attachment.id)}
+                                        disabled={openingAttId === attachment.id}
+                                        className="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:opacity-50"
+                                      >
+                                        {openingAttId === attachment.id ? '打开中…' : attachment.filename}
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                               {it.disputeL2Result ? (
                                 <p className="mt-1 text-xs font-medium text-amber-700">
                                   申诉确认：{it.disputeL2Result === 'APPROVED' ? '已确认有效' : '已认定无效'}

@@ -42,6 +42,7 @@ export async function canViewAttachment(
 ): Promise<boolean> {
   const sub = att.submissionItem.submission;
   if (sub.userId === userId) return true;
+  if (roles.includes('ADMIN')) return true;
 
   if (roles.includes('REVIEWER_L2') && (sub.status === 'L1_APPROVED' || sub.status === 'L2_APPROVED' || sub.status === 'REJECTED')) {
     return true;
