@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 部署脚本公共函数（pack / install 共用）
+# 部署脚本公共函数（pack / install / bootstrap 共用）
 
 set -euo pipefail
 
@@ -18,20 +18,27 @@ require_cmd() {
   done
 }
 
+# 从 .env 读取 KEY=VALUE（去掉引号）
+env_get() {
+  local env_file="$1" key="$2" line val
+  line="$(grep -E "^[[:space:]]*${key}=" "$env_file" 2>/dev/null | tail -n1 || true)"
+  [[ -n "$line" ]] || { echo ""; return 0; }
+  val="${line#*=}"
+  val="${val#\"}"
+  val="${val%\"}"
+  val="${val#\'}"
+  val="${val%\'}"
+  echo "$val"
+}
+
 # 从 .env 读取 DATABASE_URL（简单解析，支持常见 postgresql URL）
 load_database_url_from_env() {
   local env_file="$1"
   [[ -f "$env_file" ]] || die "环境文件不存在: $env_file"
 
-  local line url
-  line="$(grep -E '^[[:space:]]*DATABASE_URL=' "$env_file" | tail -n1 || true)"
-  [[ -n "$line" ]] || die "$env_file 中未找到 DATABASE_URL"
-
-  url="${line#DATABASE_URL=}"
-  url="${url#\"}"
-  url="${url%\"}"
-  url="${url#\'}"
-  url="${url%\'}"
+  local url
+  url="$(env_get "$env_file" DATABASE_URL)"
+  [[ -n "$url" ]] || die "$env_file 中未找到 DATABASE_URL"
 
   parse_postgres_url "$url"
 }
@@ -71,6 +78,93 @@ parse_postgres_url() {
   PGDUMP_OPTS=(-h "$PGHOST" -p "$PGPORT" -U "$PGUSER")
 }
 
+# 从 .env 读取 MinIO 连接信息
+load_minio_from_env() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || die "环境文件不存在: $env_file"
+
+  MINIO_ENDPOINT="$(env_get "$env_file" MINIO_ENDPOINT)"
+  MINIO_PORT="$(env_get "$env_file" MINIO_PORT)"
+  MINIO_USE_SSL="$(env_get "$env_file" MINIO_USE_SSL)"
+  MINIO_ACCESS_KEY="$(env_get "$env_file" MINIO_ACCESS_KEY)"
+  MINIO_SECRET_KEY="$(env_get "$env_file" MINIO_SECRET_KEY)"
+  MINIO_BUCKET="$(env_get "$env_file" MINIO_BUCKET)"
+
+  MINIO_ENDPOINT="${MINIO_ENDPOINT:-127.0.0.1}"
+  MINIO_PORT="${MINIO_PORT:-9000}"
+  MINIO_USE_SSL="${MINIO_USE_SSL:-false}"
+  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-minioadmin}"
+  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-minioadmin}"
+  MINIO_BUCKET="${MINIO_BUCKET:-perf-attachments}"
+
+  if [[ "$MINIO_USE_SSL" == "true" ]]; then
+    MINIO_URL="https://${MINIO_ENDPOINT}:${MINIO_PORT}"
+  else
+    MINIO_URL="http://${MINIO_ENDPOINT}:${MINIO_PORT}"
+  fi
+
+  export MINIO_ENDPOINT MINIO_PORT MINIO_USE_SSL MINIO_ACCESS_KEY MINIO_SECRET_KEY MINIO_BUCKET MINIO_URL
+}
+
+# 配置 mc alias（临时别名，避免污染用户全局配置）
+# 用法: mc_configure_alias <alias_name> [env_file]
+mc_configure_alias() {
+  local alias_name="$1"
+  local env_file="${2:-}"
+  require_cmd mc
+  if [[ -n "$env_file" ]]; then
+    load_minio_from_env "$env_file"
+  fi
+  mc alias set "$alias_name" "$MINIO_URL" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
+}
+
+# 导出 MinIO bucket 到目录
+# 用法: minio_export_bucket <env_file> <dest_dir>
+minio_export_bucket() {
+  local env_file="$1"
+  local dest_dir="$2"
+  require_cmd mc
+  load_minio_from_env "$env_file"
+  local alias="perfpack_src_$$"
+  mc_configure_alias "$alias" "$env_file"
+  mkdir -p "$dest_dir"
+  if mc ls "${alias}/${MINIO_BUCKET}" >/dev/null 2>&1; then
+    log "导出 MinIO bucket ${MINIO_BUCKET} -> ${dest_dir}"
+    mc mirror --overwrite "${alias}/${MINIO_BUCKET}" "$dest_dir"
+    log "MinIO 导出完成 ($(du -sh "$dest_dir" | cut -f1))"
+  else
+    log "警告: 源端 bucket ${MINIO_BUCKET} 不存在或为空，跳过 MinIO 导出"
+    mkdir -p "$dest_dir"
+  fi
+  mc alias remove "$alias" >/dev/null 2>&1 || true
+}
+
+# 导入目录到 MinIO bucket
+# 用法: minio_import_bucket <env_file> <src_dir>
+minio_import_bucket() {
+  local env_file="$1"
+  local src_dir="$2"
+  require_cmd mc
+  load_minio_from_env "$env_file"
+  local alias="perfpack_dst_$$"
+  mc_configure_alias "$alias" "$env_file"
+
+  # 确保 bucket 存在
+  if ! mc ls "${alias}/${MINIO_BUCKET}" >/dev/null 2>&1; then
+    log "创建 MinIO bucket: ${MINIO_BUCKET}"
+    mc mb "${alias}/${MINIO_BUCKET}" || true
+  fi
+
+  if [[ -d "$src_dir" ]] && [[ -n "$(ls -A "$src_dir" 2>/dev/null || true)" ]]; then
+    log "导入 MinIO -> ${alias}/${MINIO_BUCKET}"
+    mc mirror --overwrite "$src_dir" "${alias}/${MINIO_BUCKET}"
+    log "MinIO 导入完成"
+  else
+    log "MinIO 数据目录为空，跳过导入（仅确保 bucket 存在）"
+  fi
+  mc alias remove "$alias" >/dev/null 2>&1 || true
+}
+
 # 国内镜像（npm / pnpm / Prisma 二进制）
 apply_china_registry() {
   export NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
@@ -93,6 +187,7 @@ apply_china_registry() {
 
 # 检测应使用的包管理器（优先看命令行参数，其次看锁文件，最后看命令可用性）
 # 输出: "npm" 或 "pnpm"
+# 本迁移方案默认推荐 npm；未指定时若存在 package-lock.json 优先 npm
 detect_package_manager() {
   local app_dir="${1:-.}"
 
@@ -102,14 +197,9 @@ detect_package_manager() {
     return 0
   fi
 
-  # 2. 两个锁文件都存在时，选修改时间更新的（避免 npm ci 因锁文件过期而失败）
+  # 2. 两个锁文件都存在时，优先 npm（迁移目标约定为 npm）
   if [[ -f "$app_dir/package-lock.json" && -f "$app_dir/pnpm-lock.yaml" ]]; then
-    if [[ "$app_dir/package-lock.json" -nt "$app_dir/pnpm-lock.yaml" ]]; then
-      echo "npm"
-    else
-      # pnpm-lock.yaml 更新，或时间戳相同（开发用 pnpm，优先信任）
-      echo "pnpm"
-    fi
+    echo "npm"
     return 0
   fi
 
@@ -125,7 +215,7 @@ detect_package_manager() {
     return 0
   fi
 
-  # 4. 看命令可用性
+  # 5. 看命令可用性
   if command -v npm >/dev/null 2>&1; then
     echo "npm"
     return 0
@@ -135,7 +225,7 @@ detect_package_manager() {
     return 0
   fi
 
-  # 5. 默认 npm（几乎所有 Node.js 自带）
+  # 6. 默认 npm
   echo "npm"
 }
 
@@ -181,8 +271,16 @@ install_dependencies() {
 
   case "$pm" in
     npm)
-      log "npm ci（使用 package-lock.json 精确安装）"
-      npm ci
+      if [[ ! -f package-lock.json ]]; then
+        log "无 package-lock.json，使用 npm install"
+        npm install
+      else
+        log "npm ci（使用 package-lock.json 精确安装）"
+        if ! npm ci; then
+          log "npm ci 失败（lock 与 package.json 可能不同步），回退 npm install"
+          npm install
+        fi
+      fi
       ;;
     pnpm)
       log "pnpm install --frozen-lockfile"
