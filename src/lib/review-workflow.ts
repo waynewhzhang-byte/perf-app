@@ -16,7 +16,10 @@ import {
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
 import { matchesL1Scope } from '@/lib/reviewer-scope';
-import { dimensionReviewOptionId } from '@/lib/dimension-review-routing';
+import {
+  dimensionReviewOptionId,
+  isReviewableDimensionCode,
+} from '@/lib/dimension-review-routing';
 
 export type ReviewTx = Omit<
   PrismaClient,
@@ -96,6 +99,18 @@ export function validateL2Decisions(
   }
   const rejectWithoutNote = decisions.find((d) => d.action === 'REJECT' && !d.note?.trim());
   if (rejectWithoutNote) throw new ReviewError('驳回的子项必须填写原因');
+}
+
+export function isPendingL2Dispute(item: {
+  isSystemFilled: boolean;
+  confirmationStatus: string | null;
+  disputeL1Result: string | null;
+  disputeL2Result: string | null;
+}): boolean {
+  return item.isSystemFilled &&
+    item.confirmationStatus === 'DISPUTED' &&
+    item.disputeL1Result === 'APPROVED' &&
+    item.disputeL2Result == null;
 }
 
 async function loadSectionsForArchive(tx: ReviewTx, templateId: string): Promise<ScorableSection[]> {
@@ -355,9 +370,15 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     },
   });
 
+  // 仅评分标准注册的最终评分点进入二审路由。
+  // profile.hire-date（参加工作时间）等非评分确认项不在「二审归属配置」中，
+  // 跳过 optionReview 后由下方逻辑自动标为 L2_APPROVED。
   const dimensionCodes = sub.items
     .map((item) => resolveFormItemDimension(item.item))
-    .filter((dimensionCode): dimensionCode is string => Boolean(dimensionCode));
+    .filter((dimensionCode): dimensionCode is string => {
+      if (!dimensionCode) return false;
+      return isReviewableDimensionCode(dimensionCode);
+    });
   const routes = await tx.dimensionReviewRoute.findMany({
     where: { dimensionCode: { in: dimensionCodes } },
   });
@@ -369,6 +390,9 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     const dimensionCode = resolveFormItemDimension(item.item);
     if (!dimensionCode) {
       throw new ReviewError(`「${item.item.title}」缺少稳定评分点代码，无法进入二审`);
+    }
+    if (!isReviewableDimensionCode(dimensionCode)) {
+      continue;
     }
     const departmentId = routeByDimension.get(dimensionCode);
     if (!departmentId) {
@@ -414,10 +438,11 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     include: { optionReviews: true },
   });
   for (const item of items) {
+    const pendingDispute = isPendingL2Dispute(item);
     if (item.optionReviews.length === 0) {
       await tx.submissionItem.update({
         where: { id: item.id },
-        data: { status: 'L2_APPROVED' },
+        data: { status: pendingDispute ? 'PENDING_L2' : 'L2_APPROVED' },
       });
       continue;
     }
@@ -431,7 +456,16 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
   const remaining = await tx.submissionOptionReview.count({
     where: { submissionItem: { submissionId: sub.id }, status: 'PENDING_L2' },
   });
-  if (remaining === 0) {
+  const pendingDisputeCount = await tx.submissionItem.count({
+    where: {
+      submissionId: sub.id,
+      isSystemFilled: true,
+      confirmationStatus: 'DISPUTED',
+      disputeL1Result: 'APPROVED',
+      disputeL2Result: null,
+    },
+  });
+  if (remaining === 0 && pendingDisputeCount === 0) {
     const totalScore = await finalizeArchive(tx, sub.id, cmd.reviewerId);
     return {
       outcome: 'finalized',
@@ -467,8 +501,18 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     },
     include: { submissionItem: { include: { item: true } } },
   });
-  if (pendingReviews.length === 0) {
-    throw new ReviewError('当前没有属于您部门的待审子项');
+  const pendingDisputes = await tx.submissionItem.findMany({
+    where: {
+      submissionId: sub.id,
+      isSystemFilled: true,
+      confirmationStatus: 'DISPUTED',
+      disputeL1Result: 'APPROVED',
+      disputeL2Result: null,
+    },
+    include: { item: true },
+  });
+  if (pendingReviews.length === 0 && pendingDisputes.length === 0) {
+    throw new ReviewError('当前没有待处理的二审子项或申诉');
   }
 
   validateL2Decisions(
@@ -556,16 +600,9 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
       .filter((d) => d.submissionItemId && d.disputeAction)
       .map((d) => [d.submissionItemId!, d]),
   );
-  for (const itemId of affectedItemIds) {
-    const item = await tx.submissionItem.findUnique({
-      where: { id: itemId },
-      include: { item: true },
-    });
-    if (!item || !item.isSystemFilled || item.confirmationStatus !== 'DISPUTED') continue;
-    if (item.disputeL1Result !== 'APPROVED') continue;
-    if (item.disputeL2Result) continue;
+  for (const item of pendingDisputes) {
 
-    const disputeDecision = disputeDecisionMap.get(itemId);
+    const disputeDecision = disputeDecisionMap.get(item.id);
     if (!disputeDecision || !disputeDecision.disputeAction) {
       throw new ReviewError(
         `「${item.item?.title ?? item.itemId}」存在申诉（一级已认定合理），请对申诉做出确认判断`,
@@ -578,7 +615,7 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     const disputeResult: 'APPROVED' | 'REJECTED' =
       disputeDecision.disputeAction === 'APPROVE' ? 'APPROVED' : 'REJECTED';
     await tx.submissionItem.update({
-      where: { id: itemId },
+      where: { id: item.id },
       data: {
         disputeL2Result: disputeResult,
         disputeL2Note: disputeDecision.disputeNote ?? null,
@@ -589,7 +626,7 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     await tx.reviewLog.create({
       data: {
         submissionId: sub.id,
-        submissionItemId: itemId,
+        submissionItemId: item.id,
         reviewerId: cmd.reviewerId,
         level: 2,
         action: disputeDecision.disputeAction,

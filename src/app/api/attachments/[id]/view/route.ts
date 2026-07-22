@@ -1,6 +1,7 @@
 // 附件在线查看：校验权限后返回 MinIO 预签名 URL（inline）或 302 跳转
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
+import { Readable } from 'node:stream';
 import {
   attachmentViewKind,
   canViewAttachment,
@@ -10,6 +11,7 @@ import { getSession, getUserRoles } from '@/lib/auth';
 import {
   isMinioConnectivityError,
   MinioUnavailableError,
+  getObjectStream,
   presignedGetUrl,
 } from '@/lib/minio';
 
@@ -36,12 +38,37 @@ export async function GET(
   }
 
   const mimeType = att.mimeType || 'application/octet-stream';
+  const proxy = new URL(req.url).searchParams.get('proxy') === '1';
+  if (proxy) {
+    try {
+      const stream = await getObjectStream(att.storageKey);
+      return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Disposition': inlineContentDisposition(att.filename),
+        },
+      });
+    } catch (e) {
+      if (isMinioConnectivityError(e)) {
+        console.error('GET /api/attachments/view MinIO:', e);
+        return NextResponse.json(
+          { error: new MinioUnavailableError(e).message },
+          { status: 503 },
+        );
+      }
+      console.error('GET /api/attachments/[id]/view proxy:', e);
+      return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
+    }
+  }
+
   let viewUrl: string;
   try {
-    viewUrl = await presignedGetUrl(att.storageKey, VIEW_URL_EXPIRY_SEC, {
-      'response-content-disposition': inlineContentDisposition(att.filename),
-      'response-content-type': mimeType,
-    });
+    viewUrl = process.env.MINIO_PUBLIC_ENDPOINT
+      ? await presignedGetUrl(att.storageKey, VIEW_URL_EXPIRY_SEC, {
+          'response-content-disposition': inlineContentDisposition(att.filename),
+          'response-content-type': mimeType,
+        })
+      : new URL(`/api/attachments/${params.id}/view?proxy=1`, req.url).toString();
   } catch (e) {
     if (isMinioConnectivityError(e)) {
       console.error('GET /api/attachments/view MinIO:', e);

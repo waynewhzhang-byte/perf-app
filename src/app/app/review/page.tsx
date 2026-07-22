@@ -1,13 +1,11 @@
 'use client';
 // 审核工作台
 import { useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
 import { LogoutButton } from '@/components/logout-button';
 
 interface Att { id: string; filename: string; mimeType?: string | null }
 type ViewKind = 'image' | 'pdf' | 'other';
 interface AttachmentPreview {
-  attachmentId: string;
   filename: string;
   viewUrl: string;
   kind: ViewKind;
@@ -79,12 +77,13 @@ export default function ReviewPage() {
       const r = await fetch(`/api/attachments/${attId}/view`);
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { alert(d.error || '无法打开附件'); return; }
+      if (!d.viewUrl) { alert('无法获取附件地址'); return; }
+      // 非图片/PDF：新窗口打开预签名 URL（与弹窗预览同源，避免 redirect 二次跳转）
       if (d.kind === 'other') {
-        window.open(`/api/attachments/${attId}/view?redirect=1`, '_blank', 'noopener,noreferrer');
+        window.open(d.viewUrl, '_blank', 'noopener,noreferrer');
         return;
       }
       setPreview({
-        attachmentId: attId,
         filename: d.filename ?? '附件',
         viewUrl: d.viewUrl,
         kind: d.kind as ViewKind,
@@ -123,7 +122,13 @@ export default function ReviewPage() {
     if (!active) return;
     const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
     const pendingOptions = pendingOptionReviews(active);
-    if (level === 2 && pendingOptions.length === 0) { alert('当前没有属于您部门的待审子项'); return; }
+    const pendingDisputes = active.items.filter(
+      (it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED' && !it.disputeL2Result,
+    );
+    if (level === 2 && pendingOptions.length === 0 && pendingDisputes.length === 0) {
+      alert('当前没有待处理的二审子项或申诉');
+      return;
+    }
     const decs = level === 1
       ? pendingItems.map((it) => {
           const d = decisions[it.id];
@@ -395,6 +400,22 @@ export default function ReviewPage() {
                               <p className="mt-1 text-xs text-amber-700">
                                 L1 判断：已认定合理{it.disputeL1Note ? ` — ${it.disputeL1Note}` : ''}
                               </p>
+                              {it.attachments.length > 0 && (
+                                <ul className="mt-1 space-y-0.5">
+                                  {it.attachments.map((attachment) => (
+                                    <li key={attachment.id}>
+                                      <button
+                                        type="button"
+                                        onClick={() => openAttachment(attachment.id)}
+                                        disabled={openingAttId === attachment.id}
+                                        className="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:opacity-50"
+                                      >
+                                        {openingAttId === attachment.id ? '打开中…' : attachment.filename}
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                               {it.disputeL2Result ? (
                                 <p className="mt-1 text-xs font-medium text-amber-700">
                                   申诉确认：{it.disputeL2Result === 'APPROVED' ? '已确认有效' : '已认定无效'}
@@ -700,16 +721,14 @@ export default function ReviewPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-2">
+              {/* 直接用 MinIO 预签名 URL；勿走 redirect=1 + next/image（会空白） */}
               {preview.kind === 'image' && (
-                <div className="relative mx-auto h-[75vh] w-full">
-                  <Image
-                    src={`/api/attachments/${preview.attachmentId}/view?redirect=1`}
-                    alt={preview.filename}
-                    fill
-                    unoptimized
-                    className="object-contain"
-                  />
-                </div>
+                // eslint-disable-next-line @next/next/no-img-element -- 预签名跨域 URL，不走 next/image 优化
+                <img
+                  src={preview.viewUrl}
+                  alt={preview.filename}
+                  className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
+                />
               )}
               {preview.kind === 'pdf' && <iframe title={preview.filename} src={preview.viewUrl} className="h-[75vh] w-full rounded border-0 bg-white" />}
             </div>

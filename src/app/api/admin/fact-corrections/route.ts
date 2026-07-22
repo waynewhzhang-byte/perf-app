@@ -77,7 +77,11 @@ export async function GET(req: Request) {
         confirmationStatus: 'DISPUTED',
         disputeL2Result: 'APPROVED',
       },
-      include: { item: true, factCorrections: { orderBy: { correctedAt: 'desc' } } },
+      include: {
+        item: true,
+        attachments: { select: { id: true, filename: true, mimeType: true } },
+        factCorrections: { orderBy: { correctedAt: 'desc' } },
+      },
     });
     const submission = await prisma.submission.findUnique({
       where: { id: submissionId },

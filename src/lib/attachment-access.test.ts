@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { attachmentViewKind } from './attachment-access';
+import { attachmentViewKind, canViewAttachment } from './attachment-access';
 
 describe('attachmentViewKind', () => {
   it('image/png 识别为 image', () => {
@@ -40,5 +40,19 @@ describe('attachmentViewKind', () => {
 
   it('无法识别时返回 other', () => {
     assert.equal(attachmentViewKind('video/mp4', 'movie.mp4'), 'other');
+  });
+
+  it('管理员可查看申诉附件', async () => {
+    const allowed = await canViewAttachment('admin-1', ['ADMIN'], {
+      submissionItem: {
+        submission: {
+          userId: 'employee-1',
+          status: 'L2_APPROVED',
+          branchId: null,
+          user: { departmentId: null },
+        },
+      },
+    } as never);
+    assert.equal(allowed, true);
   });
 });

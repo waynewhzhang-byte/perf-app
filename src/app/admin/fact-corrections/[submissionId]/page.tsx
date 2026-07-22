@@ -22,6 +22,7 @@ type Fact = {
 type Item = {
   item: { id: string; title: string; dimensionCode: string };
   kind: 'BASIC' | 'PERFORMANCE';
+  attachments: Array<{ id: string; filename: string; mimeType?: string | null }>;
   facts: Fact[];
   factCorrections: Array<{ id: string; action: string; reason: string; correctedAt: string }>;
 };
@@ -155,6 +156,25 @@ export default function FactCorrectionPage() {
             <div className="rounded-xl border bg-white p-5">
               <h2 className="font-semibold">现有事实数据</h2>
               <p className="mt-1 text-xs text-slate-500">选择一条事实后可修正；不选择则新增事实。</p>
+              {active.attachments.length > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-medium text-amber-800">员工申诉证明材料</p>
+                  <ul className="mt-1 space-y-1">
+                    {active.attachments.map((attachment) => (
+                      <li key={attachment.id}>
+                        <a
+                          href={`/api/attachments/${attachment.id}/view?proxy=1`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-primary-700 hover:text-primary-800 hover:underline"
+                        >
+                          {attachment.filename}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div className="mt-3 space-y-2">
                 {active.facts.length === 0 && <p className="text-sm text-slate-400">暂无事实数据，可补录。</p>}
                 {active.facts.map((fact) => (
