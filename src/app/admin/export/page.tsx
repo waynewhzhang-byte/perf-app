@@ -205,7 +205,7 @@ export default function ExportPage() {
       <section className="mb-8 rounded-xl border border-primary-200 bg-primary-50/40 p-5">
         <h2 className="text-lg font-semibold">年度量化积分报送表</h2>
         <p className="mt-1 text-xs text-slate-600">
-          工龄截至所选年度5月31日计算：0—4年三级、5—8年二级、9年及以上一级
+          工龄截至所选年度7月31日计算：0—4年三级、5—8年二级、9年及以上一级
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">

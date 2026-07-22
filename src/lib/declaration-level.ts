@@ -17,6 +17,25 @@ export type DeclarationLevel = (typeof DECLARATION_LEVELS)[number];
  */
 export type DeclarationTier = DeclarationLevel;
 
+/** 年度评价统一按当年 7 月 31 日计算工龄，避免报表随导出日期漂移。 */
+export function evaluationCutoffDate(year: number): Date {
+  return new Date(Date.UTC(year, 6, 31));
+}
+
+/** 从员工档案快照读取参加工作时间。 */
+export function workStartDateFromProfile(profile: unknown): Date | null {
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+  const value = String((profile as Record<string, unknown>)['参加工作时间'] ?? '').trim();
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** 优先使用员工已填入的入职时间，历史花名册数据回退到 profile 快照。 */
+export function effectiveHireDate(hireDate: Date | null | undefined, profile: unknown): Date | null {
+  return hireDate ?? workStartDateFromProfile(profile);
+}
+
 /** 工作年限 → 能级等级 */
 export function computeLevel(workYears: number): DeclarationLevel {
   if (workYears < 5) return '三级';

@@ -52,6 +52,12 @@ export const DEFAULT_TICKET_PRICES: TicketPriceConfig = {
 };
 
 const OP_ROLE_COLUMNS = ['操作人', '监护人', '值班负责人', '现场配合人员'] as const;
+const OP_ROLE_EMPLOYEE_NO_COLUMNS: Record<(typeof OP_ROLE_COLUMNS)[number], string> = {
+  操作人: '人员编号',
+  监护人: '人员编号_1',
+  值班负责人: '人员编号_2',
+  现场配合人员: '人员编号_3',
+};
 
 /** 工作角色 → 对应单价表键 */
 export type WorkRole = 'workLeader' | 'workPermitter' | 'workMember';
@@ -156,7 +162,7 @@ export interface TicketExecutionParseResult {
 }
 
 export interface EmployeeNoResolver {
-  resolve(name: string): { employeeNo: string; employeeName: string } | null;
+  resolve(name: string, employeeNo?: string): { employeeNo: string; employeeName: string } | null;
 }
 
 /** 从操作票 + 工作票明细行聚合每人原始分（需先有员工工号名册） */
@@ -186,7 +192,7 @@ export function aggregateTicketExecutionRows(
     const touched = new Set<string>();
     for (const col of OP_ROLE_COLUMNS) {
       for (const name of parsePersonList(row[col])) {
-        const hit = resolveNo.resolve(name);
+        const hit = resolveNo.resolve(name, cellString(row[OP_ROLE_EMPLOYEE_NO_COLUMNS[col]]));
         if (!hit) {
           unmatched.add(name);
           continue;
@@ -211,7 +217,7 @@ export function aggregateTicketExecutionRows(
 
     if (leaderScore > 0 && cellString(row['工作负责人'])) {
       for (const name of parsePersonList(row['工作负责人'])) {
-        const hit = resolveNo.resolve(name);
+        const hit = resolveNo.resolve(name, cellString(row['人员编号']));
         if (!hit) {
           unmatched.add(name);
           continue;
@@ -221,17 +227,24 @@ export function aggregateTicketExecutionRows(
       }
     }
 
+    // 开工、完工许可人为同一人时整张票计一次；不是同一人时按评分表均分。
+    const permitters = new Map<string, { employeeNo: string; employeeName: string }>();
     for (const col of ['开工许可人', '完工许可人'] as const) {
       if (permitScore <= 0 || !cellString(row[col])) continue;
+      const employeeNoColumn = col === '开工许可人' ? '人员编号_1' : '人员编号_2';
       for (const name of parsePersonList(row[col])) {
-        const hit = resolveNo.resolve(name);
+        const hit = resolveNo.resolve(name, cellString(row[employeeNoColumn]));
         if (!hit) {
           unmatched.add(name);
           continue;
         }
-        const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
-        addPoints(bucket, 'workPermitterPoints', permitScore);
+        permitters.set(hit.employeeNo, hit);
       }
+    }
+    const permitterScore = permitters.size ? permitScore / permitters.size : 0;
+    for (const hit of permitters.values()) {
+      const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
+      addPoints(bucket, 'workPermitterPoints', permitterScore);
     }
 
     if (leaderScore > 0 || permitScore > 0) {
@@ -329,6 +342,51 @@ export function aggregateWorkMemberTickets(rows: WorkMemberRow[]): WorkMemberAgg
   }
 
   return [...map.values()];
+}
+
+/**
+ * 把工作班成员的一种票/二种票得分合并进两票汇总。
+ *
+ * 原始工作票明细不包含工作班成员，必须与文件 12、13 一起计算；否则会漏掉
+ * 评分表第 49、50 行的 1.5 / 0.5 分。
+ */
+export function mergeWorkMemberTicketScores(
+  aggregates: TicketExecutionAggregate[],
+  memberRows: WorkMemberRow[],
+  prices: TicketPriceConfig = DEFAULT_TICKET_PRICES,
+): TicketExecutionAggregate[] {
+  const byNo = new Map(
+    aggregates.map((aggregate) => [
+      aggregate.employeeNo,
+      {
+        ...aggregate,
+        breakdown: { ...aggregate.breakdown },
+      },
+    ]),
+  );
+
+  for (const member of aggregateWorkMemberTickets(memberRows)) {
+    const memberPoints =
+      member.type1Count * resolveWorkTicketPrice('workMember', '单班组一种票', prices)
+      + member.type2Count * resolveWorkTicketPrice('workMember', '二种票', prices);
+    if (memberPoints === 0) continue;
+
+    const aggregate = byNo.get(member.employeeNo) ?? {
+      employeeNo: member.employeeNo,
+      employeeName: member.employeeName,
+      rawScore: 0,
+      breakdown: emptyBreakdown(),
+    };
+    aggregate.rawScore = round2(aggregate.rawScore + memberPoints);
+    aggregate.breakdown.workMemberPoints = round2(
+      aggregate.breakdown.workMemberPoints + memberPoints,
+    );
+    byNo.set(member.employeeNo, aggregate);
+  }
+
+  return [...byNo.values()].sort(
+    (a, b) => b.rawScore - a.rawScore || a.employeeNo.localeCompare(b.employeeNo),
+  );
 }
 
 export const TICKET_DIMENSION = TICKET_EXECUTION_DIMENSION;

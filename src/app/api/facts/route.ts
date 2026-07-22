@@ -13,9 +13,11 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
-import { sourceDimensionCodes } from '@/lib/scoring-standards';
+import { sourceDimensionCodes, sourceDimensionTitle } from '@/lib/scoring-standards';
+import { effectiveHireDate } from '@/lib/declaration-level';
 import {
   extractSystemFilledFromSheet,
+  HIRE_DATE_CONFIRMATION_CODE,
   isFactDataSourceDimension,
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
@@ -55,12 +57,12 @@ export async function GET(req: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: s.userId },
-    select: { employeeNo: true },
+    select: { employeeNo: true, hireDate: true, profile: true },
   });
 
   const factBoundItems = sections.flatMap((sec) =>
     sec.items
-      .map((it) => ({ item: it, dimensionCode: resolveFormItemDimension(it) }))
+      .map((it) => ({ item: it, section: sec, dimensionCode: resolveFormItemDimension(it) }))
       .filter(({ dimensionCode }) => isFactDataSourceDimension(dimensionCode)),
   );
 
@@ -98,7 +100,7 @@ export async function GET(req: Request) {
   ]);
 
   const items = factBoundItems
-    .map(({ item, dimensionCode }) => {
+    .map(({ item, section, dimensionCode }) => {
       const code = dimensionCode!;
       const sys = systemByItemId.get(item.id);
       if (!sys) return null;
@@ -106,10 +108,11 @@ export async function GET(req: Request) {
       if (isBasicDimensionCode(code)) {
         const dim = basicDimensionFromCode(code);
         const fact = basicFacts.find((f) => f.dimension === dim);
-        if (!fact) return null;
         return {
           itemId: item.id,
           itemTitle: item.title,
+          sectionTitle: section.title,
+          sectionCode: section.sectionCode,
           dimensionCode: code,
           scoreMode: item.scoreMode,
           maxScore: item.maxScore,
@@ -117,25 +120,26 @@ export async function GET(req: Request) {
           source: 'FACT' as const,
           ruleSummary: sys.ruleSummary,
           requiresConfirmation: true,
-          facts: [
+          facts: fact ? [
             {
               id: fact.id,
+              thirdLevelTitle: sourceDimensionTitle(code),
               tierValue: fact.tierValue,
               label: dim ? BASIC_DIMENSION_LABELS[dim] : code,
               yearBreakdown: fact.yearBreakdown,
               score: Number(fact.score),
             },
-          ],
+          ] : [],
           totalScore: sys.score,
         };
       }
 
       const facts = perfFacts.filter((f) => sourceDimensionCodes(code).includes(f.dimensionCode));
-      if (facts.length === 0) return null;
-
       return {
         itemId: item.id,
         itemTitle: item.title,
+        sectionTitle: section.title,
+        sectionCode: section.sectionCode,
         dimensionCode: code,
         scoreMode: item.scoreMode,
         maxScore: item.maxScore,
@@ -145,6 +149,7 @@ export async function GET(req: Request) {
         requiresConfirmation: true,
         facts: facts.map((f) => ({
           id: f.id,
+          thirdLevelTitle: sourceDimensionTitle(f.dimensionCode),
           label: f.dimensionTitle || f.dimensionCode,
           role: f.role,
           eventType: f.eventType,
@@ -160,9 +165,33 @@ export async function GET(req: Request) {
     })
     .filter((row): row is NonNullable<typeof row> => row != null);
 
+  const hireDateItem = sections
+    .flatMap((section) => section.items.map((item) => ({ section, item })))
+    .find(({ item }) => item.dimensionCode === HIRE_DATE_CONFIRMATION_CODE);
+  const hireDate = user ? effectiveHireDate(user.hireDate, user.profile) : null;
+  const profileItems = hireDateItem ? [{
+    itemId: hireDateItem.item.id,
+    itemTitle: hireDateItem.item.title,
+    sectionTitle: hireDateItem.section.title,
+    sectionCode: hireDateItem.section.sectionCode,
+    dimensionCode: HIRE_DATE_CONFIRMATION_CODE,
+    factKind: 'profile' as const,
+    source: 'FACT' as const,
+    ruleSummary: '参加工作时间来自员工花名册；系统据此按年度截止日计算工龄和参评能级。',
+    requiresConfirmation: true,
+    facts: hireDate ? [{
+      id: 'profile-hire-date',
+      thirdLevelTitle: '参加工作时间',
+      label: hireDate.toISOString().slice(0, 10),
+      score: 0,
+      sourceFile: '1.能级评价员工花名册.xlsx',
+    }] : [],
+    totalScore: 0,
+  }] : [];
+
   return NextResponse.json({
     success: true,
-    items,
+    items: [...profileItems, ...items],
     scoreSheet: {
       totalScore: sheet.totalScore,
       positiveScore: sheet.positiveScore,

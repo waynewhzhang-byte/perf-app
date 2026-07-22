@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
-import { importPatentFacts, DEFAULT_PATENT_MAPPING, type PatentFieldMapping } from '@/lib/patent-import';
+import { importPatentFacts, type PatentFieldMapping } from '@/lib/patent-import';
 
 /**
  * 发明专利导入：每行 1 个专利，4 位发明人按序展开为 4 条事实。
@@ -53,7 +53,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
-// 保留默认映射供前端参考
-export { DEFAULT_PATENT_MAPPING };
 

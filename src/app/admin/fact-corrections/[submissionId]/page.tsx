@@ -16,6 +16,7 @@ type Fact = {
   defectRef?: string;
   eventDate?: string | null;
   sourceFile?: string;
+  metadata?: Record<string, unknown>;
 };
 
 type Item = {
@@ -41,6 +42,14 @@ export default function FactCorrectionPage() {
   const [role, setRole] = useState('FIRST_DISCOVERER');
   const [eventType, setEventType] = useState('DISCOVERY');
   const [rawScore, setRawScore] = useState('');
+  const [subtype, setSubtype] = useState('');
+  const [award, setAward] = useState('');
+  const [level, setLevel] = useState('');
+  const [project, setProject] = useState('');
+  const [category, setCategory] = useState('');
+  const [violationLevel, setViolationLevel] = useState('');
+  const [violationRole, setViolationRole] = useState('');
+  const [description, setDescription] = useState('');
   const [reason, setReason] = useState('');
   const [evidenceNote, setEvidenceNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,6 +82,24 @@ export default function FactCorrectionPage() {
     setRole(fact.role ?? 'FIRST_DISCOVERER');
     setEventType(fact.eventType ?? 'DISCOVERY');
     setRawScore(String(fact.score ?? ''));
+    const metadata = fact.metadata ?? {};
+    setSubtype(fact.defectRef?.match(/technical-contribution\.([\w-]+)/)?.[1] ?? '');
+    setAward(String(metadata.award ?? ''));
+    setLevel(String(metadata.level ?? ''));
+    setProject(String(metadata.project ?? metadata.projectName ?? ''));
+    setCategory(String(metadata.category ?? metadata.kind ?? ''));
+    setViolationLevel(String(metadata.levelRaw ?? ''));
+    setViolationRole(String(metadata.roleRaw ?? ''));
+    setDescription(String(metadata.description ?? ''));
+  };
+
+  const chooseItem = (nextId: string) => {
+    setActiveId(nextId);
+    setFactId('');
+    setTierValue(''); setGrade2023(''); setGrade2024(''); setGrade2025('');
+    setDefectRef(''); setDefectLevel(''); setRole('FIRST_DISCOVERER'); setEventType('DISCOVERY'); setRawScore('');
+    setSubtype(''); setAward(''); setLevel(''); setProject(''); setCategory('');
+    setViolationLevel(''); setViolationRole(''); setDescription('');
   };
 
   const submit = async () => {
@@ -86,7 +113,7 @@ export default function FactCorrectionPage() {
         reason, evidenceNote: evidenceNote || undefined,
         ...(active.kind === 'BASIC'
           ? { tierValue, yearBreakdown: { '2023': grade2023 || null, '2024': grade2024 || null, '2025': grade2025 || null } }
-          : { defectRef, defectLevel, role, eventType, rawScore: rawScore ? Number(rawScore) : undefined }),
+          : { defectRef, defectLevel, role, eventType, rawScore: rawScore ? Number(rawScore) : undefined, subtype, award, level, project, category, violationLevel, violationRole, description }),
       }),
     });
     const data = await response.json();
@@ -117,7 +144,7 @@ export default function FactCorrectionPage() {
           <aside className="rounded-xl border bg-white p-3">
             <p className="px-2 pb-2 text-xs font-semibold text-slate-500">可修正申诉项</p>
             {items.map((entry) => (
-              <button key={entry.item.id} onClick={() => { setActiveId(entry.item.id); setFactId(''); }}
+              <button key={entry.item.id} onClick={() => chooseItem(entry.item.id)}
                 className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${active.item.id === entry.item.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-50'}`}>
                 {entry.item.title}
                 <span className="ml-1 text-xs opacity-70">{entry.item.dimensionCode}</span>
@@ -146,6 +173,30 @@ export default function FactCorrectionPage() {
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   <label className="text-sm">事实档位<input value={tierValue} onChange={(e) => setTierValue(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" placeholder="如：高级技师、 中级" /></label>
                   {active.item.dimensionCode === 'basic.performance-level' && <div className="grid grid-cols-3 gap-2"><label className="text-sm">2023<input value={grade2023} onChange={(e) => setGrade2023(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label><label className="text-sm">2024<input value={grade2024} onChange={(e) => setGrade2024(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label><label className="text-sm">2025<input value={grade2025} onChange={(e) => setGrade2025(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label></div>}
+                </div>
+              ) : active.item.dimensionCode === 'performance.technical-contribution' ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm">事实类型<select value={subtype} onChange={(e) => setSubtype(e.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择</option><option value="textbook">教材/题库/课件</option><option value="regulation">运规编写/会审</option><option value="ticket-revision">两票修订/审查</option></select></label>
+                  <label className="text-sm">项目名称<input value={project} onChange={(e) => setProject(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label>
+                  <label className="text-sm sm:col-span-2">本人角色/说明<input value={category} onChange={(e) => setCategory(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label>
+                </div>
+              ) : active.item.dimensionCode === 'performance.competition' ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm">奖项名称<input value={award} onChange={(e) => setAward(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label>
+                  <label className="text-sm">获奖级别<input value={level} onChange={(e) => setLevel(e.target.value)} placeholder="国网/省公司" className="mt-1 w-full rounded border px-3 py-2" /></label>
+                  <label className="text-sm sm:col-span-2">类别<input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="技能竞赛/调考/知识竞赛" className="mt-1 w-full rounded border px-3 py-2" /></label>
+                </div>
+              ) : active.item.dimensionCode === 'performance.innovation' ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm">奖项名称<input value={award} onChange={(e) => setAward(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label>
+                  <label className="text-sm">获奖级别<input value={level} onChange={(e) => setLevel(e.target.value)} placeholder="国网公司级/省公司级" className="mt-1 w-full rounded border px-3 py-2" /></label>
+                  <label className="text-sm sm:col-span-2">成果/项目名称<input value={project} onChange={(e) => setProject(e.target.value)} className="mt-1 w-full rounded border px-3 py-2" /></label>
+                </div>
+              ) : active.item.dimensionCode.startsWith('special.violation-') ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm">违章等级<select value={violationLevel} onChange={(e) => setViolationLevel(e.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">按当前评分项</option><option value="严重">严重</option><option value="一般">一般</option></select></label>
+                  <label className="text-sm">责任类型<select value={violationRole} onChange={(e) => setViolationRole(e.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择</option><option value="直接责任人">直接责任人</option><option value="连带责任人">连带责任人</option></select></label>
+                  <label className="text-sm sm:col-span-2">违章事实说明<textarea value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 min-h-20 w-full rounded border px-3 py-2" /></label>
                 </div>
               ) : (
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">

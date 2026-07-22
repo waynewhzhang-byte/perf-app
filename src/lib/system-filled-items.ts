@@ -9,6 +9,9 @@ import type { DimensionScoreRow, PerformanceScoreSheet } from '@/lib/performance
 
 export type ConfirmationStatus = 'CONFIRMED' | 'DISPUTED';
 
+/** 表头中由员工花名册自动带出的参加工作时间确认项。 */
+export const HIRE_DATE_CONFIRMATION_CODE = 'profile.hire-date';
+
 export interface FormItemDimensionLike {
   id: string;
   title: string;
@@ -29,6 +32,11 @@ export function isFactDataSourceDimension(code: string | null | undefined): bool
   return source === 'fact' || source === 'deduction';
 }
 
+/** 事实维度与系统带出的参加工作时间都只能确认或申诉，不能由员工填写分数。 */
+export function isSystemConfirmationDimension(code: string | null | undefined): boolean {
+  return code === HIRE_DATE_CONFIRMATION_CODE || isFactDataSourceDimension(code);
+}
+
 export interface SystemFilledItemPayload {
   itemId: string;
   dimensionCode: string;
@@ -38,7 +46,12 @@ export interface SystemFilledItemPayload {
   selected: Array<{ index: number; label: string; score: number; count?: number }>;
 }
 
-/** 从绩效分表提取应系统填充且有导入事实的申报项 */
+/**
+ * 从绩效分表提取所有事实评分项。
+ *
+ * 即使当前没有导入事实，也要生成 0 分系统项：员工只能确认“暂无事实”或提交
+ * 缺失事实申诉，不能绕过评分标准自行填写分数。
+ */
 export function extractSystemFilledFromSheet(
   sheet: PerformanceScoreSheet,
 ): SystemFilledItemPayload[] {
@@ -46,8 +59,7 @@ export function extractSystemFilledFromSheet(
   for (const sec of sheet.sections) {
     for (const row of sec.items) {
       if (!row.itemId) continue;
-      if (row.source !== 'FACT') continue;
-      if (!row.hasImportedFacts) continue;
+      if (!isFactDataSourceDimension(row.dimensionCode)) continue;
       rows.push({
         itemId: row.itemId,
         dimensionCode: row.dimensionCode,

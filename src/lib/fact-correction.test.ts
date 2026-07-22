@@ -6,9 +6,9 @@ describe('fact-correction', () => {
   it('routes basic and performance dimensions to their fact stores', () => {
     assert.equal(factKindForDimension('basic.skill-level'), 'BASIC');
     assert.equal(factKindForDimension('worksite.ticket-execution'), 'PERFORMANCE');
-  });
-
-  it('rejects dimensions that are not backed by system facts', () => {
-    assert.equal(factKindForDimension('special.violation-general'), null);
+    assert.equal(factKindForDimension('performance.technical-contribution'), 'PERFORMANCE');
+    assert.equal(factKindForDimension('performance.competition'), 'PERFORMANCE');
+    assert.equal(factKindForDimension('performance.innovation'), 'PERFORMANCE');
+    assert.equal(factKindForDimension('special.violation-general'), 'PERFORMANCE');
   });
 });

@@ -12,7 +12,7 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import type { PerformanceFactSeed } from '@/lib/performance-fact-repository';
-import { persistSeedsBySource, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
+import { persistSeedsByDimension, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
 
 export type CompetitionKind = 'competition-skill' | 'competition-exam' | 'competition-knowledge';
 
@@ -124,19 +124,5 @@ export async function importCompetitionFacts(
   mapping: CompetitionFieldMapping,
 ): Promise<{ byDimension: Record<string, SeedBasedImportResult>; total: number }> {
   const seeds = buildCompetitionSeeds(rows, mapping, year);
-  // 按维度分组
-  const byDim = new Map<string, PerformanceFactSeed[]>();
-  for (const seed of seeds) {
-    const list = byDim.get(seed.dimensionCode) ?? [];
-    list.push(seed);
-    byDim.set(seed.dimensionCode, list);
-  }
-  const results: Record<string, SeedBasedImportResult> = {};
-  let total = 0;
-  for (const [dimCode, dimSeeds] of byDim) {
-    const r = await persistSeedsBySource(prisma, { year, dimensionCode: dimCode, sourceFile }, dimSeeds);
-    results[dimCode] = r;
-    total += r.total;
-  }
-  return { byDimension: results, total };
+  return persistSeedsByDimension(prisma, { year, sourceFile }, seeds);
 }

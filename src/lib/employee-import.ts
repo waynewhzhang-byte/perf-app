@@ -66,6 +66,7 @@ export function buildEmployeeDrafts(
 
 import type { PrismaClient } from '@prisma/client';
 import { hashPassword } from './password';
+import { workStartDateFromProfile } from './declaration-level';
 import {
   buildThreeTierOrgPlan,
   ensureThreeTierOrg,
@@ -144,6 +145,7 @@ export async function importEmployees(
       teamId,
       positionId,
       profile: d.profile as object,
+      hireDate: workStartDateFromProfile(d.profile),
     };
 
     if (existing) {

@@ -17,6 +17,7 @@
  * 压到 ~N/200 次；事务包裹确保中途失败不会留下"删了旧的、新的写一半"的破损状态。
  */
 import type { Prisma, PrismaClient, PerformanceFactRole, PerformanceFactEventType } from '@prisma/client';
+import { refreshFactBackedSubmissionsByEmployeeNos } from '@/lib/fact-correction';
 
 /** 调用方转换后的中立形态：不含 id/userId/sourceFile（这些由本模块填） */
 export interface PerformanceFactSeed {
@@ -44,6 +45,10 @@ export interface FactReplaceScope {
   year: number;
   dimensionCode: string;
   sourceFile: string;
+  /** 一次性重导时，替换该年度、该维度的所有来源文件。 */
+  replaceAcrossSourceFiles?: boolean;
+  /** 批量重导可显式跳过受影响申报的即时重算。 */
+  refreshSubmissions?: boolean;
 }
 
 export interface ReplaceFactsResult {
@@ -71,19 +76,24 @@ export async function replaceFactsBySource(
   seeds: PerformanceFactSeed[],
   userIdByEmployeeNo: Map<string, string>,
 ): Promise<ReplaceFactsResult> {
-  return prisma.$transaction(async (tx) => {
+  const where = {
+    year: scope.year,
+    dimensionCode: scope.dimensionCode,
+    ...(scope.replaceAcrossSourceFiles ? {} : { sourceFile: scope.sourceFile }),
+  };
+  const result = await prisma.$transaction(async (tx) => {
+    const previous = await tx.performanceFact.findMany({
+      where,
+      select: { employeeNo: true },
+    });
     const deleted = (
       await tx.performanceFact.deleteMany({
-        where: {
-          year: scope.year,
-          dimensionCode: scope.dimensionCode,
-          sourceFile: scope.sourceFile,
-        },
+        where,
       })
     ).count;
 
     if (seeds.length === 0) {
-      return { deleted, created: 0 };
+      return { deleted, created: 0, employeeNos: previous.map((fact) => fact.employeeNo) };
     }
 
     const deduped = dedupeSeeds(seeds);
@@ -96,8 +106,16 @@ export async function replaceFactsBySource(
       created += result.count;
     }
 
-    return { deleted, created };
+    return {
+      deleted,
+      created,
+      employeeNos: [...previous.map((fact) => fact.employeeNo), ...deduped.map((seed) => seed.employeeNo)],
+    };
   });
+  if (scope.refreshSubmissions !== false) {
+    await refreshFactBackedSubmissionsByEmployeeNos(prisma, scope.year, result.employeeNos);
+  }
+  return { deleted: result.deleted, created: result.created };
 }
 
 /**

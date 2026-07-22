@@ -2,6 +2,7 @@ import { writeFileSync } from 'fs';
 import ExcelJS from 'exceljs';
 import type { BatchImportedScoresResult, ImportedScoreRow } from '@/lib/imported-score-batch';
 import { summarizeImportedScoresByOrg } from '@/lib/imported-score-batch';
+import { sourceDimensionTitle } from '@/lib/scoring-standards';
 
 function autoWidth(sheet: ExcelJS.Worksheet, min = 10, max = 36) {
   sheet.columns.forEach((col) => {
@@ -14,29 +15,38 @@ function autoWidth(sheet: ExcelJS.Worksheet, min = 10, max = 36) {
   });
 }
 
-const PERSON_HEADERS = [
+function personHeaders(year: number) {
+  return [
   '序号',
   '工号',
   '姓名',
   '性别',
   '工区/分公司',
   '部门',
-  '折算能级',
-  '技能等级分',
-  '职称等级分',
-  '绩效等级分',
-  '基本素质合计',
-  '两票执行分',
+  '参加工作时间',
+  `参评能级（截至${year}-07-31）`,
+  '一级：基本素质（14）',
+  '二级：技能等级（4）',
+  '二级：职称等级（4）',
+  '二级：绩效等级（6）',
+  '一级：工作业绩（44）',
+  '二级：安全贡献（12）',
+  '二级：技术贡献（12）',
+  '二级：竞赛比武（10）',
+  '二级：发明创新（10）',
+  '一级：工作现场（42）',
+  '二级：两票执行（30）',
   '两票原始分',
-  '缺陷治理分',
+  '二级：缺陷治理（12）',
   '缺陷原始分',
-  '工作场合计',
-  '导入维度合计',
-  '导入维度满分',
-];
+  '一级：特殊事项（扣分）',
+  '正向积分合计（100）',
+  '最终绩效积分（扣分后）',
+  ];
+}
 
-function appendPersonRows(sheet: ExcelJS.Worksheet, rows: ImportedScoreRow[]) {
-  sheet.addRow(PERSON_HEADERS);
+function appendPersonRows(sheet: ExcelJS.Worksheet, rows: ImportedScoreRow[], year: number) {
+  sheet.addRow(personHeaders(year));
   sheet.getRow(1).font = { bold: true };
   const sorted = [...rows].sort(
     (a, b) =>
@@ -51,21 +61,73 @@ function appendPersonRows(sheet: ExcelJS.Worksheet, rows: ImportedScoreRow[]) {
       r.gender ?? '',
       r.branchName ?? '',
       r.departmentName ?? '',
-      r.declarationTier ?? '一级',
+      r.workStartDate ? r.workStartDate.toISOString().slice(0, 10) : '',
+      r.declarationTier ?? '',
+      r.basicScore,
       r.skillScore,
       r.titleScore,
       r.performanceLevelScore,
-      r.basicScore,
+      r.performanceScore,
+      r.safetyScore,
+      r.technicalContributionScore,
+      r.competitionScore,
+      r.innovationScore,
+      r.worksiteScore,
       r.ticketScore,
       r.ticketRawScore ?? '',
       r.defectScore,
       r.defectRawScore ?? '',
-      r.worksiteScore,
+      r.deductionScore ? -r.deductionScore : '',
       r.importedTotalScore,
-      r.importedMaxScore,
+      r.finalTotalScore,
     ]);
   });
   autoWidth(sheet);
+}
+
+function appendThirdLevelFactRows(sheet: ExcelJS.Worksheet, rows: ImportedScoreRow[]) {
+  sheet.addRow([
+    '序号',
+    '工号',
+    '姓名',
+    '一级维度',
+    '一级维度得分',
+    '二级考核维度',
+    '二级维度得分（封顶后）',
+    '三级事实维度',
+    '事实明细',
+    '原始事实积分',
+    '原始导入文件',
+  ]);
+  sheet.getRow(1).font = { bold: true };
+
+  let index = 0;
+  for (const row of [...rows].sort((a, b) => a.employeeNo.localeCompare(b.employeeNo))) {
+    for (const section of row.sheet?.sections ?? []) {
+      for (const item of section.items) {
+        for (const line of item.lines) {
+          if (!line.sourceDimensionCode) continue;
+          index++;
+          sheet.addRow([
+            index,
+            row.employeeNo,
+            row.employeeName,
+            section.title,
+            section.score,
+            item.title,
+            item.score,
+            sourceDimensionTitle(line.sourceDimensionCode),
+            [line.label, line.detail].filter(Boolean).join('；'),
+            line.score,
+            line.sourceFile ?? '',
+          ]);
+        }
+      }
+    }
+  }
+  sheet.autoFilter = { from: 'A1', to: 'K1' };
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  autoWidth(sheet, 12, 48);
 }
 
 function appendGroupSheet(
@@ -126,14 +188,16 @@ function appendRulesSheet(
   sheet.addRow([]);
   sheet.addRow(['维度', '规则摘要']);
   sheet.getRow(6).font = { bold: true };
-  sheet.addRow(['基本素质（14）', '技能4 + 职称4 + 三年绩效6；档位来自《基本素质信息》导入']);
-  sheet.addRow(['两票执行（30）', '原始分 ÷ 同能级最高原始分 × 30；无入职日期按一级折算']);
-  sheet.addRow(['缺陷治理（12）', '危急/严重/一般矩阵计分，同人兼发现处理取高，累加封顶12']);
-  sheet.addRow(['导入合计（56）', '上述三项之和；不含工作业绩等员工申报维度']);
+  sheet.addRow(['一级维度：基本素质（14）', '二级：技能4 + 职称4 + 三年绩效6；档位来自原始基本信息与考核结果']);
+  sheet.addRow(['一级维度：工作业绩（44）', '二级：安全贡献12 + 技术贡献12 + 竞赛比武10 + 发明创新10；均按评分标准封顶']);
+  sheet.addRow(['一级维度：工作现场（42）', '二级：两票执行30 + 缺陷治理12；两票按同专业最高原始分折算']);
+  sheet.addRow(['一级维度：特殊事项', '严重/一般违章按评分标准扣分；最终绩效积分 = 正向积分合计 - 扣分']);
+  sheet.addRow(['三级事实明细', '逐条列出已导入事实的一级、二级、三级维度、原始积分和来源文件；二级维度得分为同类事实汇总并按评分标准封顶后的结果']);
+  sheet.addRow(['参评能级', `按参加工作时间计算工龄，截至 ${result.year} 年 7 月 31 日：0—4 年三级、5—8 年二级、9 年及以上一级`]);
   sheet.addRow([]);
-  sheet.addRow(['各能级两票原始最高分（折算基准）']).font = { bold: true };
-  for (const [tier, max] of Object.entries(result.ticketTierMaxRaw)) {
-    sheet.addRow([tier, max]);
+  sheet.addRow(['各专业两票原始最高分（折算基准）']).font = { bold: true };
+  for (const [specialty, max] of Object.entries(result.ticketSpecialtyMaxRaw)) {
+    sheet.addRow([specialty, max]);
   }
 }
 
@@ -146,7 +210,10 @@ export async function buildImportedScoresWorkbook(
   wb.created = new Date();
 
   const person = wb.addWorksheet('个人分表');
-  appendPersonRows(person, result.rows);
+  appendPersonRows(person, result.rows, result.year);
+
+  const thirdLevelFacts = wb.addWorksheet('三级事实明细');
+  appendThirdLevelFactRows(thirdLevelFacts, result.rows);
 
   const { byBranch, byDepartment } = summarizeImportedScoresByOrg(result.rows);
 

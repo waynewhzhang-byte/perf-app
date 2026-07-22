@@ -5,15 +5,18 @@
 import type { BasicDimension, PrismaClient } from '@prisma/client';
 import {
   buildPerformanceScoreSheet,
-  loadTicketTierMaxRaw,
   type PerformanceScoreSheet,
 } from '@/lib/performance-score-sheet';
-import { parseMockDeclarationTier } from '@/lib/declaration-level';
-import { SCORING_STANDARDS } from '@/lib/scoring-standards';
+import { applyTicketCohortNormalization } from '@/lib/dimension-aggregation';
+import { effectiveHireDate, evaluationCutoffDate, levelFromHireDate, parseMockDeclarationTier, type DeclarationTier } from '@/lib/declaration-level';
+import { SCORING_STANDARDS, sourceDimensionCodes } from '@/lib/scoring-standards';
+import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
 
+// 导入事实既包含正向事实，也包含由台账导入的违章扣分事实。
+// 两者都必须进入分表，才能使“特殊事项（扣分）”和最终积分一致。
 const FACT_DIMENSION_CODES = SCORING_STANDARDS
-  .filter((standard) => standard.dataSource === 'fact')
-  .map((standard) => standard.code);
+  .filter((standard) => standard.dataSource === 'fact' || standard.dataSource === 'deduction')
+  .flatMap((standard) => sourceDimensionCodes(standard.code));
 
 export interface ImportedScoreRow {
   employeeNo: string;
@@ -21,11 +24,18 @@ export interface ImportedScoreRow {
   gender: string | null;
   branchName: string | null;
   departmentName: string | null;
+  workStartDate: Date | null;
   declarationTier: string | null;
   basicScore: number;
   basicMaxScore: number;
   worksiteScore: number;
   worksiteMaxScore: number;
+  performanceScore: number;
+  performanceMaxScore: number;
+  safetyScore: number;
+  technicalContributionScore: number;
+  competitionScore: number;
+  innovationScore: number;
   ticketScore: number;
   ticketMaxScore: number;
   defectScore: number;
@@ -35,6 +45,8 @@ export interface ImportedScoreRow {
   performanceLevelScore: number;
   importedTotalScore: number;
   importedMaxScore: number;
+  deductionScore: number;
+  finalTotalScore: number;
   ticketRawScore: number | null;
   defectRawScore: number | null;
   sheet?: PerformanceScoreSheet;
@@ -42,7 +54,9 @@ export interface ImportedScoreRow {
 
 export interface BatchImportedScoresResult {
   year: number;
-  ticketTierMaxRaw: Partial<Record<'一级' | '二级' | '三级', number>>;
+  ticketSpecialtyMaxRaw: Record<string, number>;
+  /** @deprecated 改用 ticketSpecialtyMaxRaw；保留一版以兼容既有管理端自动化。 */
+  ticketTierMaxRaw: Partial<Record<DeclarationTier, number>>;
   total: number;
   rows: ImportedScoreRow[];
 }
@@ -66,17 +80,23 @@ function toImportedScoreRow(
   gender: string | null,
   branchName: string | null,
   departmentName: string | null,
+  workStartDate: Date | null,
   sheet: PerformanceScoreSheet,
   ticketRaw: number | null,
   defectRaw: number | null,
 ): ImportedScoreRow {
   const basic = sectionScore(sheet, 'basic');
   const worksite = sectionScore(sheet, 'worksite');
+  const performance = sectionScore(sheet, 'performance');
   const ticket = dimensionScore(sheet, 'worksite.ticket-execution');
   const defect = dimensionScore(sheet, 'worksite.defect-governance');
   const skill = dimensionScore(sheet, 'basic.skill-level');
   const title = dimensionScore(sheet, 'basic.title-level');
   const perf = dimensionScore(sheet, 'basic.performance-level');
+  const safety = dimensionScore(sheet, 'performance.safety-contribution');
+  const technical = dimensionScore(sheet, 'performance.technical-contribution');
+  const competition = dimensionScore(sheet, 'performance.competition');
+  const innovation = dimensionScore(sheet, 'performance.innovation');
 
   return {
     employeeNo,
@@ -84,11 +104,18 @@ function toImportedScoreRow(
     gender,
     branchName,
     departmentName,
+    workStartDate,
     declarationTier: sheet.declarationTier,
     basicScore: basic.score,
     basicMaxScore: basic.maxScore,
     worksiteScore: worksite.score,
     worksiteMaxScore: worksite.maxScore,
+    performanceScore: performance.score,
+    performanceMaxScore: performance.maxScore,
+    safetyScore: safety.score,
+    technicalContributionScore: technical.score,
+    competitionScore: competition.score,
+    innovationScore: innovation.score,
     ticketScore: ticket.score,
     ticketMaxScore: ticket.maxScore,
     defectScore: defect.score,
@@ -98,6 +125,8 @@ function toImportedScoreRow(
     performanceLevelScore: perf.score,
     importedTotalScore: sheet.positiveScore,
     importedMaxScore: sheet.positiveMaxScore,
+    deductionScore: sheet.deductionScore,
+    finalTotalScore: sheet.totalScore,
     ticketRawScore: ticketRaw,
     defectRawScore: defectRaw,
     sheet,
@@ -160,7 +189,7 @@ export async function batchComputeImportedScores(
     ...(employeeNos ? { employeeNo: { in: employeeNos } } : {}),
   };
 
-  const [total, users, basicFacts, perfFacts, ticketTierMaxRaw] = await Promise.all([
+  const [total, users, basicFacts, perfFacts, ticketUsers] = await Promise.all([
     prisma.user.count({ where }),
     prisma.user.findMany({
       where,
@@ -185,8 +214,41 @@ export async function batchComputeImportedScores(
         dimensionCode: { in: FACT_DIMENSION_CODES },
       },
     }),
-    loadTicketTierMaxRaw(prisma, year),
+    prisma.user.findMany({
+      where: { employeeNo: { not: null } },
+      select: { employeeNo: true, profile: true, hireDate: true, branch: { select: { name: true } } },
+    }),
   ]);
+
+  const specialtyByNo = new Map(
+    ticketUsers.map((user) => [user.employeeNo!, ticketSpecialtyFromWorkArea(user.branch?.name)]),
+  );
+  const ticketNormalized = applyTicketCohortNormalization(
+    perfFacts
+      .filter((fact) => fact.dimensionCode === 'worksite.ticket-execution')
+      .map((fact) => ({
+        employeeNo: fact.employeeNo,
+        cohortKey: specialtyByNo.get(fact.employeeNo) ?? '未分类专业',
+        rawTicketScore: Number(fact.score),
+      })),
+    'specialty',
+  );
+  const ticketByNo = new Map(ticketNormalized.map((row) => [row.employeeNo, row]));
+  const ticketSpecialtyMaxRaw = Object.fromEntries(
+    [...new Set(ticketNormalized.map((row) => row.cohortKey))].map((specialty) => [
+      specialty,
+      ticketNormalized.find((row) => row.cohortKey === specialty)?.ticketCohortMax ?? 0,
+    ]),
+  );
+  const ticketTierMaxRaw: Partial<Record<DeclarationTier, number>> = {};
+  const ticketUserByNo = new Map(ticketUsers.map((user) => [user.employeeNo!, user]));
+  for (const fact of perfFacts) {
+    if (fact.dimensionCode !== 'worksite.ticket-execution') continue;
+    const user = ticketUserByNo.get(fact.employeeNo);
+    const hireDate = user ? effectiveHireDate(user.hireDate, user.profile) : null;
+    const tier = hireDate ? levelFromHireDate(hireDate, evaluationCutoffDate(year)) : '一级';
+    ticketTierMaxRaw[tier] = Math.max(ticketTierMaxRaw[tier] ?? 0, Number(fact.score));
+  }
 
   const basicByNo = new Map<string, typeof basicFacts>();
   for (const f of basicFacts) {
@@ -210,7 +272,8 @@ export async function batchComputeImportedScores(
       year,
       employeeNo: no,
       employeeName: user.fullName,
-      hireDate: user.hireDate,
+      hireDate: effectiveHireDate(user.hireDate, user.profile),
+      evaluationDate: evaluationCutoffDate(year),
       mockDeclarationTier: parseMockDeclarationTier(user.profile),
       templateItems: [],
       basicFacts: (basicByNo.get(no) ?? []).map((f) => ({
@@ -229,8 +292,9 @@ export async function batchComputeImportedScores(
         defectLevel: f.defectLevel,
         eventType: f.eventType,
         metadata: f.metadata,
+        sourceFile: f.sourceFile,
       })),
-      ticketTierMaxRaw,
+      ticketCohortMax: ticketByNo.get(no)?.ticketCohortMax,
     });
 
     const ticketFact = (perfByNo.get(no) ?? []).find(
@@ -249,6 +313,7 @@ export async function batchComputeImportedScores(
       user.gender,
       user.branch?.name ?? null,
       user.department?.name ?? null,
+      effectiveHireDate(user.hireDate, user.profile),
       sheet,
       ticketFact ? Number(ticketFact.score) : null,
       defectRaw,
@@ -260,7 +325,7 @@ export async function batchComputeImportedScores(
     }
   }
 
-  return { year, ticketTierMaxRaw, total, rows };
+  return { year, ticketSpecialtyMaxRaw, ticketTierMaxRaw, total, rows };
 }
 
 export interface ImportedScoreGroupSummary {

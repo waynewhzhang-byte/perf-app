@@ -86,10 +86,10 @@ async function main() {
     data: {
       year: YEAR,
       title: TITLE,
-      description: '本模板严格对应《0.20260716评分标准 对应表.xlsx》。已导入事实的评分项由系统自动带出事实及得分；未导入事实的评分项由员工填写事实和申报分数，并上传证明材料。',
+      description: '本模板严格对应《0.20260716评分标准 对应表.xlsx》。全部绩效维度均由系统带出事实及自动计算分数；员工仅可确认，或提交申诉理由和证明材料。',
       headerFields: [
         { key: 'workArea', enabled: false, required: false },
-        { key: 'hireDate', enabled: true, required: true },
+        { key: 'hireDate', enabled: false, required: false },
         { key: 'declarationLevel', enabled: false, required: false },
         { key: 'declarationSpecialty', enabled: false, required: false },
       ],
@@ -104,7 +104,20 @@ async function main() {
           maxScore: section.maxScore,
           sortOrder: section.excelOrder - 1,
           items: {
-            create: subDimensionsForSection(section.code).map((item, itemIndex) => ({
+            create: [
+              ...(section.code === 'basic' ? [{
+                title: '参加工作时间（系统导入确认）',
+                hint: '来源：1.能级评价员工花名册。系统按年度评价截止日自动计算工龄和参评能级；如有异议，请申诉并上传证明材料。',
+                dimensionCode: 'profile.hire-date',
+                maxScore: 0,
+                scoreMode: ScoreMode.TIERS,
+                scoreOptions: [],
+                isRequired: false,
+                requireAttachment: false,
+                maxSelections: 0,
+                sortOrder: -1,
+              }] : []),
+              ...subDimensionsForSection(section.code).map((item, itemIndex) => ({
               title: `${item.title}${item.maxScore ? `（满分${item.maxScore}分）` : ''}`,
               hint: `公示部门：${item.ownerDepartment}。事实来源：${item.referenceFile ?? '评分标准对应表'}。计分说明：${item.scoringSummary}${item.notes ? `。${item.notes}` : ''}`,
               dimensionCode: item.code,
@@ -115,14 +128,15 @@ async function main() {
               requireAttachment: false,
               maxSelections: item.code.startsWith('basic.') ? 1 : 99,
               sortOrder: itemIndex,
-            })),
+              })),
+            ],
           },
         })),
       },
     },
   });
 
-  const itemCount = PERFORMANCE_SECTIONS.reduce((count, section) => count + subDimensionsForSection(section.code).length, 0);
+  const itemCount = 1 + PERFORMANCE_SECTIONS.reduce((count, section) => count + subDimensionsForSection(section.code).length, 0);
   console.log(JSON.stringify({ deleted2025Templates: legacyTemplates.length, templateId: template.id, title: template.title, sectionCount: PERFORMANCE_SECTIONS.length, itemCount }, null, 2));
 }
 

@@ -32,6 +32,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       success: true,
       year: result.year,
+      ticketSpecialtyMaxRaw: result.ticketSpecialtyMaxRaw,
       ticketTierMaxRaw: result.ticketTierMaxRaw,
       page,
       pageSize: employeeNo ? 1 : 30,

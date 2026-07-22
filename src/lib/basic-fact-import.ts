@@ -4,7 +4,7 @@
  * 一次上传 → 每行三条 EmployeeBasicFact。
  * 计分复用 basic-quality.ts 的 scoreSkillLevel/scoreTitleLevel/scorePerformanceLevel。
  */
-import type { BasicDimension } from '@prisma/client';
+import type { BasicDimension, PrismaClient } from '@prisma/client';
 import {
   scoreSkillLevel,
   scoreTitleLevel,
@@ -52,12 +52,10 @@ function normGrade(v: unknown): string | null {
  * 由映射 + 行 → 三条事实草稿（技能/职称/绩效）。
  * 工号缺失跳过。绩效按三年 A/B 组合计分。
  *
- * @param evalYear 评价年度（草稿阶段仅记录，DB 写入在 importBasicFacts 中使用）
  */
 export function buildBasicFactDrafts(
   mapping: BasicFactFieldMapping,
   rows: Record<string, string>[],
-  evalYear: number,
   tiers: BasicFactTiers = {},
 ): BasicFactDraft[] {
   const skillTiers = tiers.skill ?? DEFAULT_SKILL_TIERS;
@@ -101,11 +99,9 @@ export function buildBasicFactDrafts(
     });
   }
 
-  void evalYear;
   return drafts;
 }
 
-import type { PrismaClient, BasicDimension } from '@prisma/client';
 import {
   replaceBasicFactsBySource,
   type BasicFactSeed,
@@ -169,7 +165,7 @@ export async function importBasicFacts(
   sourceFile: string,
 ): Promise<BasicFactImportResult> {
   const tiers = await loadBasicFactTiers(prisma);
-  const drafts = buildBasicFactDrafts(mapping, rows, evalYear, tiers);
+  const drafts = buildBasicFactDrafts(mapping, rows, tiers);
 
   // 涉及员工数
   const employeeNos = [...new Set(drafts.map((d) => d.employeeNo))];

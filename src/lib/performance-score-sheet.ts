@@ -10,7 +10,7 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import type { DeclarationTier } from '@/lib/declaration-level';
-import { capToStandard, round1 } from '@/lib/dimension-aggregation';
+import { capToStandard, normalizeWithinCohort, round1 } from '@/lib/dimension-aggregation';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
@@ -19,9 +19,12 @@ import {
   type ScoringDataSource,
 } from '@/lib/scoring-standards';
 import {
+  effectiveHireDate,
+  evaluationCutoffDate,
   levelFromHireDate,
   parseMockDeclarationTier,
 } from '@/lib/declaration-level';
+import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 
@@ -30,6 +33,9 @@ export interface DimensionScoreLine {
   label: string;
   score: number;
   detail?: string;
+  /** 实际导入的细分事实维度，用于导出三级事实明细。 */
+  sourceDimensionCode?: string;
+  sourceFile?: string | null;
 }
 
 export interface DimensionScoreRow {
@@ -111,6 +117,7 @@ export interface ScoreSheetInput {
     defectLevel?: string;
     eventType?: string;
     metadata?: unknown;
+    sourceFile?: string | null;
   }>;
   /** L2 归档后落库的手工/扣分维度事实 */
   submissionFacts?: Array<{
@@ -121,16 +128,18 @@ export interface ScoreSheetInput {
     count?: number;
     unitScore?: number | string;
   }>;
-  /** @deprecated 两票已改为个人全年累加封顶，不再按能级比例折算 */
-  ticketTierMaxRaw?: Partial<Record<DeclarationTier, number>>;
+  /** 同一专业两票原始分最高值，用于按评分表折算到 30 分。 */
+  ticketCohortMax?: number;
   /** 员工 profile.mockDeclarationTier 等模拟能级（申报前展示用） */
   mockDeclarationTier?: DeclarationTier | null;
+  /** 年度评价工龄截止日；未传时沿用实时计算，兼容申报页面。 */
+  evaluationDate?: Date;
 }
 
 function resolveTier(input: ScoreSheetInput): DeclarationTier | null {
   if (input.declarationTier) return input.declarationTier;
   if (input.mockDeclarationTier) return input.mockDeclarationTier;
-  if (input.hireDate) return levelFromHireDate(input.hireDate) as DeclarationTier;
+  if (input.hireDate) return levelFromHireDate(input.hireDate, input.evaluationDate) as DeclarationTier;
   return '一级';
 }
 
@@ -202,15 +211,19 @@ function computeFactDimensionScore(
     if (!agg) return { score: 0, lines: [], hasFacts: false };
     const raw = Number(agg.score);
     const meta = agg.metadata as { breakdown?: Record<string, number>; isRawScore?: boolean } | undefined;
+    const cohortMax = input.ticketCohortMax ?? raw;
+    const score = normalizeWithinCohort(raw, cohortMax, standard.maxScore);
     return {
-      score: round1(raw),
+      score,
       hasFacts: true,
       lines: [
         {
           id: agg.id,
-          label: `原始分 ${raw}（最终折算在汇总阶段）`,
-          score: round1(raw),
+          label: `原始分 ${raw}（专业最高 ${cohortMax}，折算后 ${score}）`,
+          score,
           detail: meta?.breakdown ? JSON.stringify(meta.breakdown) : undefined,
+          sourceDimensionCode: agg.dimensionCode,
+          sourceFile: agg.sourceFile,
         },
       ],
     };
@@ -232,6 +245,8 @@ function computeFactDimensionScore(
           : fact.defectRef || fact.eventType || standard.title,
     score: Number(fact.score),
     detail: fact.role,
+    sourceDimensionCode: fact.dimensionCode,
+    sourceFile: fact.sourceFile,
   }));
 
   return { score, hasFacts: true, lines };
@@ -284,6 +299,8 @@ function buildDimensionRow(
         label: fact.defectRef || fact.eventType || standard.title,
         score: Number(fact.score),
         detail: fact.role,
+        sourceDimensionCode: fact.dimensionCode,
+        sourceFile: fact.sourceFile,
       }));
     } else if (subFacts.length > 0) {
       score = sumSubmissionFactScore(subFacts);
@@ -328,7 +345,6 @@ function buildDimensionRow(
   if (
     standard.dataSource !== 'deduction'
     && standard.maxScore > 0
-    && standard.code !== 'worksite.ticket-execution'
   ) {
     score = capToStandard(standard.code, score);
   }
@@ -367,9 +383,9 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
   const activeStandards = SCORING_STANDARDS.filter((std) => {
     if (std.dataSource === 'fact') return true;
     if (itemByDimension.has(std.code)) return true;
-    if (std.dataSource === 'deduction') {
-      return input.templateItems.some((it) => /违章|扣分/.test(it.title));
-    }
+    if (std.dataSource === 'deduction') return input.performanceFacts.some((fact) =>
+      sourceDimensionCodes(std.code).includes(fact.dimensionCode),
+    ) || input.submissionFacts?.some((fact) => fact.dimensionCode === std.code) || input.templateItems.some((it) => /违章|扣分/.test(it.title));
     return false;
   });
 
@@ -381,7 +397,9 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
     buildDimensionRow(std, input, itemByDimension, subByItemId),
   );
 
-  const mergedDeductionRows = deductionRows.filter((row) => row.score !== 0);
+  // 模板已定义的严重/一般违章即使当前为 0 分，也必须保留为系统确认项；
+  // 否则员工无法对“无违章事实”提出申诉，11 个二级维度会缺项。
+  const mergedDeductionRows = deductionRows.filter((row) => row.score !== 0 || row.itemId != null);
 
   const sectionMap = new Map<string, SectionScoreSheet>();
   for (const row of dimensionRows) {
@@ -442,29 +460,31 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
   };
 }
 
-/** 查询同年度各能级两票原始分最大值 */
-export async function loadTicketTierMaxRaw(
+/** 查询同一专业的两票原始最高分。 */
+export async function loadTicketSpecialtyMaxRaw(
   prisma: PrismaClient,
   year: number,
-): Promise<Partial<Record<DeclarationTier, number>>> {
+  workArea: string | null | undefined,
+): Promise<number> {
   const facts = await prisma.performanceFact.findMany({
     where: { year, dimensionCode: 'worksite.ticket-execution' },
     select: { score: true, employeeNo: true },
   });
-  if (facts.length === 0) return {};
+  if (facts.length === 0) return 0;
 
   const users = await prisma.user.findMany({
     where: { employeeNo: { in: facts.map((f) => f.employeeNo) } },
-    select: { employeeNo: true, hireDate: true },
+    select: { employeeNo: true, branch: { select: { name: true } } },
   });
-  const hireByNo = new Map(users.map((u) => [u.employeeNo!, u.hireDate]));
-
-  const max: Partial<Record<DeclarationTier, number>> = {};
+  const specialty = ticketSpecialtyFromWorkArea(workArea);
+  const specialtyByNo = new Map(
+    users.map((u) => [u.employeeNo!, ticketSpecialtyFromWorkArea(u.branch?.name)]),
+  );
+  let max = 0;
   for (const f of facts) {
-    const hire = hireByNo.get(f.employeeNo);
-    const tier = (hire ? levelFromHireDate(hire) : '一级') as DeclarationTier;
-    const raw = Number(f.score);
-    if (!max[tier] || raw > max[tier]!) max[tier] = raw;
+    if (specialtyByNo.get(f.employeeNo) === specialty) {
+      max = Math.max(max, Number(f.score));
+    }
   }
   return max;
 }
@@ -491,6 +511,7 @@ export async function loadPerformanceScoreSheet(
       fullName: true,
       hireDate: true,
       profile: true,
+      branch: { select: { name: true } },
     },
   });
   if (!user?.employeeNo) return null;
@@ -514,11 +535,11 @@ export async function loadPerformanceScoreSheet(
     },
   });
 
-  const [basicFacts, performanceFacts, submissionFacts, ticketTierMaxRaw] = await Promise.all([
+  const [basicFacts, performanceFacts, submissionFacts, ticketCohortMax] = await Promise.all([
     prisma.employeeBasicFact.findMany({ where: { year, employeeNo: user.employeeNo } }),
     prisma.performanceFact.findMany({ where: { year, employeeNo: user.employeeNo } }),
     prisma.submissionDimensionFact.findMany({ where: { year, employeeNo: user.employeeNo } }),
-    loadTicketTierMaxRaw(prisma, year),
+    loadTicketSpecialtyMaxRaw(prisma, year, user.branch?.name),
   ]);
 
   const templateItems: TemplateItemLike[] = template.sections.flatMap((sec) =>
@@ -541,7 +562,8 @@ export async function loadPerformanceScoreSheet(
     employeeName: user.fullName,
     declarationTier: declarationTier ?? null,
     mockDeclarationTier: parseMockDeclarationTier(user.profile),
-    hireDate: user.hireDate,
+    hireDate: effectiveHireDate(user.hireDate, user.profile),
+    evaluationDate: evaluationCutoffDate(year),
     templateItems,
     submissionItems: submission?.items.map((it) => ({
       itemId: it.itemId,
@@ -567,6 +589,7 @@ export async function loadPerformanceScoreSheet(
       defectLevel: f.defectLevel,
       eventType: f.eventType,
       metadata: f.metadata,
+      sourceFile: f.sourceFile,
     })),
     submissionFacts: submissionFacts.map((f) => ({
       id: f.id,
@@ -576,7 +599,7 @@ export async function loadPerformanceScoreSheet(
       count: f.count,
       unitScore: Number(f.unitScore),
     })),
-    ticketTierMaxRaw,
+    ticketCohortMax,
   });
 }
 

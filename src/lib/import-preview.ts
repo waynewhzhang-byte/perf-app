@@ -22,7 +22,7 @@ export function previewBasicFacts(
   rows: Record<string, string>[],
   tiers: BasicFactTiers,
 ): BasicPreviewRow[] {
-  const drafts = buildBasicFactDrafts(mapping, rows, 0, tiers);
+  const drafts = buildBasicFactDrafts(mapping, rows, tiers);
   const grouped = new Map<string, BasicPreviewRow>();
   for (const d of drafts) {
     let r = grouped.get(d.employeeNo);

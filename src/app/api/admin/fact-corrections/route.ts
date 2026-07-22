@@ -7,6 +7,11 @@ import { factKindForDimension, recalculateFactBackedSubmission } from '@/lib/fac
 import { loadBasicFactTiers } from '@/lib/basic-fact-import';
 import { scorePerformanceLevel, scoreSkillLevel, scoreTitleLevel } from '@/lib/basic-quality';
 import { computeFactScores, type ScoringRule } from '@/lib/scoring-engine';
+import { sourceDimensionCodes } from '@/lib/scoring-standards';
+import {
+  buildDerivedFactCorrection,
+  isDerivedFactCorrectionDimension,
+} from '@/lib/fact-correction-performance';
 
 const BasicDimensionByCode = {
   'basic.skill-level': 'SKILL_LEVEL',
@@ -30,6 +35,14 @@ const PayloadSchema = z.object({
   rawScore: z.number().min(0).optional(),
   incidentId: z.string().optional(),
   faultCount: z.number().int().min(1).optional(),
+  subtype: z.string().optional(),
+  award: z.string().optional(),
+  level: z.string().optional(),
+  project: z.string().optional(),
+  category: z.string().optional(),
+  violationLevel: z.string().optional(),
+  violationRole: z.string().optional(),
+  description: z.string().optional(),
 });
 
 async function loadEligibleItem(submissionItemId: string) {
@@ -73,19 +86,38 @@ export async function GET(req: Request) {
     if (!submission?.user.employeeNo) return NextResponse.json({ error: '申报或员工不存在' }, { status: 404 });
     const employeeNo = submission.user.employeeNo;
 
-    const details = await Promise.all(items.map(async (item) => {
+    const basicDimensions = [...new Set(items.flatMap((item) => {
       const dimensionCode = item.item.dimensionCode ?? '';
       const kind = factKindForDimension(dimensionCode);
+      const dimension = kind === 'BASIC'
+        ? BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode]
+        : undefined;
+      return dimension ? [dimension] : [];
+    }))];
+    const performanceDimensionCodes = [...new Set(items.flatMap((item) => {
+      const dimensionCode = item.item.dimensionCode ?? '';
+      return factKindForDimension(dimensionCode) === 'PERFORMANCE'
+        ? sourceDimensionCodes(dimensionCode)
+        : [];
+    }))];
+    const [basicFacts, performanceFacts] = await Promise.all([
+      prisma.employeeBasicFact.findMany({
+        where: { year: submission.template.year, employeeNo, dimension: { in: basicDimensions } },
+      }),
+      prisma.performanceFact.findMany({
+        where: { year: submission.template.year, employeeNo, dimensionCode: { in: performanceDimensionCodes } },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+    const details = items.map((item) => {
+      const dimensionCode = item.item.dimensionCode ?? '';
+      const kind = factKindForDimension(dimensionCode);
+      if (!kind) return null;
       const facts = kind === 'BASIC'
-        ? await prisma.employeeBasicFact.findMany({
-          where: { year: submission.template.year, employeeNo, dimension: BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode] },
-        })
-        : await prisma.performanceFact.findMany({
-          where: { year: submission.template.year, employeeNo, dimensionCode },
-          orderBy: { createdAt: 'asc' },
-        });
+        ? basicFacts.filter((fact) => fact.dimension === BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode])
+        : performanceFacts.filter((fact) => sourceDimensionCodes(dimensionCode).includes(fact.dimensionCode));
       return { item, kind, facts };
-    }));
+    }).filter((detail): detail is NonNullable<typeof detail> => detail !== null);
     return NextResponse.json({ success: true, employee: submission.user, year: submission.template.year, items: details });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : '服务器内部错误' }, { status: 500 });
@@ -137,29 +169,61 @@ export async function POST(req: Request) {
       factId = fact.id;
       afterData = fact;
     } else {
-      if (!input.defectRef?.trim()) return NextResponse.json({ error: '请填写事实编号或标识' }, { status: 400 });
       const existing = input.factId ? await prisma.performanceFact.findUnique({ where: { id: input.factId } }) : null;
-      if (existing && (existing.year !== template.year || existing.employeeNo !== user.employeeNo || existing.dimensionCode !== dimensionCode)) {
+      if (existing && (
+        existing.year !== template.year
+        || existing.employeeNo !== user.employeeNo
+        || !sourceDimensionCodes(dimensionCode).includes(existing.dimensionCode)
+      )) {
         return NextResponse.json({ error: '事实记录不属于当前员工和评分项' }, { status: 400 });
       }
-      const ruleRow = await prisma.scoringRule.findUnique({ where: { dimensionCode } });
-      if (!ruleRow?.enabled) return NextResponse.json({ error: '该维度未配置可用评分规则' }, { status: 400 });
-      const rule: ScoringRule = { id: ruleRow.id, dimensionCode, ruleType: ruleRow.ruleType as ScoringRule['ruleType'], cap: Number(ruleRow.cap), enabled: ruleRow.enabled, ...(ruleRow.config as object) };
-      const metadata = { ...(existing?.metadata as object ?? {}), incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, correctedByAppeal: true };
-      const [scored] = computeFactScores([{
-        employeeNo: user.employeeNo!, employeeName: user.fullName, dimensionCode,
-        role: input.role ?? existing?.role ?? 'FIRST_DISCOVERER', eventType: input.eventType ?? existing?.eventType ?? 'DISCOVERY',
-        defectLevel: input.defectLevel ?? existing?.defectLevel, defectRef: input.defectRef,
-        eventDate: input.eventDate ?? existing?.eventDate ?? undefined, sourceFile: existing?.sourceFile ?? `appeal-correction:${item.submissionId}`,
-        incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, metadata,
-      }], [rule]);
-      if (!scored) return NextResponse.json({ error: '该事实不能按当前规则计分，请补全必要字段' }, { status: 400 });
-      const data = {
-        year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
-        dimensionCode, dimensionTitle: item.item.title, role: scored.role, eventType: scored.eventType,
-        score: scored.score, defectRef: scored.defectRef ?? input.defectRef, defectLevel: scored.defectLevel ?? '', eventDate: scored.eventDate ?? null,
-        sourceFile: existing?.sourceFile ?? `appeal-correction:${item.submissionId}`, metadata,
-      };
+      const sourceFile = existing?.sourceFile ?? `appeal-correction:${item.submissionId}`;
+      let data;
+      if (isDerivedFactCorrectionDimension(dimensionCode)) {
+        const seed = buildDerivedFactCorrection({
+          dimensionCode,
+          year: template.year,
+          employeeNo: user.employeeNo!,
+          employeeName: user.fullName,
+          sourceFile,
+          existing,
+          subtype: input.subtype,
+          award: input.award,
+          level: input.level,
+          project: input.project,
+          category: input.category,
+          violationLevel: input.violationLevel,
+          violationRole: input.violationRole,
+          description: input.description,
+          eventDate: input.eventDate,
+        });
+        data = {
+          year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
+          dimensionCode: seed.dimensionCode, dimensionTitle: seed.dimensionTitle, role: seed.role, eventType: seed.eventType,
+          score: seed.score, defectRef: seed.defectRef, defectLevel: seed.defectLevel, eventDate: seed.eventDate,
+          sourceFile, metadata: { ...seed.metadata, correctedByAppeal: true },
+        };
+      } else {
+        if (!input.defectRef?.trim()) return NextResponse.json({ error: '请填写事实编号或标识' }, { status: 400 });
+        const ruleRow = await prisma.scoringRule.findUnique({ where: { dimensionCode } });
+        if (!ruleRow?.enabled) return NextResponse.json({ error: '该维度未配置可用评分规则' }, { status: 400 });
+        const rule: ScoringRule = { id: ruleRow.id, dimensionCode, ruleType: ruleRow.ruleType as ScoringRule['ruleType'], cap: Number(ruleRow.cap), enabled: ruleRow.enabled, ...(ruleRow.config as object) };
+        const metadata = { ...(existing?.metadata as object ?? {}), incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, correctedByAppeal: true };
+        const [scored] = computeFactScores([{
+          employeeNo: user.employeeNo!, employeeName: user.fullName, dimensionCode,
+          role: input.role ?? existing?.role ?? 'FIRST_DISCOVERER', eventType: input.eventType ?? existing?.eventType ?? 'DISCOVERY',
+          defectLevel: input.defectLevel ?? existing?.defectLevel, defectRef: input.defectRef,
+          eventDate: input.eventDate ?? existing?.eventDate ?? undefined, sourceFile,
+          incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, metadata,
+        }], [rule]);
+        if (!scored) return NextResponse.json({ error: '该事实不能按当前规则计分，请补全必要字段' }, { status: 400 });
+        data = {
+          year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
+          dimensionCode, dimensionTitle: item.item.title, role: scored.role, eventType: scored.eventType,
+          score: scored.score, defectRef: scored.defectRef ?? input.defectRef, defectLevel: scored.defectLevel ?? '', eventDate: scored.eventDate ?? null,
+          sourceFile, metadata,
+        };
+      }
       beforeData = existing;
       action = existing ? 'UPDATE' : 'CREATE';
       const fact = existing

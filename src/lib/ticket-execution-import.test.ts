@@ -5,6 +5,7 @@ import {
   DEFAULT_TICKET_PRICES,
   isOperationTicketEligible,
   aggregateTicketExecutionRows,
+  mergeWorkMemberTicketScores,
   type TicketPriceConfig,
 } from './ticket-execution-import';
 
@@ -14,6 +15,37 @@ describe('isOperationTicketEligible', () => {
     assert.equal(isOperationTicketEligible('归档'), true);
     assert.equal(isOperationTicketEligible('已执行'), true);
     assert.equal(isOperationTicketEligible('作废'), false);
+  });
+});
+
+describe('mergeWorkMemberTicketScores', () => {
+  it('将一种票和二种票成员积分合并到同一员工', () => {
+    const result = mergeWorkMemberTicketScores(
+      [{
+        employeeNo: 'E001',
+        employeeName: '张三',
+        rawScore: 1,
+        breakdown: {
+          operationItems: 0,
+          operationPoints: 1,
+          workLeaderPoints: 0,
+          workPermitterPoints: 0,
+          workMemberPoints: 0,
+          operationTicketCount: 0,
+          workTicketCount: 0,
+        },
+      }],
+      [
+        { 票类型: '变电站第一种工作票', 姓名: '张三', 人员编号: 'E001' },
+        { 票类型: '变电站第二种工作票', 姓名: '张三', 人员编号: 'E001' },
+        { 票类型: '变电站第二种工作票', 姓名: '李四', 人员编号: 'E002' },
+      ],
+    );
+
+    assert.deepEqual(result.map((row) => [row.employeeNo, row.rawScore, row.breakdown.workMemberPoints]), [
+      ['E001', 3, 2],
+      ['E002', 0.5, 0.5],
+    ]);
   });
 });
 
@@ -76,7 +108,7 @@ describe('aggregateTicketExecutionRows', () => {
     assert.equal(result.byEmployeeNo.get('E001')!.rawScore, 0.01);
   });
 
-  it('工作票：总工作票负责人 5 分', () => {
+    it('工作票：总工作票负责人 5 分', () => {
     const workRows = [{
       单位: '测试',
       票种类: '总工作票',
@@ -88,7 +120,23 @@ describe('aggregateTicketExecutionRows', () => {
     const result = aggregateTicketExecutionRows([], workRows, resolver);
     assert.equal(result.aggregates[0].rawScore, 5);
     assert.equal(result.aggregates[0].breakdown.workLeaderPoints, 5);
-  });
+    });
+
+    it('工作票：同一许可人只计一次，两个不同许可人均分', () => {
+      const resolver = { resolve: (name: string) => ({ employeeNo: name, employeeName: name }) };
+      const same = aggregateTicketExecutionRows([], [{
+        票种类: '二种票', 工作负责人: '', 人员编号: '',
+        开工许可人: '甲', 人员编号_1: '甲', 完工许可人: '甲', 人员编号_2: '甲',
+      }], resolver);
+      assert.equal(same.byEmployeeNo.get('甲')?.breakdown.workPermitterPoints, 0.3);
+
+      const split = aggregateTicketExecutionRows([], [{
+        票种类: '二种票', 工作负责人: '', 人员编号: '',
+        开工许可人: '甲', 人员编号_1: '甲', 完工许可人: '乙', 人员编号_2: '乙',
+      }], resolver);
+      assert.equal(split.byEmployeeNo.get('甲')?.breakdown.workPermitterPoints, 0.15);
+      assert.equal(split.byEmployeeNo.get('乙')?.breakdown.workPermitterPoints, 0.15);
+    });
 });
 
 describe('resolveWorkTicketPrice', () => {

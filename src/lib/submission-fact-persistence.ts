@@ -59,9 +59,8 @@ function resolveDimensionCode(item: SubmissionItemWithRelations['item']): string
   return inferDimensionCodeFromTitle(item.title);
 }
 
-function isManualOrDeductionDimension(code: string): boolean {
-  const std = SCORING_STANDARD_BY_CODE[code];
-  return std?.dataSource === 'manual' || std?.dataSource === 'deduction';
+function isEmployeeDeclaredDimension(code: string): boolean {
+  return Boolean(SCORING_STANDARD_BY_CODE[code]);
 }
 
 /** 从已终审申报项提取可落库的事实行（纯函数，便于测试） */
@@ -76,7 +75,9 @@ export function extractSubmissionDimensionFacts(
     if (row.status !== 'L2_APPROVED') continue;
 
     const dimensionCode = resolveDimensionCode(row.item);
-    if (!dimensionCode || !isManualOrDeductionDimension(dimensionCode)) continue;
+    // 系统导入事实项会以 isSystemFilled 标记跳过；其余二审通过项都是员工
+    // 补充/自填事实，必须作为可追溯的年度事实落库。
+    if (!dimensionCode || !isEmployeeDeclaredDimension(dimensionCode)) continue;
 
     const standard = SCORING_STANDARD_BY_CODE[dimensionCode];
     const scoreOptions = (Array.isArray(row.item.scoreOptions)

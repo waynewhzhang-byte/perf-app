@@ -19,13 +19,13 @@ function parseArgs(argv: string[]) {
 async function main() {
   const { year, top } = parseArgs(process.argv.slice(2));
 
-  const { ticketTierMaxRaw, total, rows } = await batchComputeImportedScores(prisma, year, {
+  const { ticketSpecialtyMaxRaw, total, rows } = await batchComputeImportedScores(prisma, year, {
     fetchAll: true,
     includeSheet: false,
   });
 
   console.log(`=== ${year} 年导入事实绩效分表（共 ${total} 人）===`);
-  console.log('各能级两票原始最高分（折算基准）:', ticketTierMaxRaw);
+  console.log('各专业两票原始最高分（折算基准）:', ticketSpecialtyMaxRaw);
   console.log('');
 
   const sorted = [...rows].sort((a, b) => b.importedTotalScore - a.importedTotalScore);

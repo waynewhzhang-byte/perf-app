@@ -8,7 +8,7 @@ import {
 describe('extractSubmissionDimensionFacts', () => {
   const approvedAt = new Date('2025-06-17T10:00:00Z');
 
-  it('仅落库 deduction 维度（performance.* 已全部 fact 化，不经申报归档）', () => {
+  it('落库二审通过的员工补充事实与扣分事实', () => {
     const lines = extractSubmissionDimensionFacts(
       [
         {
@@ -117,19 +117,18 @@ describe('extractSubmissionDimensionFacts', () => {
       approvedAt,
     );
 
-    // performance.* 维度全部 fact 化，不经申报归档
+    // 无系统导入事实时，员工补充的 performance.* 维度也必须归档为事实。
     const safetyLine = lines.find((l) => l.dimensionCode === 'performance.safety-contribution');
-    assert.equal(safetyLine, undefined);
+    assert.equal(safetyLine?.score, 6);
     const techLine = lines.find((l) => l.dimensionCode === 'performance.technical-contribution');
-    assert.equal(techLine, undefined);
+    assert.equal(techLine?.score, 6);
 
-    // 仅落库 deduction（违章）
-    assert.equal(lines.length, 1);
-    assert.equal(lines[0].dimensionCode, 'special.violation-severe');
-    assert.equal(lines[0].score, -10);
-    assert.equal(lines[0].count, 1);
-    assert.equal(lines[0].metadata?.source, 'submission');
-    assert.deepEqual(lines[0].metadata?.attachments, [
+    const violationLine = lines.find((l) => l.dimensionCode === 'special.violation-severe')!;
+    assert.equal(lines.length, 3);
+    assert.equal(violationLine.score, -10);
+    assert.equal(violationLine.count, 1);
+    assert.equal(violationLine.metadata?.source, 'submission');
+    assert.deepEqual(violationLine.metadata?.attachments, [
       { id: 'aV1', filename: 'violation.pdf', storageKey: 'kV1', mimeType: 'application/pdf' },
     ]);
   });

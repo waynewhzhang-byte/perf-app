@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import ExcelJS from 'exceljs';
-import { computeLevel, DECLARATION_LEVELS, type DeclarationLevel } from './declaration-level';
+import { computeLevel, DECLARATION_LEVELS, evaluationCutoffDate, type DeclarationLevel } from './declaration-level';
 import {
   aggregateEmployeeDimensions,
   applyTicketCohortNormalization,
@@ -99,7 +99,7 @@ export function buildAnnualQuantitativeReportRows(
   performanceFacts: AnnualPerformanceFactSource[],
   options: AnnualQuantitativeReportOptions,
 ): QuantitativeReportRow[] {
-  const asOf = options.asOf ?? new Date(Date.UTC(options.year, 4, 31));
+  const asOf = options.asOf ?? evaluationCutoffDate(options.year);
 
   const basicByEmployee = new Map<string, AnnualBasicFactSource[]>();
   for (const fact of basicFacts) {
@@ -288,7 +288,7 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: Declaration
     ['D3:D4', '所在单位'],
     ['E3:E4', tier === '一级' ? '所属专业' : '申报专业'],
     ['F3:F4', '岗位职务'],
-    ['G3:G4', `工作年限（截至${year}年5月）`],
+    ['G3:G4', `工作年限（截至${year}年7月）`],
     ['H3:H4', '技能等级'],
     ['I3:I4', '职称等级'],
     ['J3:J4', '绩效等级'],
@@ -419,7 +419,7 @@ export function buildAnnualQuantitativeReportWorkbook(
     ['能级三级', '工龄0—4年（不满5年）'],
     ['能级二级', '工龄5—8年（满5年、不满9年）'],
     ['能级一级', '工龄9年及以上'],
-    ['工龄截止日期', `${options.year}年5月31日`],
+    ['工龄截止日期', `${options.year}年7月31日`],
     ['两票执行折算', '个人全年原始分累加；本专业最高分计30分，其余按个人原始分÷本专业最高分×30折算'],
     ['数据来源', '本地数据库员工档案、EmployeeBasicFact、PerformanceFact'],
   ]);

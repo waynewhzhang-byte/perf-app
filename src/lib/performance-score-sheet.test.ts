@@ -55,7 +55,7 @@ describe('buildPerformanceScoreSheet', () => {
         role: 'CO_DISCOVERER',
       },
     ],
-    ticketTierMaxRaw: { 一级: 50, 二级: 60, 三级: 40 },
+    ticketCohortMax: 50,
     submissionItems: [
       { itemId: 'i2', score: 6, selected: [{ label: '第一发现人2次', score: 3, count: 2 }] },
     ],
@@ -78,7 +78,7 @@ describe('buildPerformanceScoreSheet', () => {
       .find((s) => s.code === 'worksite')!
       .items.find((i) => i.dimensionCode === 'worksite.ticket-execution')!;
     assert.equal(ticket.source, 'FACT');
-    assert.equal(ticket.score, 50);
+    assert.equal(ticket.score, 30);
 
     const defect = sheet.sections
       .find((s) => s.code === 'worksite')!
@@ -98,6 +98,23 @@ describe('buildPerformanceScoreSheet', () => {
       .items.find((i) => i.dimensionCode === 'basic.skill-level')!;
     assert.equal(skill.score, 0);
     assert.equal(skill.source, 'NONE');
+  });
+
+  it('模板定义的两类违章在无事实时仍保留 0 分确认项', () => {
+    const sheet = buildPerformanceScoreSheet({
+      year: 2026,
+      employeeNo: '001',
+      employeeName: '测试',
+      templateItems: [
+        { id: 'severe', title: '严重违章扣分', dimensionCode: 'special.violation-severe' },
+        { id: 'general', title: '一般违章扣分', dimensionCode: 'special.violation-general' },
+      ],
+      basicFacts: [],
+      performanceFacts: [],
+    });
+    const special = sheet.sections.find((section) => section.code === 'special')!;
+    assert.equal(special.items.length, 2);
+    assert.equal(special.items.every((item) => item.score === 0), true);
   });
 
   it('归档申报事实优先于申报草稿计分', () => {
@@ -124,7 +141,7 @@ describe('buildPerformanceScoreSheet', () => {
     assert.equal(safety?.source, 'FACT');
   });
 
-  it('两票导入阶段展示原始分，不做封顶折算', () => {
+  it('两票按同专业最高原始分折算到 30 分', () => {
     const sheet = buildPerformanceScoreSheet({
       year: 2025,
       employeeNo: '001',
@@ -134,11 +151,12 @@ describe('buildPerformanceScoreSheet', () => {
       performanceFacts: [
         { id: 'p1', dimensionCode: 'worksite.ticket-execution', score: 45 },
       ],
+      ticketCohortMax: 90,
     });
     const ticket = sheet.sections
       .find((s) => s.code === 'worksite')!
       .items.find((i) => i.dimensionCode === 'worksite.ticket-execution')!;
-    assert.equal(ticket.score, 45);
+    assert.equal(ticket.score, 15);
   });
 
   it('profile.mockDeclarationTier 优先于入职推算能级', () => {

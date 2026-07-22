@@ -26,7 +26,7 @@ function parseArgs(argv: string[]) {
 async function main() {
   const { year, output } = parseArgs(process.argv.slice(2));
 
-  const result = await batchComputeImportedScores(prisma, year, { fetchAll: true });
+  const result = await batchComputeImportedScores(prisma, year, { fetchAll: true, includeSheet: true });
   if (result.rows.length === 0) {
     console.error('无数据：请先导入基本素质事实');
     process.exit(1);
@@ -36,7 +36,7 @@ async function main() {
   await writeImportedScoresXlsx(result, output);
 
   console.log(`已导出 ${result.rows.length} 人 → ${output}`);
-  console.log('工作表：个人分表 / 工区汇总 / 部门汇总 / 计算说明');
+  console.log('工作表：个人分表 / 三级事实明细 / 工区汇总 / 部门汇总 / 计算说明');
 
   await prisma.$disconnect();
 }

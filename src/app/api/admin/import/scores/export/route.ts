@@ -20,7 +20,10 @@ export async function GET(req: Request) {
     const year = Number(url.searchParams.get('year') ?? new Date().getFullYear());
     const format = url.searchParams.get('format') ?? 'xlsx';
 
-    const result = await batchComputeImportedScores(prisma, year, { fetchAll: true });
+    const result = await batchComputeImportedScores(prisma, year, {
+      fetchAll: true,
+      includeSheet: format !== 'summary',
+    });
 
     if (result.rows.length === 0) {
       return NextResponse.json({ error: '暂无导入事实数据，请先执行基本素质导入' }, { status: 404 });
@@ -32,6 +35,7 @@ export async function GET(req: Request) {
         success: true,
         year: result.year,
         total: result.total,
+        ticketSpecialtyMaxRaw: result.ticketSpecialtyMaxRaw,
         ticketTierMaxRaw: result.ticketTierMaxRaw,
         ...summary,
       });

@@ -17,6 +17,7 @@
  * 写入业务事实（申诉修正 fact-corrections 是唯一例外，单条修改需审计）。
  */
 import type { Prisma, PrismaClient, BasicDimension } from '@prisma/client';
+import { refreshFactBackedSubmissionsByEmployeeNos } from '@/lib/fact-correction';
 
 /** 调用方转换后的中立形态：不含 id/userId/sourceFile（由本模块填） */
 export interface BasicFactSeed {
@@ -66,7 +67,15 @@ export async function replaceBasicFactsBySource(
   seeds: BasicFactSeed[],
   userIdByNo: Map<string, string>,
 ): Promise<ReplaceBasicFactsResult> {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    const previous = await tx.employeeBasicFact.findMany({
+      where: {
+        year: scope.year,
+        dimension: scope.dimension,
+        sourceFile: scope.sourceFile,
+      },
+      select: { employeeNo: true },
+    });
     const deleted = (
       await tx.employeeBasicFact.deleteMany({
         where: {
@@ -78,7 +87,7 @@ export async function replaceBasicFactsBySource(
     ).count;
 
     if (seeds.length === 0) {
-      return { deleted, created: 0 };
+      return { deleted, created: 0, employeeNos: previous.map((fact) => fact.employeeNo) };
     }
 
     const deduped = dedupeSeeds(seeds);
@@ -91,8 +100,14 @@ export async function replaceBasicFactsBySource(
       created += result.count;
     }
 
-    return { deleted, created };
+    return {
+      deleted,
+      created,
+      employeeNos: [...previous.map((fact) => fact.employeeNo), ...deduped.map((seed) => seed.employeeNo)],
+    };
   });
+  await refreshFactBackedSubmissionsByEmployeeNos(prisma, scope.year, result.employeeNos);
+  return { deleted: result.deleted, created: result.created };
 }
 
 /**

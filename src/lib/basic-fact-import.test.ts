@@ -12,7 +12,6 @@ describe('buildBasicFactDrafts', () => {
     const drafts = buildBasicFactDrafts(
       mapping,
       [{ '工号': '001', '姓名': '张三', '技能等级': '技师', '职称等级': '中级', '2023': 'A', '2024': 'B', '2025': 'B' }],
-      2025,
       { skill: { 技师: 3 }, title: { 中级: 3 }, performance: { '2A1B': 5.5, '1A2B': 5 } },
     );
     assert.equal(drafts.length, 3);
@@ -29,7 +28,6 @@ describe('buildBasicFactDrafts', () => {
     const drafts = buildBasicFactDrafts(
       mapping,
       [{ '工号': '002', '姓名': '李', '技能等级': '', '职称等级': '', '2023': 'A', '2024': 'A', '2025': 'A' }],
-      2025,
       { skill: {}, title: {}, performance: { '3A': 6 } },
     );
     const perf = drafts.find((d) => d.dimension === 'PERFORMANCE_LEVEL')!;
@@ -41,7 +39,6 @@ describe('buildBasicFactDrafts', () => {
     const drafts = buildBasicFactDrafts(
       mapping,
       [{ '工号': '', '姓名': 'X', '技能等级': '', '职称等级': '', '2023': '', '2024': '', '2025': '' }],
-      2025,
     );
     assert.equal(drafts.length, 0);
   });

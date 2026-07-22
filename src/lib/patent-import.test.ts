@@ -32,6 +32,7 @@ describe('parsePatentRows', () => {
     }];
     const parsed = parsePatentRows(rows, mapping);
     assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].rowIndex, 1);
     assert.equal(parsed[0].inventors.length, 2);
     assert.deepEqual(parsed[0].inventors.map((i) => i.order), [1, 2]);
   });
@@ -65,6 +66,7 @@ describe('parsePatentRows', () => {
 describe('buildPatentSeeds', () => {
   it('前 4 位发明人按序得 4/3/2/1 分', () => {
     const parsed = [{
+      rowIndex: 1,
       patentName: '专利A',
       inventors: [
         { name: '张三', employeeNo: '001', order: 1 },
@@ -81,13 +83,13 @@ describe('buildPatentSeeds', () => {
     assert.equal(seeds[3].score, 1);
   });
 
-  it('**B3 修复**：同一员工在不同专利同序号 → 多条独立 seed（不同 defectRef）', () => {
-    // 李勇在 4 个专利都是第 1 发明人
+  it('**B3 修复**：同一员工在同名申请人的不同行均为同序号 → 多条独立 seed', () => {
+    // 李勇在 4 个专利都是第 1 发明人，源列名相同
     const parsed = [
-      { patentName: '专利甲', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
-      { patentName: '专利乙', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
-      { patentName: '专利丙', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
-      { patentName: '专利丁', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
+      { rowIndex: 1, patentName: '同一申请人', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
+      { rowIndex: 2, patentName: '同一申请人', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
+      { rowIndex: 3, patentName: '同一申请人', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
+      { rowIndex: 4, patentName: '同一申请人', inventors: [{ name: '李勇', employeeNo: '11425691', order: 1 }] },
     ];
     const seeds = buildPatentSeeds(parsed, 2026, 'test.xlsx');
     assert.equal(seeds.length, 4, '必须产生 4 条独立 seed');
@@ -96,15 +98,16 @@ describe('buildPatentSeeds', () => {
     // defectRef 必须各不相同（含专利名）
     const refs = seeds.map((s) => s.defectRef);
     assert.equal(new Set(refs).size, 4, 'defectRef 必须唯一');
-    // 都应包含 "order1" + 不同专利名
+    // 同名申请人时仍由 rowIndex 保证 defectRef 唯一
     for (const s of seeds) {
-      assert.match(s.defectRef, /^patent:order1:/);
+      assert.match(s.defectRef, /^patent:row\d+:order1:同一申请人$/);
     }
   });
 
   it('defectRef 含 order 避免同人不同专利被合并', () => {
     // 同员工在同一专利的不同序号（理论不可能但验证语义）
     const parsed = [{
+      rowIndex: 1,
       patentName: '专利Z',
       inventors: [
         { name: '李', employeeNo: '001', order: 1 },
@@ -118,6 +121,7 @@ describe('buildPatentSeeds', () => {
 
   it('工号缺失的发明人位次被过滤', () => {
     const parsed = [{
+      rowIndex: 1,
       patentName: '专利B',
       inventors: [{ name: '张三', employeeNo: '001', order: 1 }],
     }];

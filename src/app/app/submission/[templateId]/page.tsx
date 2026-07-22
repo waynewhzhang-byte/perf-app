@@ -6,7 +6,8 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
-import { levelFromHireDate } from '@/lib/declaration-level';
+import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
+import { isSystemConfirmationDimension } from '@/lib/system-filled-items';
 
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
@@ -68,8 +69,10 @@ export default function SubmissionPage() {
     items: {
       itemId: string;
       itemTitle: string;
+      sectionTitle?: string;
+      sectionCode?: string | null;
       dimensionCode?: string;
-      factKind?: 'basic' | 'performance';
+      factKind?: 'basic' | 'performance' | 'profile';
       totalScore: number;
       facts: {
         id: string;
@@ -81,10 +84,12 @@ export default function SubmissionPage() {
         eventDate?: string | null;
         tierValue?: string;
         label?: string;
+        thirdLevelTitle?: string;
         yearBreakdown?: unknown;
         sourceFile?: string | null;
       }[];
     }[];
+    scoreSheet?: { declarationTier?: string | null };
   } | null>(null);
   const [factsConfirmations, setFactsConfirmations] = useState<Record<string, 'CONFIRMED' | 'DISPUTED'>>({});
   const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
@@ -147,7 +152,7 @@ export default function SubmissionPage() {
       const map: Record<string, SubItem> = {};
       currentTemplate.sections.forEach((s) => s.items.forEach((it) => {
         const ex = existing?.items?.find((x: any) => x.itemId === it.id);
-        if (ex && (ex as any).isSystemFilled) return;
+        if (isSystemConfirmationDimension(it.dimensionCode)) return;
         map[it.id] = ex ? {
           id: ex.id, itemId: it.id, selected: ex.selected ?? [],
           declaredScore: ex.selected?.find((row: Selected) => row.optionId === 'employee-declared-score')?.score ?? null,
@@ -223,19 +228,22 @@ export default function SubmissionPage() {
   const workYears = useMemo(() => {
     if (!header.hireDate) return null;
     const hire = new Date(`${header.hireDate}T00:00:00`);
-    const now = new Date();
-    let years = now.getFullYear() - hire.getFullYear();
+    const cutoff = evaluationCutoffDate(tpl?.year ?? new Date().getFullYear());
+    let years = cutoff.getFullYear() - hire.getFullYear();
     const beforeAnniversary =
-      now.getMonth() < hire.getMonth() ||
-      (now.getMonth() === hire.getMonth() && now.getDate() < hire.getDate());
+      cutoff.getMonth() < hire.getMonth() ||
+      (cutoff.getMonth() === hire.getMonth() && cutoff.getDate() < hire.getDate());
     if (beforeAnniversary) years -= 1;
     return Math.max(0, years);
-  }, [header.hireDate]);
+  }, [header.hireDate, tpl?.year]);
 
   const calculatedDeclarationLevel = useMemo(() => {
     if (!header.hireDate) return null;
-    return levelFromHireDate(new Date(`${header.hireDate}T00:00:00`));
-  }, [header.hireDate]);
+    return levelFromHireDate(
+      new Date(`${header.hireDate}T00:00:00`),
+      evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()),
+    );
+  }, [header.hireDate, tpl?.year]);
 
   const isLocked = (itemId: string): boolean => {
     if (sub?.status !== 'REJECTED') return false;
@@ -578,21 +586,37 @@ export default function SubmissionPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-sm">{fi.itemTitle}</p>
+                    <p className="mt-0.5 text-xs font-medium text-slate-600">
+                      一级：{fi.sectionTitle ?? '系统导入基础信息'} · 二级：{fi.itemTitle}
+                    </p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       系统计算得分：<b className="text-emerald-700">{fi.totalScore.toFixed(1)} 分</b>
+                      {fi.factKind === 'profile' && factsData.scoreSheet?.declarationTier && (
+                        <> · 自动参评能级：<b className="text-emerald-700">{factsData.scoreSheet.declarationTier}</b></>
+                      )}
                     </p>
                     <div className="mt-2 space-y-1">
+                      {fi.facts.length === 0 && (
+                        <p className="text-xs text-amber-700">三级事实：暂无系统导入事实（当前按 0 分计入，可提交申诉补正）</p>
+                      )}
                       {fi.facts.map((f) => (
                         <p key={f.id} className="text-xs text-slate-500">
                           {fi.factKind === 'basic' ? (
                             <>
-                              <span className="font-medium">{f.label ?? '基本素质'}</span>
+                              <span className="font-medium">三级：{f.thirdLevelTitle ?? f.label ?? '基本素质'}</span>
                               {' · 档位 '}{f.tierValue}
                               {' → '}<b>{f.score} 分</b>
                             </>
+                          ) : fi.factKind === 'profile' ? (
+                            <>
+                              <span className="font-medium">三级：{f.thirdLevelTitle ?? '参加工作时间'}</span>
+                              {' · '}{f.label ?? '暂无导入时间'}
+                              {f.sourceFile && <span className="text-slate-400"> · 来源：{f.sourceFile}</span>}
+                            </>
                           ) : (
                             <>
-                              {f.label && <span className="font-medium">{f.label}</span>}
+                              <span className="font-medium">三级：{f.thirdLevelTitle ?? f.label ?? '导入事实'}</span>
+                              {f.label && <>{' · '}{f.label}</>}
                               {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
                               {f.role && (
                                 <>
@@ -672,12 +696,15 @@ export default function SubmissionPage() {
       )}
 
       <div className="mt-5 space-y-6">
-        {tpl.sections.map((sec) => (
+        {tpl.sections.map((sec) => {
+          const manualItems = sec.items.filter((it) => !systemFilledItemIds.has(it.id));
+          if (manualItems.length === 0) return null;
+          return (
           <section key={sec.id} className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="font-semibold">{sec.title}</h2>
             {sec.description && <p className="mt-1 text-xs text-slate-400">{sec.description}</p>}
             <div className="mt-4 space-y-5">
-              {sec.items.filter((it) => !systemFilledItemIds.has(it.id)).map((it) => {
+              {manualItems.map((it) => {
                 const a = answers[it.id]; const locked = isLocked(it.id);
                 const rejected = a?.status === 'REJECTED';
                 const employeeFactItem = Boolean(it.dimensionCode);
@@ -841,7 +868,8 @@ export default function SubmissionPage() {
               })}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
 
       {editable && (

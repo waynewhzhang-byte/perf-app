@@ -45,7 +45,12 @@ export async function persistSeedsBySource(
 ): Promise<SeedBasedImportResult> {
   if (seeds.length === 0) {
     // 空输入仍按 batch-replace 语义清空该 scope
-    const result = await replaceFactsBySource(prisma, scope, [], new Map());
+    const result = await replaceFactsBySource(
+      prisma,
+      { ...scope, refreshSubmissions: !scope.replaceAcrossSourceFiles },
+      [],
+      new Map(),
+    );
     return { total: 0, created: 0, updated: 0, skipped: 0, deleted: result.deleted };
   }
 
@@ -54,46 +59,10 @@ export async function persistSeedsBySource(
 
   // replaceAcrossSourceFiles 模式：先按 (year, dimensionCode) 清空所有旧记录
   // （无视 sourceFile），用于一次性重导清除旧 buggy sourceFile 数据。
-  if (scope.replaceAcrossSourceFiles) {
-    return prisma.$transaction(async (tx) => {
-      const deletedRow = await tx.performanceFact.deleteMany({
-        where: { year: scope.year, dimensionCode: scope.dimensionCode },
-      });
-      const dedupedMap = new Map<string, PerformanceFactSeed>();
-      for (const seed of seeds) {
-        const key = [seed.year, seed.employeeNo, seed.dimensionCode, seed.defectRef, seed.role, seed.eventType].join('\u0000');
-        dedupedMap.set(key, seed);
-      }
-      const deduped = [...dedupedMap.values()];
-      let created = 0;
-      for (let i = 0; i < deduped.length; i += 200) {
-        const chunk = deduped.slice(i, i + 200).map((seed) => ({
-          year: seed.year,
-          employeeNo: seed.employeeNo,
-          employeeName: seed.employeeName,
-          userId: userIdByNo.get(seed.employeeNo) ?? null,
-          dimensionCode: seed.dimensionCode,
-          dimensionTitle: seed.dimensionTitle,
-          role: seed.role,
-          eventType: seed.eventType,
-          score: seed.score,
-          defectRef: seed.defectRef,
-          defectLevel: seed.defectLevel,
-          eventDate: seed.eventDate,
-          sourceFile: scope.sourceFile,
-          metadata: seed.metadata as never,
-        }));
-        const r = await tx.performanceFact.createMany({ data: chunk });
-        created += r.count;
-      }
-      return { total: deduped.length, created, updated: 0, skipped: 0, deleted: deletedRow.count };
-    });
-  }
-
-  // 工号未匹配 userId 的行视为 skipped（保留 seed 但 userId=null，replaceFactsBySource 已支持）
+  // 工号未匹配 userId 的行保留为 userId=null，replaceFactsBySource 已支持。
   const result: ReplaceFactsResult = await replaceFactsBySource(
     prisma,
-    scope,
+    { ...scope, refreshSubmissions: !scope.replaceAcrossSourceFiles },
     seeds,
     userIdByNo,
   );
@@ -105,6 +74,33 @@ export async function persistSeedsBySource(
     skipped: 0,
     deleted: result.deleted,
   };
+}
+
+/** 按维度分组并按插入顺序分别 batch-replace。 */
+export async function persistSeedsByDimension(
+  prisma: PrismaClient,
+  scope: { year: number; sourceFile: string },
+  seeds: PerformanceFactSeed[],
+): Promise<{ byDimension: Record<string, SeedBasedImportResult>; total: number }> {
+  const byDimension = new Map<string, PerformanceFactSeed[]>();
+  for (const seed of seeds) {
+    const dimensionSeeds = byDimension.get(seed.dimensionCode) ?? [];
+    dimensionSeeds.push(seed);
+    byDimension.set(seed.dimensionCode, dimensionSeeds);
+  }
+
+  const results: Record<string, SeedBasedImportResult> = {};
+  let total = 0;
+  for (const [dimensionCode, dimensionSeeds] of byDimension) {
+    const result = await persistSeedsBySource(
+      prisma,
+      { ...scope, dimensionCode },
+      dimensionSeeds,
+    );
+    results[dimensionCode] = result;
+    total += result.total;
+  }
+  return { byDimension: results, total };
 }
 
 /** 规范化单元格值为字符串；空值返回 '' */

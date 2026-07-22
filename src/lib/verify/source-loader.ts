@@ -16,32 +16,30 @@ export interface SourceSheet {
   rows: Record<string, string>[];
 }
 
-/** 读取 xlsx 指定 sheet，返回展开合并单元格后的 SourceSheet */
-export function loadSheet(filePath: string, sheetName?: string): SourceSheet {
-  const buf = readFileSync(filePath);
-  const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
-  const name = sheetName ?? wb.SheetNames[0];
-  const sheet = wb.Sheets[name];
+function toSourceSheet(sheet: XLSX.WorkSheet | undefined): SourceSheet {
   if (!sheet) return { headers: [], rows: [] };
   const expanded = expandMergedCells(sheet);
   const raw = XLSX.utils.sheet_to_json(expanded, { defval: '', raw: false }) as Record<string, unknown>[];
   if (raw.length === 0) return { headers: [], rows: [] };
   const headerSet = new Set<string>();
   for (const obj of raw) {
-    for (const k of Object.keys(obj)) {
-      if (k && typeof k === 'string' && k.trim() && !k.startsWith('__EMPTY')) headerSet.add(k.trim());
+    for (const key of Object.keys(obj)) {
+      if (key.trim() && !key.startsWith('__EMPTY')) headerSet.add(key.trim());
     }
   }
   const headers = Array.from(headerSet);
-  const rows = raw.map((obj) => {
-    const row: Record<string, string> = {};
-    for (const h of headers) {
-      const val = obj[h];
-      row[h] = val != null ? String(val).trim() : '';
-    }
-    return row;
-  });
+  const rows = raw.map((obj) => Object.fromEntries(
+    headers.map((header) => [header, obj[header] != null ? String(obj[header]).trim() : '']),
+  ));
   return { headers, rows };
+}
+
+/** 读取 xlsx 指定 sheet，返回展开合并单元格后的 SourceSheet */
+export function loadSheet(filePath: string, sheetName?: string): SourceSheet {
+  const buf = readFileSync(filePath);
+  const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
+  const name = sheetName ?? wb.SheetNames[0];
+  return toSourceSheet(wb.Sheets[name]);
 }
 
 /** 读取 xlsx 的所有 sheet（按名字） */
@@ -50,27 +48,7 @@ export function loadSheets(filePath: string, sheetNames: string[]): Record<strin
   const wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
   const out: Record<string, SourceSheet> = {};
   for (const name of sheetNames) {
-    const sheet = wb.Sheets[name];
-    if (!sheet) { out[name] = { headers: [], rows: [] }; continue; }
-    const expanded = expandMergedCells(sheet);
-    const raw = XLSX.utils.sheet_to_json(expanded, { defval: '', raw: false }) as Record<string, unknown>[];
-    if (raw.length === 0) { out[name] = { headers: [], rows: [] }; continue; }
-    const headerSet = new Set<string>();
-    for (const obj of raw) {
-      for (const k of Object.keys(obj)) {
-        if (k && typeof k === 'string' && k.trim() && !k.startsWith('__EMPTY')) headerSet.add(k.trim());
-      }
-    }
-    const headers = Array.from(headerSet);
-    const rows = raw.map((obj) => {
-      const row: Record<string, string> = {};
-      for (const h of headers) {
-        const val = obj[h];
-        row[h] = val != null ? String(val).trim() : '';
-      }
-      return row;
-    });
-    out[name] = { headers, rows };
+    out[name] = toSourceSheet(wb.Sheets[name]);
   }
   return out;
 }

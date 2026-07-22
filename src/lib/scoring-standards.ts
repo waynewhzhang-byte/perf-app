@@ -185,6 +185,29 @@ export function sourceDimensionCodes(code: string): string[] {
   }
 }
 
+/** 原始台账的三级事实分类名称，用于员工确认页和导出明细。 */
+const SOURCE_DIMENSION_TITLES: Record<string, string> = {
+  'basic.skill-level': '技能等级档位',
+  'basic.title-level': '职称等级档位',
+  'basic.performance-level': '近三年绩效档位',
+  'performance.safety-contribution': '安全贡献事项',
+  'performance.technical-contribution.textbook': '教材/题库/课件开发',
+  'performance.technical-contribution.regulation': '运规编写/会审',
+  'performance.technical-contribution.ticket-revision': '两票修订/审查',
+  'performance.competition.competition': '竞赛/比武',
+  'performance.competition.exam': '调考',
+  'performance.innovation.award': '创新奖项',
+  'performance.innovation.paper-patent': '论文/发明专利',
+  'worksite.ticket-execution': '两票原始积分',
+  'worksite.defect-governance': '缺陷治理事项',
+  'special.violation-severe': '严重违章事实',
+  'special.violation-general': '一般违章事实',
+};
+
+export function sourceDimensionTitle(code: string): string {
+  return SOURCE_DIMENSION_TITLES[code] ?? code;
+}
+
 /** 申报项标题 → dimensionCode（模板未绑 dimensionCode 时的兜底） */
 export const TITLE_DIMENSION_HINTS: { pattern: RegExp; code: EvaluationDimensionCode }[] = [
   { pattern: /技能等级/, code: 'basic.skill-level' },

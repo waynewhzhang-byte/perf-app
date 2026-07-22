@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extractSystemFilledFromSheet,
   isReviewSkippedSystemItem,
+  isSystemConfirmationDimension,
   resolveFormItemDimension,
   systemItemStatusOnSubmit,
 } from './system-filled-items';
@@ -15,7 +16,7 @@ describe('system-filled-items', () => {
     );
   });
 
-  it('extractSystemFilledFromSheet 仅含 FACT 且 hasImportedFacts', () => {
+  it('extractSystemFilledFromSheet 包含没有导入事实的 0 分事实项', () => {
     const rows = extractSystemFilledFromSheet({
       year: 2025,
       employeeNo: '1',
@@ -47,12 +48,34 @@ describe('system-filled-items', () => {
               hasImportedFacts: true,
               lines: [{ label: '技师', score: 3 }],
             },
+            {
+              dimensionCode: 'basic.title-level',
+              title: '职称等级',
+              sectionCode: 'basic',
+              sectionTitle: '基本素质',
+              maxScore: 4,
+              score: 0,
+              source: 'NONE',
+              dataSource: 'fact',
+              ruleType: 'BASIC_TIER',
+              ruleSummary: '',
+              itemId: 'i2',
+              hasImportedFacts: false,
+              lines: [],
+            },
           ],
         },
       ],
     });
-    assert.equal(rows.length, 1);
+    assert.equal(rows.length, 2);
     assert.equal(rows[0].itemId, 'i1');
+    assert.equal(rows[1].itemId, 'i2');
+  });
+
+  it('参加工作时间也是系统确认项', () => {
+    assert.equal(isSystemConfirmationDimension('profile.hire-date'), true);
+    assert.equal(isSystemConfirmationDimension('basic.skill-level'), true);
+    assert.equal(isSystemConfirmationDimension('unknown'), false);
   });
 
   it('确认项提交后直接进入 L1_APPROVED', () => {

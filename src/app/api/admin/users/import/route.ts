@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
-import { levelFromHireDate } from '@/lib/declaration-level';
+import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
 import { hashPassword } from '@/lib/password';
 
 const RowSchema = z.object({
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       if (row.hireDate) {
         const d = new Date(row.hireDate);
         if (!Number.isNaN(d.getTime())) {
-          const level = levelFromHireDate(d);
+          const level = levelFromHireDate(d, evaluationCutoffDate(new Date().getFullYear()));
           if (level) levelByNo.set(row.employeeNo, level);
         }
       }

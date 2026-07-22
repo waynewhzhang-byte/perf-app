@@ -49,8 +49,11 @@ export function inferInnovationCategory(award: string): InnovationCategory {
 }
 
 export function inferInnovationLevel(level: string, award: string): 'guowang' | 'sheng' {
-  const text = `${level} ${award}`;
-  if (/国网|国家电网|全国/.test(text)) return 'guowang';
+  // 源表的「项目」列明确标注获奖层级时优先使用它；奖项名里的“全国”只是
+  // 赛事名称的一部分，不能覆盖“省公司级获奖成果”。
+  if (/省公司/.test(level)) return 'sheng';
+  if (/国网|国家电网|全国/.test(level)) return 'guowang';
+  if (/国网|国家电网|全国/.test(award)) return 'guowang';
   return 'sheng';
 }
 

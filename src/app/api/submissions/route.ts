@@ -6,13 +6,14 @@ import { prisma } from '@/lib/prisma';
 import { getSession, AuthError } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
-import { levelFromHireDate } from '@/lib/declaration-level';
+import { effectiveHireDate, evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
 import { UpsertSchema, parseDateOnly, computeItemScore } from '@/lib/submission-validator';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import {
   extractSystemFilledFromSheet,
+  HIRE_DATE_CONFIRMATION_CODE,
   isFactDataSourceDimension,
   systemItemStatusOnSubmit,
   type ConfirmationStatus,
@@ -111,9 +112,12 @@ export async function POST(req: Request) {
     ? requestedWorkAreaId ?? user.branchId ?? undefined
     : user.branchId ?? undefined;
 
-  const parsedHireDate = parseDateOnly(hireDate);
+  // 隐藏入职时间输入时，使用花名册导入值，客户端不得覆盖。
+  const parsedHireDate = hfEnabled('hireDate')
+    ? parseDateOnly(hireDate)
+    : effectiveHireDate(user.hireDate, user.profile);
   const inferredDeclarationLevelName = !hfEnabled('declarationLevel') && parsedHireDate
-    ? levelFromHireDate(parsedHireDate)
+    ? levelFromHireDate(parsedHireDate, evaluationCutoffDate(template.year))
     : null;
   if (submit) {
     if (!workAreaId) {
@@ -152,7 +156,9 @@ export async function POST(req: Request) {
         if (hfEnabled('declarationSpecialty') && !declarationSpecialty) throw new EditableError('请选择有效的能级评价专业');
       }
 
-      const workYears = parsedHireDate ? calculateFullWorkYears(parsedHireDate, new Date()) : null;
+      const workYears = parsedHireDate
+        ? calculateFullWorkYears(parsedHireDate, evaluationCutoffDate(template.year))
+        : null;
       let preReview = { passed: true, messages: [] as string[], matchedRuleIds: [] as string[] };
       if (submit && parsedHireDate && declarationLevel) {
         const dbRules = await tx.autoReviewRule.findMany({ where: { enabled: true }, orderBy: { createdAt: 'asc' } });
@@ -268,7 +274,25 @@ export async function POST(req: Request) {
           userId: s.userId,
         });
         if (sheet) {
-          for (const sys of extractSystemFilledFromSheet(sheet)) {
+          const systemItems = extractSystemFilledFromSheet(sheet);
+          const hireDateItem = template.sections
+            .flatMap((section) => section.items)
+            .find((item) => item.dimensionCode === HIRE_DATE_CONFIRMATION_CODE);
+          if (hireDateItem) {
+            systemItems.unshift({
+              itemId: hireDateItem.id,
+              dimensionCode: HIRE_DATE_CONFIRMATION_CODE,
+              title: hireDateItem.title,
+              score: 0,
+              ruleSummary: '参加工作时间来自员工花名册；系统据此计算工龄和参评能级。',
+              selected: parsedHireDate ? [{
+                index: 0,
+                label: `参加工作时间：${parsedHireDate.toISOString().slice(0, 10)}`,
+                score: 0,
+              }] : [],
+            });
+          }
+          for (const sys of systemItems) {
             systemFilledIds.add(sys.itemId);
             if (lockedItemIds.has(sys.itemId)) {
               const existingItem = existingMap.get(sys.itemId);
