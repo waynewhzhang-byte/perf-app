@@ -9,8 +9,10 @@ export function attachmentViewKind(
   filename: string,
 ): AttachmentViewKind {
   const mt = (mimeType ?? '').toLowerCase();
+  const lower = filename.toLowerCase();
   if (mt.startsWith('image/')) return 'image';
-  if (mt === 'application/pdf' || filename.toLowerCase().endsWith('.pdf')) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(lower)) return 'image';
+  if (mt === 'application/pdf' || lower.endsWith('.pdf')) return 'pdf';
   return 'other';
 }
 

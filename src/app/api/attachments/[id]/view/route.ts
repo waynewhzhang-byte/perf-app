@@ -22,6 +22,41 @@ function inlineContentDisposition(filename: string): string {
   return `inline; filename="${encoded}"; filename*=UTF-8''${encoded}`;
 }
 
+/** 仅用于 302：相对 proxy 路径需拼成绝对 URL */
+function absoluteFromRequest(req: Request, pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const configured = process.env.APP_BASE_URL?.trim().replace(/\/$/, '');
+  if (configured) {
+    try {
+      return new URL(pathOrUrl, configured.endsWith('/') ? configured : `${configured}/`).toString();
+    } catch {
+      /* fall through */
+    }
+  }
+  const xfProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const xfHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const host = xfHost || req.headers.get('host');
+  if (host) {
+    const proto = xfProto || (host.includes('localhost') ? 'http' : 'https');
+    return `${proto}://${host}${pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`}`;
+  }
+  return new URL(pathOrUrl, req.url).toString();
+}
+
+function contentTypeForAttachment(mimeType: string | null | undefined, filename: string): string {
+  const mt = (mimeType ?? '').trim();
+  if (mt && mt !== 'application/octet-stream') return mt;
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.bmp')) return 'image/bmp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  return mt || 'application/octet-stream';
+}
+
 export async function GET(
   req: Request,
   { params }: { params: { id: string } },
@@ -37,7 +72,7 @@ export async function GET(
     return NextResponse.json({ error: '无权限查看该附件' }, { status: 403 });
   }
 
-  const mimeType = att.mimeType || 'application/octet-stream';
+  const mimeType = contentTypeForAttachment(att.mimeType, att.filename);
   const proxy = new URL(req.url).searchParams.get('proxy') === '1';
   if (proxy) {
     try {
@@ -46,6 +81,7 @@ export async function GET(
         headers: {
           'Content-Type': mimeType,
           'Content-Disposition': inlineContentDisposition(att.filename),
+          'Cache-Control': 'private, max-age=60',
         },
       });
     } catch (e) {
@@ -68,7 +104,8 @@ export async function GET(
           'response-content-disposition': inlineContentDisposition(att.filename),
           'response-content-type': mimeType,
         })
-      : new URL(`/api/attachments/${params.id}/view?proxy=1`, req.url).toString();
+      // 相对路径：浏览器按当前页面 Origin 请求，避免 Nginx 后 req.url 变成 127.0.0.1:3000
+      : `/api/attachments/${params.id}/view?proxy=1`;
   } catch (e) {
     if (isMinioConnectivityError(e)) {
       console.error('GET /api/attachments/view MinIO:', e);
@@ -83,7 +120,7 @@ export async function GET(
 
   const redirect = new URL(req.url).searchParams.get('redirect') === '1';
   if (redirect) {
-    return NextResponse.redirect(viewUrl, 302);
+    return NextResponse.redirect(absoluteFromRequest(req, viewUrl), 302);
   }
 
   return NextResponse.json({

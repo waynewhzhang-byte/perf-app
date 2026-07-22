@@ -32,9 +32,9 @@ describe('attachmentViewKind', () => {
   });
 
   it('null mimeType 按文件名后缀识别', () => {
-    // attachmentViewKind 在 mimeType 为 null 时会检查文件名后缀
     assert.equal(attachmentViewKind(null, 'report.PDF'), 'pdf');
-    // 但 image 类型仍需 mimeType
+    assert.equal(attachmentViewKind(null, 'photo.JPG'), 'image');
+    assert.equal(attachmentViewKind('application/octet-stream', 'shot.png'), 'image');
     assert.equal(attachmentViewKind(null, 'notes.txt'), 'other');
   });
 
