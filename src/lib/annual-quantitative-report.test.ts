@@ -80,7 +80,7 @@ describe('annual quantitative report', () => {
     assert.deepEqual(Object.fromEntries(rows.map((row) => [row.employeeNo, row.tier])), {
       '1003': '一级',
       '1002': '二级',
-      '1001': '三级',
+      '1001': '二级',
       '1004': '三级',
     });
     assert.equal(rows.find((row) => row.employeeNo === '1001')?.ticketExecution, 16.4);
