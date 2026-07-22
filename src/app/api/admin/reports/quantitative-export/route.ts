@@ -53,7 +53,8 @@ export async function GET(req: Request) {
     }
 
     const filename = quantitativeReportFilename(unit);
-    return new NextResponse(buffer, {
+    // Node 22+/24 下 Buffer 泛型与 BodyInit 不兼容，用 Uint8Array 包装
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': contentDisposition(filename),
