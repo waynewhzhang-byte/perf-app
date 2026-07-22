@@ -16,7 +16,10 @@ import {
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
 import { matchesL1Scope } from '@/lib/reviewer-scope';
-import { dimensionReviewOptionId } from '@/lib/dimension-review-routing';
+import {
+  dimensionReviewOptionId,
+  isReviewableDimensionCode,
+} from '@/lib/dimension-review-routing';
 
 export type ReviewTx = Omit<
   PrismaClient,
@@ -355,9 +358,15 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     },
   });
 
+  // 仅评分标准注册的最终评分点进入二审路由。
+  // profile.hire-date（参加工作时间）等非评分确认项不在「二审归属配置」中，
+  // 跳过 optionReview 后由下方逻辑自动标为 L2_APPROVED。
   const dimensionCodes = sub.items
     .map((item) => resolveFormItemDimension(item.item))
-    .filter((dimensionCode): dimensionCode is string => Boolean(dimensionCode));
+    .filter((dimensionCode): dimensionCode is string => {
+      if (!dimensionCode) return false;
+      return isReviewableDimensionCode(dimensionCode);
+    });
   const routes = await tx.dimensionReviewRoute.findMany({
     where: { dimensionCode: { in: dimensionCodes } },
   });
@@ -369,6 +378,9 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     const dimensionCode = resolveFormItemDimension(item.item);
     if (!dimensionCode) {
       throw new ReviewError(`「${item.item.title}」缺少稳定评分点代码，无法进入二审`);
+    }
+    if (!isReviewableDimensionCode(dimensionCode)) {
+      continue;
     }
     const departmentId = routeByDimension.get(dimensionCode);
     if (!departmentId) {

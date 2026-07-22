@@ -1,13 +1,11 @@
 'use client';
 // 审核工作台
 import { useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
 import { LogoutButton } from '@/components/logout-button';
 
 interface Att { id: string; filename: string; mimeType?: string | null }
 type ViewKind = 'image' | 'pdf' | 'other';
 interface AttachmentPreview {
-  attachmentId: string;
   filename: string;
   viewUrl: string;
   kind: ViewKind;
@@ -79,12 +77,13 @@ export default function ReviewPage() {
       const r = await fetch(`/api/attachments/${attId}/view`);
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { alert(d.error || '无法打开附件'); return; }
+      if (!d.viewUrl) { alert('无法获取附件地址'); return; }
+      // 非图片/PDF：新窗口打开预签名 URL（与弹窗预览同源，避免 redirect 二次跳转）
       if (d.kind === 'other') {
-        window.open(`/api/attachments/${attId}/view?redirect=1`, '_blank', 'noopener,noreferrer');
+        window.open(d.viewUrl, '_blank', 'noopener,noreferrer');
         return;
       }
       setPreview({
-        attachmentId: attId,
         filename: d.filename ?? '附件',
         viewUrl: d.viewUrl,
         kind: d.kind as ViewKind,
@@ -700,16 +699,14 @@ export default function ReviewPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-2">
+              {/* 直接用 MinIO 预签名 URL；勿走 redirect=1 + next/image（会空白） */}
               {preview.kind === 'image' && (
-                <div className="relative mx-auto h-[75vh] w-full">
-                  <Image
-                    src={`/api/attachments/${preview.attachmentId}/view?redirect=1`}
-                    alt={preview.filename}
-                    fill
-                    unoptimized
-                    className="object-contain"
-                  />
-                </div>
+                // eslint-disable-next-line @next/next/no-img-element -- 预签名跨域 URL，不走 next/image 优化
+                <img
+                  src={preview.viewUrl}
+                  alt={preview.filename}
+                  className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
+                />
               )}
               {preview.kind === 'pdf' && <iframe title={preview.filename} src={preview.viewUrl} className="h-[75vh] w-full rounded border-0 bg-white" />}
             </div>
