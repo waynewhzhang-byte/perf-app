@@ -73,3 +73,37 @@ describe('buildDerivation — SHARE (安全贡献)', () => {
     assert.match(d.steps[0]!.label, /暂无导入事实/);
   });
 });
+
+describe('buildDerivation — MATRIX_SUM (缺陷治理)', () => {
+  it('展示每条缺陷的矩阵查表得分', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'd1', defectRef: 'D001', defectLevel: '危急', role: 'FIRST_DISCOVERER', score: 3 },
+      { id: 'd2', defectRef: 'D002', defectLevel: '一般', role: 'FIRST_DISCOVERER', score: 0.5 },
+    ];
+    const d = buildDerivation('worksite.defect-governance', facts, { finalScore: 3.5 })!;
+    assert.equal(d.ruleType, 'MATRIX_SUM');
+    assert.ok(d.steps.some((s) => /D001.*危急.*第一发现人.*矩阵查表 3/.test(s.label)));
+    assert.ok(d.steps.some((s) => /D002.*一般.*第一发现人.*0\.5/.test(s.label)));
+    assert.ok(d.steps.some((s) => /小计原始分 3\.5/.test(s.label)));
+  });
+
+  it('同缺陷多条事实且合计超过单条最高时触发取高提示', () => {
+    // 引擎导入时按 (employeeNo, defectLevel) 取最高角色分落库；正常情况同缺陷只有 1 条。
+    // 但若数据中同缺陷出现多条（如不同来源重复），且合计 > 单条最高，展示取高提示。
+    const facts: DerivationInputFact[] = [
+      { id: 'd1', defectRef: 'D001', defectLevel: '危急', role: 'FIRST_DISCOVERER', score: 3 },
+      { id: 'd2', defectRef: 'D001', defectLevel: '严重', role: 'FIRST_HANDLER', score: 1 },
+    ];
+    const d = buildDerivation('worksite.defect-governance', facts, { finalScore: 4 })!;
+    assert.ok(d.steps.some((s) => /同人 D001.*取高.*3/.test(s.label)), JSON.stringify(d.steps));
+  });
+
+  it('触顶显示封顶（maxScore=12）', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'd1', defectRef: 'D001', defectLevel: '危急', role: 'FIRST_DISCOVERER', score: 6 },
+      { id: 'd2', defectRef: 'D002', defectLevel: '危急', role: 'FIRST_DISCOVERER', score: 6 },
+    ];
+    const d = buildDerivation('worksite.defect-governance', facts, { finalScore: 12 })!;
+    assert.ok(d.steps.some((s) => s.kind === 'cap' && /封顶 12/.test(s.label)));
+  });
+});

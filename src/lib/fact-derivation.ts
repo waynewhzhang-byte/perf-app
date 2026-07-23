@@ -194,13 +194,63 @@ function buildShareDerivation(
   }
   return { ...base, steps };
 }
+const DEFECT_ROLE_LABEL: Record<string, string> = {
+  FIRST_DISCOVERER: '第一发现人',
+  CO_DISCOVERER: '共同发现人',
+  FIRST_HANDLER: '第一处理人',
+  CO_HANDLER: '共同处理人',
+};
+
 function buildMatrixDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
+  facts: DerivationInputFact[],
   _context: DerivationContext,
-  _code: string,
+  code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const standard = SCORING_STANDARD_BY_CODE[code]!;
+  const matrix = (ruleConfigFor(code)?.matrix ?? {}) as Record<string, Record<string, number>>;
+  const steps: DerivationStep[] = [];
+
+  // 同一缺陷内同人兼发现+处理：取高（tieBreak MAX_PER_PERSON）
+  // 引擎导入时按 (employeeNo, defectLevel) 取最高角色分落库；此处按 defectRef 分组，
+  // 组内若出现多条且合计超过单角色最高值，则标注取高（防御性展示，正常同缺陷仅 1 条）。
+  const byDefect = new Map<string, DerivationInputFact[]>();
+  for (const f of facts) {
+    const key = f.defectRef ?? '(未编号)';
+    const arr = byDefect.get(key) ?? [];
+    arr.push(f);
+    byDefect.set(key, arr);
+  }
+
+  for (const [ref, group] of byDefect) {
+    for (const f of group) {
+      const roleLabel = f.role ? DEFECT_ROLE_LABEL[f.role] ?? f.role : '';
+      const matrixScore = matrix[f.defectLevel ?? '']?.[f.role ?? ''];
+      const source = matrixScore != null ? `矩阵查表 ${matrixScore}` : `${f.score}`;
+      steps.push({
+        label: `缺陷 ${ref} ${f.defectLevel ?? ''} ${roleLabel} → ${source}`,
+      });
+    }
+    // 同缺陷多角色（同人兼发现+处理）取高提示
+    if (group.length > 1) {
+      const max = Math.max(...group.map((f) => f.score));
+      const sum = group.reduce((s, f) => s + f.score, 0);
+      if (sum > max) {
+        steps.push({ label: `同人 ${ref} 兼发现+处理，取高 → ${round2(max)}` });
+      }
+    }
+  }
+
+  const raw = facts.reduce((s, f) => s + f.score, 0);
+  steps.push({ label: `小计原始分 ${round2(raw)}`, kind: 'subtotal' });
+
+  if (standard.maxScore > 0 && raw >= standard.maxScore) {
+    steps.push({ label: `封顶 ${standard.maxScore}`, kind: 'cap' });
+  }
+  return { ...base, steps };
 }
 function buildNormalizeDerivation(
   base: Derivation,
