@@ -107,3 +107,46 @@ describe('buildDerivation — MATRIX_SUM (缺陷治理)', () => {
     assert.ok(d.steps.some((s) => s.kind === 'cap' && /封顶 12/.test(s.label)));
   });
 });
+
+describe('buildDerivation — NORMALIZE (两票执行)', () => {
+  it('两段式：breakdown→原始分，再按专业最高折算', () => {
+    const facts: DerivationInputFact[] = [
+      {
+        id: 't1',
+        score: 18.5,
+        metadata: {
+          isRawScore: true,
+          breakdown: { operationItems: 150, operationPoints: 1.5, workLeaderPoints: 10, workPermitterPoints: 3, workMemberPoints: 4, operationTicketCount: 150, workTicketCount: 5 },
+        },
+        sourceFile: '10-13.两票数据汇总.xlsx',
+      },
+    ];
+    const d = buildDerivation('worksite.ticket-execution', facts, { finalScore: 27.8, ticketCohortMax: 20 })!;
+    assert.equal(d.ruleType, 'NORMALIZE');
+    // 第一段：操作票项数 × 单价
+    assert.ok(d.steps.some((s) => /操作票 150 项 × 0\.01 = 1\.5/.test(s.label)), JSON.stringify(d.steps));
+    // 第一段：工作票负责人得分
+    assert.ok(d.steps.some((s) => /工作票负责人.*10/.test(s.label)));
+    // 原始分小计
+    assert.ok(d.steps.some((s) => /原始分 18\.5/.test(s.label)));
+    // 专业最高
+    assert.ok(d.steps.some((s) => /专业最高原始分 20/.test(s.label)));
+    // 第二段折算
+    assert.ok(d.steps.some((s) => /18\.5 \/ 20 × 30 = 27\.75/.test(s.label)));
+    // 最终（四舍五入）
+    assert.ok(d.steps.some((s) => s.kind === 'final' && /27\.8.*四舍五入/.test(s.label)));
+  });
+
+  it('breakdown 缺失时聚合显示原始分并补注', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 't1', score: 18.5, metadata: { isRawScore: true }, sourceFile: 'x.xlsx' },
+    ];
+    const d = buildDerivation('worksite.ticket-execution', facts, { finalScore: 27.8, ticketCohortMax: 20 })!;
+    assert.ok(d.steps.some((s) => /原始分 18\.5/.test(s.label) && /明细未导入|聚合/.test(s.detail ?? s.label)));
+  });
+
+  it('无事实返回 emptyFactsSteps', () => {
+    const d = buildDerivation('worksite.ticket-execution', [], { finalScore: 0 })!;
+    assert.match(d.steps[0]!.label, /暂无导入事实/);
+  });
+});

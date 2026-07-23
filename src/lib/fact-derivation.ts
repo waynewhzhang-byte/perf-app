@@ -252,13 +252,72 @@ function buildMatrixDerivation(
   }
   return { ...base, steps };
 }
+interface TicketBreakdown {
+  operationItems?: number;
+  operationPoints?: number;
+  workLeaderPoints?: number;
+  workPermitterPoints?: number;
+  workMemberPoints?: number;
+  operationTicketCount?: number;
+  workTicketCount?: number;
+}
+
 function buildNormalizeDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
-  _context: DerivationContext,
-  _code: string,
+  facts: DerivationInputFact[],
+  context: DerivationContext,
+  code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const standard = SCORING_STANDARD_BY_CODE[code]!;
+  const config = ruleConfigFor(code) ?? {};
+  const operationStepPrice = (config.operationStepPrice as number | undefined) ?? 0.01;
+  const targetMax = (config.targetMaxScore as number | undefined) ?? standard.maxScore;
+  const agg = facts[0]!;
+  const raw = agg.score;
+  const meta = agg.metadata as { breakdown?: TicketBreakdown; isRawScore?: boolean } | undefined;
+  const breakdown = meta?.breakdown;
+  const cohortMax = context.ticketCohortMax ?? raw;
+  const steps: DerivationStep[] = [];
+
+  // 第一段：原始分
+  if (breakdown && (breakdown.operationItems ?? 0) > 0) {
+    steps.push({
+      label: `操作票 ${breakdown.operationItems} 项 × ${operationStepPrice} = ${round2(breakdown.operationPoints ?? breakdown.operationItems * operationStepPrice)}`,
+    });
+  }
+  if (breakdown && (breakdown.workLeaderPoints ?? 0) > 0) {
+    steps.push({ label: `工作票负责人得分 ${round2(breakdown.workLeaderPoints!)}` });
+  }
+  if (breakdown && (breakdown.workPermitterPoints ?? 0) > 0) {
+    steps.push({ label: `工作票许可人得分 ${round2(breakdown.workPermitterPoints!)}` });
+  }
+  if (breakdown && (breakdown.workMemberPoints ?? 0) > 0) {
+    steps.push({ label: `工作票班成员得分 ${round2(breakdown.workMemberPoints!)}` });
+  }
+
+  if (steps.length > 0) {
+    steps.push({ label: `原始分 ${round2(raw)}`, kind: 'subtotal' });
+  } else {
+    // breakdown 缺失：聚合显示
+    steps.push({ label: `原始分 ${round2(raw)}`, detail: '明细未导入（按聚合原始分展示）', kind: 'subtotal' });
+  }
+
+  // 第二段：专业折算
+  steps.push({ label: `专业最高原始分 ${round2(cohortMax)}（同专业折算基准）` });
+  const converted = cohortMax > 0 ? round2((raw / cohortMax) * targetMax) : 0;
+  steps.push({ label: `${round2(raw)} / ${round2(cohortMax)} × ${targetMax} = ${converted}` });
+
+  // 最终（四舍五入）
+  steps.push({ label: `最终得分 ${context.finalScore} 分（四舍五入）`, kind: 'final' });
+
+  if (converted >= targetMax) {
+    // 在最终前插入封顶（若折算触顶）
+    steps.splice(steps.length - 1, 0, { label: `封顶 ${targetMax}`, kind: 'cap' });
+  }
+  return { ...base, steps };
 }
 function buildDeductionDerivation(
   base: Derivation,
