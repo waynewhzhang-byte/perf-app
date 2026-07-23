@@ -13,9 +13,9 @@ import {
 const prisma = new PrismaClient();
 
 const YEAR = 2026;
-const TITLE = '2026年能级评价量化积分申报表';
+const TITLE = '2026 年能级评价量化积分申报表';
 const DESCRIPTION =
-  '国网山西超高压变电公司2026年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分，请逐项「确认」或「申诉」（提交申诉理由和证明材料）。';
+  '国网山西超高压变电公司 2026 年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分。请逐项查看系统分值与计算过程；如有异议，请通过页面底部「申诉」提交理由与证明材料；对系统分值无异议请使用「确认报名」。';
 
 type ScoreOption = { optionId: string; label: string; score: number; description?: string };
 
