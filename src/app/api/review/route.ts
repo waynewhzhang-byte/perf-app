@@ -5,13 +5,13 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { getSession, getUserRoles } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
-import { buildL1SubmissionScopeWhere } from '@/lib/reviewer-scope';
 import {
   applyL1,
   applyL2,
   ReviewError,
   type ReviewOutcome,
 } from '@/lib/review-workflow';
+import { listAppealReviewRows } from '@/lib/appeal-review-queue';
 
 const DecisionSchema = z.object({
   submissionItemId: z.string().optional(),
@@ -28,21 +28,9 @@ const Schema = z.object({
   decisions: z.array(DecisionSchema),
 });
 
-function includeFor(level: 1 | 2, departmentId?: string | null) {
-  return {
-    user: true,
-    items: {
-      include: {
-        item: true,
-        attachments: true,
-        optionReviews: level === 2 && departmentId
-          ? { where: { departmentId, status: 'PENDING_L2' as const }, include: { department: true } }
-          : { include: { department: true } },
-      },
-    },
-    logs: { orderBy: { createdAt: 'asc' as const } },
-  };
-}
+const BatchSchema = z.object({
+  batches: z.array(Schema).min(1),
+});
 
 function noticeForOutcome(level: 1 | 2, outcome: ReviewOutcome): string | null {
   if (outcome === 'rejected') {
@@ -64,108 +52,41 @@ export async function GET(req: Request) {
   if (!isL1 && !isL2) return NextResponse.json({ error: '无审核权限' }, { status: 403 });
 
   const url = new URL(req.url);
-  const filter = url.searchParams.get('filter');
+  const filter = url.searchParams.get('filter') === 'completed' ? 'completed' : 'pending';
+  const itemTitle = url.searchParams.get('itemTitle') ?? undefined;
+  const keyword = url.searchParams.get('keyword') ?? undefined;
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10)));
-  const skip = (page - 1) * pageSize;
 
   const [l1Scopes, user] = await Promise.all([
     isL1 ? prisma.userRole.findMany({ where: { userId: s.userId, role: 'REVIEWER_L1' } }) : Promise.resolve([]),
     prisma.user.findUnique({ where: { id: s.userId }, select: { departmentId: true } }),
   ]);
-  const l1ScopeWhere = buildL1SubmissionScopeWhere(l1Scopes);
   const departmentId = user?.departmentId ?? null;
+  const level: 1 | 2 = isL2 ? 2 : 1;
 
-  if (filter === 'completed') {
-    const completedWhere: any = {};
-    if (isL1) {
-      // 已确认的系统填充项无需逐项 L1 审核，不会产生 ReviewLog；以申报的
-      // l1ReviewerId 作为一级审核归属，才能同时覆盖这类申报和历史记录。
-      completedWhere.l1ReviewerId = s.userId;
-      completedWhere.status = { not: 'SUBMITTED' };
-      if (!l1ScopeWhere) {
-        return NextResponse.json({ success: true, submissions: [], level: 1, filter: 'completed' });
-      }
-      Object.assign(completedWhere, l1ScopeWhere);
-    } else {
-      const reviewedLogs = await prisma.reviewLog.findMany({
-        where: { reviewerId: s.userId },
-        select: { submissionId: true },
-        distinct: ['submissionId'],
-      });
-      const reviewedIds = reviewedLogs.map((r) => r.submissionId);
-      if (reviewedIds.length === 0) {
-        return NextResponse.json({ success: true, submissions: [], level: 2, filter: 'completed' });
-      }
-      completedWhere.id = { in: reviewedIds };
-      if (departmentId) {
-        completedWhere.NOT = {
-          OR: [
-            { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
-            {
-              items: {
-                some: {
-                  isSystemFilled: true,
-                  confirmationStatus: 'DISPUTED',
-                  disputeL1Result: 'APPROVED',
-                  disputeL2Result: null,
-                },
-              },
-            },
-          ],
-        };
-      }
-    }
+  const appealList = await listAppealReviewRows(prisma, {
+    level,
+    reviewerId: s.userId,
+    l1Scopes,
+    l2DepartmentId: departmentId,
+    filter,
+    itemTitle,
+    keyword,
+    page,
+    pageSize,
+  });
 
-    const [submissions, total] = await Promise.all([
-      prisma.submission.findMany({
-        where: completedWhere,
-        include: includeFor(1, departmentId) as any,
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: pageSize,
-      }),
-      prisma.submission.count({ where: completedWhere }),
-    ]);
-    return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1, filter: 'completed', total, page, pageSize });
-  }
-
-  const where: any = {};
-  if (isL2) {
-    if (!departmentId) {
-      return NextResponse.json({ success: true, submissions: [], level: 2, assignedDepartmentId: null });
-    }
-    where.status = 'L1_APPROVED';
-    where.OR = [
-      { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
-      {
-        items: {
-          some: {
-            isSystemFilled: true,
-            confirmationStatus: 'DISPUTED',
-            disputeL1Result: 'APPROVED',
-            disputeL2Result: null,
-          },
-        },
-      },
-    ];
-  } else {
-    if (!l1ScopeWhere) return NextResponse.json({ success: true, submissions: [], level: 1 });
-    where.status = 'SUBMITTED';
-    Object.assign(where, l1ScopeWhere);
-  }
-
-  const [submissions, total] = await Promise.all([
-    prisma.submission.findMany({
-      where,
-      include: includeFor(isL2 ? 2 : 1, departmentId) as any,
-      orderBy: { submittedAt: 'asc' },
-      skip,
-      take: pageSize,
-    }),
-    prisma.submission.count({ where }),
-  ]);
-  return NextResponse.json({ success: true, submissions, level: isL2 ? 2 : 1, assignedDepartmentId: departmentId, total, page, pageSize });
+  return NextResponse.json({
+    success: true,
+    level,
+    filter,
+    assignedDepartmentId: departmentId,
+    appealRows: appealList.rows,
+    total: appealList.total,
+    page: appealList.page,
+    pageSize: appealList.pageSize,
+  });
 }
 
 export async function POST(req: Request) {
@@ -176,7 +97,45 @@ export async function POST(req: Request) {
   const isL2 = roles.includes('REVIEWER_L2');
   if (!isL1 && !isL2) return NextResponse.json({ error: '无审核权限' }, { status: 403 });
 
-  const parsed = Schema.safeParse(await req.json());
+  const body = await req.json();
+  const batchParsed = BatchSchema.safeParse(body);
+  if (batchParsed.success) {
+    try {
+      const outcomes: ReviewOutcome[] = [];
+      for (const batch of batchParsed.data.batches) {
+        const statusRow = await prisma.submission.findUnique({
+          where: { id: batch.submissionId },
+          select: { status: true },
+        });
+        if (!statusRow) return NextResponse.json({ error: '申报不存在' }, { status: 404 });
+        const level = statusRow.status === 'SUBMITTED' ? 1 : statusRow.status === 'L1_APPROVED' ? 2 : 0;
+        if (level === 0) return NextResponse.json({ error: '当前状态不可审核' }, { status: 400 });
+        if (level === 1 && !isL1) return NextResponse.json({ error: '非一级审核员' }, { status: 403 });
+        if (level === 2 && !isL2) return NextResponse.json({ error: '非二级审核员' }, { status: 403 });
+        const result = await prisma.$transaction((tx) =>
+          level === 1
+            ? applyL1(tx, { submissionId: batch.submissionId, reviewerId: s.userId, decisions: batch.decisions })
+            : applyL2(tx, { submissionId: batch.submissionId, reviewerId: s.userId, decisions: batch.decisions }),
+        );
+        outcomes.push(result.outcome);
+        const notice = noticeForOutcome(level, result.outcome);
+        if (notice) {
+          sendNotice(result.employeeContact, '【绩效申报】审核结果', notice).catch((e) =>
+            console.error('sendNotice failed:', e),
+          );
+        }
+      }
+      return NextResponse.json({ success: true, outcomes });
+    } catch (e) {
+      if (e instanceof ReviewError) {
+        return NextResponse.json({ error: e.message }, { status: e.httpStatus });
+      }
+      console.error('POST /api/review batch:', e);
+      return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
+    }
+  }
+
+  const parsed = Schema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: '参数无效' }, { status: 400 });
 
   const statusRow = await prisma.submission.findUnique({

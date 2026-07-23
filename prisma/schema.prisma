@@ -38,6 +38,16 @@ model AuthConfig {
   updatedBy                    String?
 }
 
+// ========== 申报合规与运维（系统级单例） ==========
+model AppConfig {
+  id            Int      @id @default(1)
+  supportPhone  String   @default("")
+  noticeText    String   @db.Text
+  noticeSeconds Int      @default(30)
+  updatedAt     DateTime @updatedAt
+  updatedBy     String?
+}
+
 // ========== 验证码 ==========
 enum CodePurpose {
   REGISTER
@@ -414,6 +424,8 @@ model SubmissionItem {
   // 系统填充项：员工确认/申诉状态；null 表示手工填写项
   confirmationStatus  ConfirmationStatus?
   disputeReason       String?             @db.Text
+  // 申诉主张分（仅供参考，不写入 score / override）
+  disputeClaimedScore Decimal?            @db.Decimal(10, 2)
   // 标记该项为系统自动填充（来自 PerformanceFact），不可编辑分值
   isSystemFilled      Boolean             @default(false)
   // 申诉一级审核：L1 对员工申诉的判断

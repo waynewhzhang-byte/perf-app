@@ -392,4 +392,147 @@ describe('upsertDeclaration', () => {
       log.data.action === 'REJECT' && String(log.data.note).includes('自动预审未通过'),
     ));
   });
+
+  it('AFFIRM 提交写入归档且不设 SUBMITTED', async () => {
+    const submissionUpdates: unknown[] = [];
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{
+            items: [{
+              id: 'item-1',
+              isRequired: false,
+              requireAttachment: false,
+              title: '手工项',
+              dimensionCode: null,
+              scoreMode: 'TIERS',
+              maxScore: null,
+              scoreOptions: [{ optionId: 'o1', label: '档A', score: 2 }],
+            }],
+          }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: new Date(2010, 0, 1),
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '运维一分' }) },
+      declarationLevel: {
+        findUnique: async () => ({ id: 'lv1', name: '初级' }),
+        findFirst: async () => null,
+      },
+      declarationSpecialty: { findUnique: async () => ({ id: 'sp1', name: '变电运维' }) },
+      autoReviewRule: { findMany: async () => [] },
+      submission: {
+        findUnique: async () => null,
+        create: async () => ({
+          id: 'sub-new',
+          status: 'DRAFT',
+          submittedAt: null,
+          branchId: 'b1',
+          workAreaName: null,
+        }),
+        update: async (input: unknown) => {
+          submissionUpdates.push(input);
+          return {};
+        },
+      },
+      submissionItem: {
+        findMany: async () => [],
+        upsert: async () => ({}),
+        updateMany: async () => ({ count: 1 }),
+      },
+      attachment: { findMany: async () => [] },
+      reviewLog: { create: async () => ({}) },
+      formSection: {
+        findMany: async () => [{
+          id: 'sec-1',
+          title: '章节',
+          sortOrder: 0,
+          items: [{
+            id: 'item-1',
+            scoreMode: 'TIERS',
+            maxScore: null,
+            maxSelections: 1,
+            scoreOptions: [{ optionId: 'o1', label: '档A', score: 2 }],
+            sortOrder: 0,
+          }],
+        }],
+      },
+      performanceRecord: { upsert: async () => ({}) },
+      submissionDimensionFact: {
+        deleteMany: async () => ({ count: 0 }),
+        create: async () => ({}),
+      },
+    } as any;
+
+    // finalizeArchive 会再次 findUnique；复用同一 sub 行
+    const subRow = {
+      id: 'sub-new',
+      userId: 'u1',
+      templateId: 'tpl-1',
+      branchId: 'b1',
+      workAreaName: '运维一分',
+      hireDate: new Date(2010, 0, 1),
+      workYears: 16,
+      declarationLevelId: 'lv1',
+      declarationLevelName: '初级',
+      declarationSpecialtyId: 'sp1',
+      declarationSpecialtyName: '变电运维',
+      preReviewPassed: true,
+      preReviewMessages: [],
+      preReviewMatchedRules: [],
+      template: { year: 2026 },
+      items: [{
+        id: 'si-1',
+        itemId: 'item-1',
+        selected: [{ optionId: 'o1', label: '档A', score: 2 }],
+        content: null,
+        score: 2,
+        status: 'L2_APPROVED',
+        isSystemFilled: false,
+        confirmationStatus: null,
+        item: { id: 'item-1', title: '手工项', dimensionCode: null, scoreOptions: [] },
+        optionReviews: [],
+        attachments: [],
+      }],
+      user: { id: 'u1', employeeNo: null, fullName: '测试' },
+    };
+    let findCalls = 0;
+    tx.submission.findUnique = async () => {
+      findCalls += 1;
+      return findCalls === 1 ? null : subRow;
+    };
+
+    const result = await upsertDeclaration(tx, {
+      userId: 'u1',
+      templateId: 'tpl-1',
+      submit: true,
+      submitMode: 'AFFIRM',
+      workAreaId: 'b1',
+      hireDate: '2010-01-01',
+      declarationLevelId: 'lv1',
+      declarationSpecialtyId: 'sp1',
+      items: [{
+        itemId: 'item-1',
+        selected: [{ index: 0, optionId: 'o1', label: '档A', score: 2 }],
+      }],
+    });
+
+    assert.equal(result.finalized, true);
+    assert.equal(result.totalScore, 2);
+    assert.ok(submissionUpdates.some((u: any) => u.data.status === undefined));
+    assert.ok(!submissionUpdates.some((u: any) => u.data.status === 'SUBMITTED'));
+    assert.ok(submissionUpdates.some((u: any) => u.data.submittedAt instanceof Date));
+  });
 });

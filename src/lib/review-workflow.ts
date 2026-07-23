@@ -13,9 +13,12 @@ import {
 } from '@/lib/score-calculation';
 import { persistSubmissionDimensionFacts } from '@/lib/submission-fact-persistence';
 import {
-  isReviewSkippedSystemItem,
+  isL1ReviewQueueItem,
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
+import {
+  isDisputeVisibleToL2Reviewer,
+} from '@/lib/appeal-review-queue';
 import { matchesL1Scope } from '@/lib/reviewer-scope';
 import {
   dimensionReviewOptionId,
@@ -357,6 +360,32 @@ export async function finalizeArchive(
   return total;
 }
 
+/**
+ * 员工确认无异议（AFFIRM）：全部申报项标为终审通过并写入归档快照。
+ * 由 declaration-workflow 在 submitMode=AFFIRM 时调用。
+ */
+export async function finalizeAffirmSubmission(
+  tx: ReviewTx,
+  submissionId: string,
+  actorUserId: string,
+  approvedAt: Date = new Date(),
+): Promise<number> {
+  await tx.submissionItem.updateMany({
+    where: { submissionId },
+    data: { status: 'L2_APPROVED' },
+  });
+  await tx.reviewLog.create({
+    data: {
+      submissionId,
+      reviewerId: actorUserId,
+      level: 0,
+      action: 'APPROVE',
+      note: '员工确认无异议，系统自动归档',
+    },
+  });
+  return finalizeArchive(tx, submissionId, actorUserId, approvedAt);
+}
+
 export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewResult> {
   const sub = await tx.submission.findUnique({
     where: { id: cmd.submissionId },
@@ -380,13 +409,12 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     throw new ReviewError('该申报不在您的审核范围内', 403);
   }
 
-  const pendingItems = sub.items.filter(
-    (item) =>
-      item.status === 'PENDING_L1' &&
-      !isReviewSkippedSystemItem({
-        isSystemFilled: !!item.isSystemFilled,
-        confirmationStatus: item.confirmationStatus as 'CONFIRMED' | 'DISPUTED' | null,
-      }),
+  const pendingItems = sub.items.filter((item) =>
+    isL1ReviewQueueItem({
+      status: item.status,
+      isSystemFilled: !!item.isSystemFilled,
+      confirmationStatus: item.confirmationStatus as 'CONFIRMED' | 'DISPUTED' | null,
+    }),
   );
 
   validateL1Decisions(
@@ -601,16 +629,17 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
   if (!reviewer?.departmentId) {
     throw new ReviewError('当前二级审核员未绑定部门', 403);
   }
+  const reviewerDepartmentId = reviewer.departmentId;
 
   const pendingReviews = await tx.submissionOptionReview.findMany({
     where: {
       submissionItem: { submissionId: sub.id },
-      departmentId: reviewer.departmentId,
+      departmentId: reviewerDepartmentId,
       status: 'PENDING_L2',
     },
     include: { submissionItem: { include: { item: true } } },
   });
-  const pendingDisputes = await tx.submissionItem.findMany({
+  const pendingDisputesAll = await tx.submissionItem.findMany({
     where: {
       submissionId: sub.id,
       isSystemFilled: true,
@@ -620,6 +649,15 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
     },
     include: { item: true },
   });
+  const routes = await tx.dimensionReviewRoute.findMany();
+  const routeByDimension = new Map(routes.map((route) => [route.dimensionCode, route.departmentId]));
+  const pendingDisputes = pendingDisputesAll.filter((item) =>
+    isDisputeVisibleToL2Reviewer(
+      resolveFormItemDimension(item.item),
+      reviewerDepartmentId,
+      routeByDimension,
+    ),
+  );
   if (pendingReviews.length === 0 && pendingDisputes.length === 0) {
     throw new ReviewError('当前没有待处理的二审子项或申诉');
   }

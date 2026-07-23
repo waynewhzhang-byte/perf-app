@@ -4,6 +4,7 @@ import {
   applyL1,
   applyL2,
   buildArchivedSnapshot,
+  finalizeAffirmSubmission,
   finalizeArchive,
   isPendingL2Dispute,
   ReviewError,
@@ -134,9 +135,12 @@ describe('applyL2', () => {
           confirmationStatus: 'DISPUTED',
           disputeL1Result: 'APPROVED',
           disputeL2Result: null,
-          item: { title: '技能等级' },
+          item: { title: '技能等级', dimensionCode: 'basic.skill-level' },
         }],
         update: async (input: unknown) => { itemUpdates.push(input); return {}; },
+      },
+      dimensionReviewRoute: {
+        findMany: async () => [{ dimensionCode: 'basic.skill-level', departmentId: 'dept-1' }],
       },
       reviewLog: { create: async () => ({}) },
     } as any;
@@ -461,5 +465,108 @@ describe('finalizeArchive', () => {
     } as any;
     assert.equal(await finalizeArchive(tx, 'missing', 'rev'), 0);
     assert.deepEqual(calls, []);
+  });
+});
+
+describe('finalizeAffirmSubmission', () => {
+  it('全部项标 L2_APPROVED、写 level-0 日志并归档', async () => {
+    const approvedAt = new Date('2026-07-23T12:00:00.000Z');
+    const calls: string[] = [];
+    let reviewLogNote: string | undefined;
+
+    const subRow = {
+      id: 'sub-1',
+      userId: 'user-1',
+      templateId: 'tpl-1',
+      branchId: 'branch-1',
+      workAreaName: '运维一分',
+      hireDate: null,
+      workYears: 5,
+      declarationLevelId: null,
+      declarationLevelName: '一级',
+      declarationSpecialtyId: null,
+      declarationSpecialtyName: null,
+      preReviewPassed: true,
+      preReviewMessages: [],
+      preReviewMatchedRules: [],
+      template: { year: 2026 },
+      items: [
+        {
+          id: 'si-1',
+          itemId: 'fi-1',
+          selected: [],
+          content: null,
+          score: 3,
+          status: 'L2_APPROVED',
+          isSystemFilled: true,
+          confirmationStatus: 'CONFIRMED',
+          item: {
+            id: 'fi-1',
+            title: '技能等级',
+            dimensionCode: 'basic.skill-level',
+            scoreOptions: [],
+          },
+          optionReviews: [],
+          attachments: [],
+        },
+      ],
+      user: { id: 'user-1', employeeNo: 'E001', fullName: '张三' },
+    };
+
+    const tx = {
+      submissionItem: {
+        updateMany: async (args: { where: { submissionId: string }; data: { status: string } }) => {
+          calls.push('submissionItem.updateMany');
+          assert.equal(args.where.submissionId, 'sub-1');
+          assert.equal(args.data.status, 'L2_APPROVED');
+          return { count: 1 };
+        },
+      },
+      reviewLog: {
+        create: async (args: { data: { level: number; note: string; action: string } }) => {
+          calls.push('reviewLog.create');
+          assert.equal(args.data.level, 0);
+          assert.equal(args.data.action, 'APPROVE');
+          reviewLogNote = args.data.note;
+          return {};
+        },
+      },
+      submission: {
+        findUnique: async () => subRow,
+        update: async () => { calls.push('submission.update'); return {}; },
+      },
+      formSection: {
+        findMany: async () => [{
+          id: 'sec-1',
+          title: '基本素质',
+          sortOrder: 0,
+          items: [{
+            id: 'fi-1',
+            scoreMode: 'TIERS',
+            maxScore: null,
+            maxSelections: 1,
+            scoreOptions: [],
+            sortOrder: 0,
+          }],
+        }],
+      },
+      performanceRecord: {
+        upsert: async () => { calls.push('performanceRecord.upsert'); return {}; },
+      },
+      submissionDimensionFact: {
+        deleteMany: async () => ({ count: 0 }),
+        create: async () => ({}),
+      },
+    } as any;
+
+    const total = await finalizeAffirmSubmission(tx, 'sub-1', 'user-1', approvedAt);
+    assert.equal(total, 3);
+    assert.equal(reviewLogNote, '员工确认无异议，系统自动归档');
+    assert.deepEqual(calls, [
+      'submissionItem.updateMany',
+      'reviewLog.create',
+      'submission.update',
+      'performanceRecord.upsert',
+    ]);
   });
 });

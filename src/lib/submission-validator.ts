@@ -21,7 +21,9 @@ export const UpsertSchema = z.object({
     declaredScore: z.number().finite().optional(),
     confirmationStatus: z.enum(['CONFIRMED', 'DISPUTED']).nullable().optional(),
     disputeReason: z.string().nullable().optional(),
+    disputeClaimedScore: z.number().finite().nullable().optional(),
     isSystemFilled: z.boolean().optional(),
   })),
   submit: z.boolean().default(false),
+  submitMode: z.enum(['AFFIRM', 'APPEAL']).optional(),
 });

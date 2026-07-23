@@ -15,15 +15,20 @@ import {
   levelFromHireDate,
 } from '@/lib/declaration-level';
 import { parseDateOnly, computeItemScore } from '@/lib/submission-score';
+import { finalizeAffirmSubmission } from '@/lib/review-workflow';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import {
   extractSystemFilledFromSheet,
+  disputedItemPersistError,
   HIRE_DATE_CONFIRMATION_CODE,
   isFactDataSourceDimension,
+  resolveAppealCentricConfirmation,
+  submitModeCrossCheckError,
   systemItemStatusOnSubmit,
   type ConfirmationStatus,
+  type SubmitMode,
 } from '@/lib/system-filled-items';
 
 export type DeclarationTx = Omit<
@@ -44,6 +49,7 @@ export interface DeclarationItemInput {
   declaredScore?: number;
   confirmationStatus?: ConfirmationStatus | null;
   disputeReason?: string | null;
+  disputeClaimedScore?: number | null;
   isSystemFilled?: boolean;
 }
 
@@ -52,6 +58,7 @@ export interface DeclarationCommand {
   templateId: string;
   items: DeclarationItemInput[];
   submit: boolean;
+  submitMode?: SubmitMode;
   workAreaId?: string;
   hireDate?: string;
   declarationLevelId?: string;
@@ -65,6 +72,8 @@ export interface DeclarationResult {
   preReviewMessages: string[];
   skippedItems: string[];
   unrepairedItems: Array<{ itemId: string; title: string }>;
+  /** submitMode=AFFIRM 时已完成归档，不进审核队列 */
+  finalized?: boolean;
 }
 
 export class DeclarationError extends Error {
@@ -141,7 +150,9 @@ export async function upsertDeclaration(
     hireDate,
     declarationLevelId,
     declarationSpecialtyId,
+    submitMode,
   } = cmd;
+  const appealCentric = !!submitMode;
 
   const template = await tx.formTemplate.findUnique({
     where: { id: templateId },
@@ -217,6 +228,7 @@ export async function upsertDeclaration(
   let unrepairedRejected: Array<{ itemId: string; title: string }> = [];
   let totalScore = 0;
   let preReviewRejectedMessages: string[] = [];
+  let finalized = false;
 
   const [workArea, declarationLevel, declarationSpecialty] = await Promise.all([
     workAreaId ? tx.branch.findUnique({ where: { id: workAreaId } }) : Promise.resolve(null),
@@ -321,7 +333,7 @@ export async function upsertDeclaration(
   }
 
   let attachmentCounts: Map<string, number> | null = null;
-  if (submit || items.some((it) => it.confirmationStatus === 'DISPUTED')) {
+  if (submit || items.some((it) => it.confirmationStatus === 'DISPUTED') || appealCentric) {
     const allAttachments = await tx.attachment.findMany({
       where: { submissionItem: { submissionId: sub.id } },
       include: { submissionItem: true },
@@ -371,6 +383,26 @@ export async function upsertDeclaration(
       }
       for (const sys of systemItems) {
         systemFilledIds.add(sys.itemId);
+      }
+
+      const activeSystemItems = systemItems.filter((sys) => !lockedItemIds.has(sys.itemId));
+      const hasDisputedSystemItems = activeSystemItems.some((sys) => {
+        const payload = items.find((i) => i.itemId === sys.itemId);
+        const existingItem = existingMap.get(sys.itemId);
+        const raw = (
+          payload && 'confirmationStatus' in payload
+            ? payload.confirmationStatus
+            : existingItem?.confirmationStatus
+        ) as ConfirmationStatus | null | undefined;
+        return raw === 'DISPUTED';
+      });
+
+      if (submit && submitMode) {
+        const crossErr = submitModeCrossCheckError(submitMode, hasDisputedSystemItems);
+        if (crossErr) throw new DeclarationError(crossErr);
+      }
+
+      for (const sys of systemItems) {
         if (lockedItemIds.has(sys.itemId)) {
           const existingItem = existingMap.get(sys.itemId);
           if (existingItem) totalScore += Number(existingItem.score);
@@ -379,17 +411,43 @@ export async function upsertDeclaration(
 
         const payload = items.find((i) => i.itemId === sys.itemId);
         const existingItem = existingMap.get(sys.itemId);
-        const confStatus = (
-          payload && 'confirmationStatus' in payload
-            ? payload.confirmationStatus
-            : existingItem?.confirmationStatus
-        ) as ConfirmationStatus | null | undefined;
+        const payloadIncludesStatus = Boolean(payload && 'confirmationStatus' in payload);
+        const confStatus = appealCentric && submitMode
+          ? resolveAppealCentricConfirmation({
+              submit,
+              submitMode,
+              payloadStatus: payloadIncludesStatus
+                ? (payload!.confirmationStatus as ConfirmationStatus | null | undefined) ?? null
+                : undefined,
+              existingStatus: existingItem?.confirmationStatus as ConfirmationStatus | null | undefined,
+              payloadIncludesStatus,
+            })
+          : ((
+              payload && 'confirmationStatus' in payload
+                ? payload.confirmationStatus
+                : existingItem?.confirmationStatus
+            ) as ConfirmationStatus | null | undefined);
         const disputeReason = confStatus === 'DISPUTED'
           ? payload?.disputeReason ?? existingItem?.disputeReason ?? null
           : null;
+        const disputeClaimedScore = confStatus === 'DISPUTED'
+          ? payload?.disputeClaimedScore ?? (
+              existingItem?.disputeClaimedScore != null
+                ? Number(existingItem.disputeClaimedScore)
+                : null
+            )
+          : null;
         const title = itemTitleById.get(sys.itemId) ?? sys.title;
 
-        if (submit) {
+        if (appealCentric && confStatus === 'DISPUTED') {
+          const err = disputedItemPersistError({
+            title,
+            disputeReason,
+            disputeClaimedScore,
+            attachmentCount: attachmentCounts?.get(sys.itemId) ?? 0,
+          });
+          if (err) throw new DeclarationError(err);
+        } else if (submit) {
           const err = systemFilledSubmitError({
             title,
             confirmationStatus: confStatus,
@@ -410,9 +468,11 @@ export async function upsertDeclaration(
             isSystemFilled: true,
             confirmationStatus: confStatus ?? null,
             disputeReason,
+            disputeClaimedScore,
             ...(confStatus === 'DISPUTED'
               ? {}
               : {
+                  disputeClaimedScore: null,
                   disputeL1Result: null,
                   disputeL1Note: null,
                   disputeL1ReviewerId: null,
@@ -433,6 +493,7 @@ export async function upsertDeclaration(
             isSystemFilled: true,
             confirmationStatus: confStatus ?? null,
             disputeReason,
+            disputeClaimedScore,
           },
         });
         totalScore += sys.score;
@@ -540,7 +601,9 @@ export async function upsertDeclaration(
       }
     }
 
-    const newStatus = submit ? 'PENDING_L1' : 'DRAFT';
+    const newStatus = submit
+      ? (submitMode === 'AFFIRM' ? 'L2_APPROVED' : 'PENDING_L1')
+      : 'DRAFT';
     const confStatus = it.confirmationStatus;
     const isSystem = !!it.isSystemFilled;
     await tx.submissionItem.upsert({
@@ -608,11 +671,18 @@ export async function upsertDeclaration(
         preReviewPassed: preReview.passed,
         preReviewMessages: preReview.messages as unknown as Prisma.InputJsonValue,
         preReviewMatchedRules: preReview.matchedRuleIds as unknown as Prisma.InputJsonValue,
-        status: 'SUBMITTED',
         submittedAt: originalSubmittedAt ?? new Date(),
         totalScore,
+        ...(submitMode === 'AFFIRM'
+          ? {}
+          : { status: 'SUBMITTED' as const }),
       },
     });
+
+    if (submitMode === 'AFFIRM') {
+      totalScore = await finalizeAffirmSubmission(tx, sub.id, userId);
+      finalized = true;
+    }
   } else {
     await tx.submission.update({
       where: { id: sub.id },
@@ -641,5 +711,6 @@ export async function upsertDeclaration(
     preReviewMessages: preReviewRejectedMessages,
     skippedItems,
     unrepairedItems: unrepairedRejected,
+    ...(finalized ? { finalized: true } : {}),
   };
 }

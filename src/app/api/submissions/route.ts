@@ -60,6 +60,7 @@ export async function POST(req: Request) {
     templateId: parsed.data.templateId,
     items: parsed.data.items,
     submit: parsed.data.submit,
+    submitMode: parsed.data.submitMode,
     workAreaId: parsed.data.workAreaId || undefined,
     hireDate: parsed.data.hireDate || undefined,
     declarationLevelId: parsed.data.declarationLevelId || undefined,
@@ -73,16 +74,25 @@ export async function POST(req: Request) {
       const suffix = result.preReviewMessages.length > 0
         ? `\n自动预审提示：${result.preReviewMessages.join('；')}`
         : '';
-      sendNotice(
-        result.employeeContact,
-        '【绩效申报】提交成功',
-        `您的申报已提交，等待一级审核。${suffix}`,
-      ).catch((e) => console.error('sendNotice failed:', e));
+      if (result.finalized) {
+        sendNotice(
+          result.employeeContact,
+          '【绩效申报】确认无异议',
+          `您已确认无异议，年度绩效档案已生成。${suffix}`,
+        ).catch((e) => console.error('sendNotice failed:', e));
+      } else {
+        sendNotice(
+          result.employeeContact,
+          '【绩效申报】提交成功',
+          `您的申报已提交，等待一级审核。${suffix}`,
+        ).catch((e) => console.error('sendNotice failed:', e));
+      }
     }
 
     return NextResponse.json({
       success: true,
       submissionId: result.submissionId,
+      finalized: result.finalized || undefined,
       preReviewWarnings: result.preReviewMessages.length > 0 || undefined,
       preReviewMessages: result.preReviewMessages.length > 0 ? result.preReviewMessages : undefined,
       skippedItems: result.skippedItems.length > 0 ? result.skippedItems : undefined,

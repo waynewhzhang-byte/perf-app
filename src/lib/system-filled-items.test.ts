@@ -1,10 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  disputedItemPersistError,
   extractSystemFilledFromSheet,
+  isL1ReviewQueueItem,
   isReviewSkippedSystemItem,
   isSystemConfirmationDimension,
+  resolveAppealCentricConfirmation,
   resolveFormItemDimension,
+  submitModeCrossCheckError,
   systemItemStatusOnSubmit,
 } from './system-filled-items';
 
@@ -85,5 +89,132 @@ describe('system-filled-items', () => {
 
   it('已确认系统项跳过 L1 审核', () => {
     assert.equal(isReviewSkippedSystemItem({ isSystemFilled: true, confirmationStatus: 'CONFIRMED' }), true);
+  });
+
+  it('submitModeCrossCheck AFFIRM 拒绝存在申诉', () => {
+    assert.equal(submitModeCrossCheckError('AFFIRM', true), '存在申诉内容时不能使用「确认无异议」提交');
+    assert.equal(submitModeCrossCheckError('AFFIRM', false), null);
+  });
+
+  it('submitModeCrossCheck APPEAL 要求至少一项申诉', () => {
+    assert.equal(submitModeCrossCheckError('APPEAL', false), '请先保存至少一项申诉后再提交审核');
+    assert.equal(submitModeCrossCheckError('APPEAL', true), null);
+  });
+
+  it('disputedItemPersistError 校验理由、主张分、附件', () => {
+    assert.equal(
+      disputedItemPersistError({
+        title: '缺陷治理',
+        disputeReason: '',
+        disputeClaimedScore: 5,
+        attachmentCount: 1,
+      }),
+      '请填写「缺陷治理」的申诉理由',
+    );
+    assert.equal(
+      disputedItemPersistError({
+        title: '缺陷治理',
+        disputeReason: '分数有误',
+        disputeClaimedScore: null,
+        attachmentCount: 1,
+      }),
+      '请填写「缺陷治理」的申诉分值',
+    );
+    assert.equal(
+      disputedItemPersistError({
+        title: '缺陷治理',
+        disputeReason: '分数有误',
+        disputeClaimedScore: 5,
+        attachmentCount: 0,
+      }),
+      '「缺陷治理」申诉须上传证明材料',
+    );
+    assert.equal(
+      disputedItemPersistError({
+        title: '缺陷治理',
+        disputeReason: '分数有误',
+        disputeClaimedScore: 5,
+        attachmentCount: 1,
+      }),
+      null,
+    );
+  });
+
+  it('resolveAppealCentricConfirmation AFFIRM 提交全部确认', () => {
+    assert.equal(
+      resolveAppealCentricConfirmation({
+        submit: true,
+        submitMode: 'AFFIRM',
+        payloadStatus: 'DISPUTED',
+      }),
+      'CONFIRMED',
+    );
+  });
+
+  it('resolveAppealCentricConfirmation 草稿显式 null 清除已有申诉', () => {
+    assert.equal(
+      resolveAppealCentricConfirmation({
+        submit: false,
+        submitMode: 'APPEAL',
+        payloadStatus: null,
+        existingStatus: 'DISPUTED',
+        payloadIncludesStatus: true,
+      }),
+      null,
+    );
+    assert.equal(
+      resolveAppealCentricConfirmation({
+        submit: false,
+        submitMode: 'APPEAL',
+        existingStatus: 'DISPUTED',
+      }),
+      'DISPUTED',
+    );
+  });
+
+  it('resolveAppealCentricConfirmation APPEAL 提交未申诉项自动确认', () => {
+    assert.equal(
+      resolveAppealCentricConfirmation({
+        submit: true,
+        submitMode: 'APPEAL',
+        payloadStatus: null,
+      }),
+      'CONFIRMED',
+    );
+    assert.equal(
+      resolveAppealCentricConfirmation({
+        submit: true,
+        submitMode: 'APPEAL',
+        payloadStatus: 'DISPUTED',
+      }),
+      'DISPUTED',
+    );
+  });
+
+  it('isL1ReviewQueueItem 仅申诉行进 L1 队列', () => {
+    assert.equal(
+      isL1ReviewQueueItem({
+        status: 'PENDING_L1',
+        isSystemFilled: true,
+        confirmationStatus: 'DISPUTED',
+      }),
+      true,
+    );
+    assert.equal(
+      isL1ReviewQueueItem({
+        status: 'L1_APPROVED',
+        isSystemFilled: true,
+        confirmationStatus: 'CONFIRMED',
+      }),
+      false,
+    );
+    assert.equal(
+      isL1ReviewQueueItem({
+        status: 'PENDING_L1',
+        isSystemFilled: true,
+        confirmationStatus: 'CONFIRMED',
+      }),
+      false,
+    );
   });
 });
