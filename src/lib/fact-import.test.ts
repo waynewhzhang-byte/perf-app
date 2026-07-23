@@ -1,7 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isBranchDepartment, parseOrgFromExcelRow, buildOrgBootstrapPlan, HQ_BRANCH_NAME } from './org-mapping';
-import { parsePersonList, buildFactsFromDefectRows } from './defect-governance';
+import {
+  parsePersonList,
+  buildFactsFromDefectRows,
+  defectScoringRuleFixture,
+} from './defect-governance';
 
 describe('org-mapping', () => {
   it('晋北运维分部 → 二级单位', () => {
@@ -84,7 +88,7 @@ describe('parsePersonList', () => {
   });
 });
 
-describe('buildFactsFromDefectRows (从 scoreMatrix 查分，非硬编码)', () => {
+describe('buildFactsFromDefectRows (计分经 scoring-engine)', () => {
   const resolver = {
     resolve(n: string) {
       const map: Record<string, { employeeNo: string; employeeName: string }> = {
@@ -94,33 +98,67 @@ describe('buildFactsFromDefectRows (从 scoreMatrix 查分，非硬编码)', () 
       return map[n] ?? null;
     },
   };
-  const matrix = {
-    危急: { FIRST_DISCOVERER: 3, CO_DISCOVERER: 1, FIRST_HANDLER: 3, CO_HANDLER: 1 },
-    严重: { FIRST_DISCOVERER: 1, CO_DISCOVERER: 0.5, FIRST_HANDLER: 1, CO_HANDLER: 0.5 },
-    一般: { FIRST_DISCOVERER: 0.5, FIRST_HANDLER: 0.5 },
-  };
   const rows = [
     { 编号: 'Q001', 等级: '危急', 发现人: '张三', 消缺人: '', 发现时间: '2024-1-1', 问题状态: '', 所属类别: '缺陷' },
     { 编号: 'Q002', 等级: '一般', 发现人: '李四', 消缺人: '', 发现时间: '2024-1-1', 问题状态: '', 所属类别: '缺陷' },
   ];
 
-  it('事实 score 来自传入的 scoreMatrix', () => {
-    const res = buildFactsFromDefectRows(rows as any, 2024, resolver, {}, matrix);
+  it('事实 score 来自 ScoringRule.matrix', () => {
+    const res = buildFactsFromDefectRows(rows as any, 2024, resolver, {}, defectScoringRuleFixture());
     const zhang = res.facts.find((f) => f.employeeName === '张三')!;
     assert.equal(zhang.score, 3); // 危急 FIRST_DISCOVERER
     const li = res.facts.find((f) => f.employeeName === '李四')!;
     assert.equal(li.score, 0.5); // 一般 FIRST_DISCOVERER
   });
 
-  it('修改 matrix 参数即改变分数（验证不依赖硬编码）', () => {
-    const doubled = JSON.parse(JSON.stringify(matrix)) as typeof matrix;
-    doubled.危急.FIRST_DISCOVERER = 9;
-    const res = buildFactsFromDefectRows([rows[0]] as any, 2024, resolver, {}, doubled);
+  it('修改 rule.matrix 即改变分数（验证不依赖内嵌计分）', () => {
+    const rule = defectScoringRuleFixture({
+      matrix: {
+        危急: { FIRST_DISCOVERER: 9, CO_DISCOVERER: 1, FIRST_HANDLER: 3, CO_HANDLER: 1 },
+        严重: { FIRST_DISCOVERER: 1, CO_DISCOVERER: 0.5, FIRST_HANDLER: 1, CO_HANDLER: 0.5 },
+        一般: { FIRST_DISCOVERER: 0.5, FIRST_HANDLER: 0.5 },
+      },
+    });
+    const res = buildFactsFromDefectRows([rows[0]] as any, 2024, resolver, {}, rule);
     assert.equal(res.facts[0].score, 9);
   });
 
-  it('不传 matrix 时回退默认（向后兼容）', () => {
+  it('不传 rule 时用测试 fixture（危急 FIRST=3）', () => {
     const res = buildFactsFromDefectRows([rows[0]] as any, 2024, resolver);
-    assert.equal(res.facts[0].score, 3); // 默认 危急 FIRST_DISCOVERER=3
+    assert.equal(res.facts[0].score, 3);
+  });
+
+  it('同人同等级两缺陷各自计分', () => {
+    const res = buildFactsFromDefectRows(
+      [
+        { 编号: 'Q1', 等级: '危急', 发现人: '张三', 发现时间: '2024-1-1', 所属类别: '缺陷' },
+        { 编号: 'Q2', 等级: '危急', 发现人: '张三', 发现时间: '2024-2-1', 所属类别: '缺陷' },
+      ] as any,
+      2024,
+      resolver,
+    );
+    assert.equal(res.facts.length, 2);
+    assert.equal(res.byEmployee.find((e) => e.employeeNo === 'E-1')!.rawScore, 6);
+  });
+
+  it('同人兼发现与处理取高分', () => {
+    const res = buildFactsFromDefectRows(
+      [
+        {
+          编号: 'Q1',
+          等级: '危急',
+          发现人: '张三',
+          消缺人: '张三',
+          发现时间: '2024-1-1',
+          消缺时间: '2024-1-2',
+          问题状态: '已消除',
+          所属类别: '缺陷',
+        },
+      ] as any,
+      2024,
+      resolver,
+    );
+    assert.equal(res.facts.length, 1);
+    assert.equal(res.facts[0].score, 3);
   });
 });

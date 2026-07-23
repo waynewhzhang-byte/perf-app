@@ -23,6 +23,7 @@ import {
 } from '@/lib/ticket-execution-import';
 import { createRosterResolverFromUsers } from '@/lib/roster-resolver';
 import { loadUserIdByEmployeeNo, persistTicketAggregates } from '@/lib/fact-import-persistence';
+import { loadScoringRule } from '@/lib/manual-fact-import';
 
 const DATA_DIR = '20260716超高压人员信息表';
 
@@ -78,7 +79,13 @@ async function reimportDefects() {
     发现人: [row['员工编号'] || row['第一发现人'], row['员工编号_1'] || row['其他共同发现人']].filter(Boolean).join('、'),
     消缺人: [row['员工编号_2'] || row['第一消缺人员'], row['员工编号_3'] || row['其他共同消缺人员']].filter(Boolean).join('、'),
   }));
-  const imported = buildFactsFromDefectRows(rows as DefectRow[], 2025, resolverWithSourceNo);
+  const imported = buildFactsFromDefectRows(
+    rows as DefectRow[],
+    2025,
+    resolverWithSourceNo,
+    {},
+    await loadScoringRule(prisma, 'worksite.defect-governance'),
+  );
   const result = await persistSeedsBySource(prisma, {
     year: 2026, dimensionCode: 'worksite.defect-governance', sourceFile: filePath, replaceAcrossSourceFiles: true,
   }, imported.facts.map((fact) => ({ ...fact, year: 2026 })));

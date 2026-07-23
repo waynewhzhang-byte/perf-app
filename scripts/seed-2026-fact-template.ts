@@ -2,13 +2,13 @@
  * 基于《20260716评分标准 对应表.xlsx》生成唯一的 2026 年能级绩效申报模板。
  *
  * 一级维度、二级评分项、满分、事实来源与计分说明均来自
- * performance-dimension-registry.ts；不要在这里另行维护一套维度树。
+ * scoring-standards.ts；不要在这里另行维护一套维度树。
  */
 import { PrismaClient, ScoreMode, TemplateStatus } from '@prisma/client';
 import {
   PERFORMANCE_SECTIONS,
   subDimensionsForSection,
-} from '../src/lib/performance-dimension-registry';
+} from '../src/lib/scoring-standards';
 
 const prisma = new PrismaClient();
 

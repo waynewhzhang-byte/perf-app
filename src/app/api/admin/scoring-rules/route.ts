@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
-import { DIMENSION_DEFS } from '@/lib/dimension-codes';
+import { DIMENSION_DEFS } from '@/lib/scoring-standards';
 
 const RULE_TYPES = ['MATRIX', 'SHARE', 'NORMALIZE', 'BASIC_TIER'] as const;
 

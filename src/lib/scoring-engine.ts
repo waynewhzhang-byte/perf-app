@@ -167,8 +167,10 @@ export function computeFactScores(
 function processMatrix(facts: FactInput[], rule: ScoringRule): ScoredFact[] {
   const matrix = rule.matrix ?? {};
 
-  // 按 (employeeNo, defectLevel) 分组，同人对同一缺陷取最高角色分
-  const key = (f: FactInput) => `${f.employeeNo}|${f.defectLevel}`;
+  // 按 (employeeNo, defectRef, defectLevel) 分组：每缺陷独立计分；
+  // 同人在同一缺陷上兼发现/处理时取最高角色分（tieBreak: MAX_PER_PERSON）
+  const key = (f: FactInput) =>
+    `${f.employeeNo}|${f.defectRef ?? ''}|${f.defectLevel ?? ''}`;
   const groups = new Map<string, FactInput[]>();
   for (const f of facts) {
     const k = key(f);

@@ -17,6 +17,7 @@ import { buildCompetitionSeeds } from '@/lib/competition-import';
 import { buildPatentSeeds, parsePatentRows } from '@/lib/patent-import';
 import { buildViolationSeeds } from '@/lib/violation-import';
 import { batchComputeImportedScores } from '@/lib/imported-score-batch';
+import { loadScoringRule } from '@/lib/manual-fact-import';
 
 const YEAR = 2026;
 const DATA_DIR = '20260716超高压人员信息表';
@@ -111,7 +112,13 @@ async function main() {
     消缺人: [row['员工编号_2'] || row['第一消缺人员'], row['员工编号_3'] || row['其他共同消缺人员']].filter(Boolean).join('、'),
   }));
   // 源表为 2025 年度发生记录，评价年度 2026 使用该完整年度事实。
-  const defects = buildFactsFromDefectRows(defectRows as DefectRow[], 2025, resolverWithSourceNo);
+  const defects = buildFactsFromDefectRows(
+    defectRows as DefectRow[],
+    2025,
+    resolverWithSourceNo,
+    {},
+    await loadScoringRule(prisma, 'worksite.defect-governance'),
+  );
   add('worksite.defect-governance', defects.facts
     .filter((row) => rosterEmployeeNos.has(row.employeeNo))
     .map((row) => ({ employeeNo: row.employeeNo, score: row.score })));

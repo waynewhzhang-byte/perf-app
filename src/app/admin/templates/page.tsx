@@ -23,7 +23,7 @@ import {
   isSubDimensionInSection,
   subDimensionsForSection,
   type PerformanceSectionCode,
-} from '@/lib/performance-dimension-registry';
+} from '@/lib/scoring-standards';
 
 type ScoreMode = 'TIERS' | 'COUNTED';
 interface Item {

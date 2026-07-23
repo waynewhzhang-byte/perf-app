@@ -80,7 +80,7 @@ import {
 import { loadUserIdByEmployeeNo } from './fact-import-persistence';
 
 /** 从 DB 读维度 ScoringRule（无配置报错） */
-async function loadScoringRule(
+export async function loadScoringRule(
   prisma: PrismaClient,
   dimensionCode: string,
 ): Promise<ScoringRule> {

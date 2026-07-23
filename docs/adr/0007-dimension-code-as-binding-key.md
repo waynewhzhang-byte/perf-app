@@ -11,8 +11,8 @@
 （事实、模板、审核）共享一个 vocabulary。
 
 权威维度清单在 `src/lib/scoring-standards.ts` 的 `SCORING_STANDARDS` 数组中。
-`performance-dimension-registry.ts`、`evaluation-dimensions.ts` 都派生自它——
-若要新增维度，改 `SCORING_STANDARDS` 一处，不要在派生模块里硬编码。
+章节树、查询 helper、导入维度快捷常量均在同模块派生——
+若要新增维度，改 `SCORING_STANDARDS` 一处，不要另建 registry / dimension-codes。
 
 **显式 no-scope**：不允许在运行时由管理员新增 dimensionCode——维度定义本身是
 《年度能级评价量化积分表》的产物，需要随管理办法更新走代码发布，不走 DB 配置。

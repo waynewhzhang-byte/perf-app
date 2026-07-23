@@ -1,15 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DIMENSION_DEFS,
   PERFORMANCE_SECTIONS,
   PERFORMANCE_SUB_DIMENSIONS,
   buildPerformanceDimensionTree,
   defaultSectionTitle,
   isSubDimensionInSection,
   subDimensionsForSection,
-} from './performance-dimension-registry';
+} from './scoring-standards';
 
-describe('performance-dimension-registry', () => {
+describe('scoring-standards dimension tree', () => {
   it('一级维度与 Excel 序号 1–4 对齐', () => {
     assert.deepEqual(
       PERFORMANCE_SECTIONS.map((s) => s.excelOrder),
@@ -45,5 +46,13 @@ describe('performance-dimension-registry', () => {
   it('defaultSectionTitle 含满分', () => {
     assert.match(defaultSectionTitle('worksite', 2), /工作现场/);
     assert.match(defaultSectionTitle('worksite', 2), /42/);
+  });
+
+  it('DIMENSION_DEFS 无 fields（导入字段不在 vocabulary）', () => {
+    for (const d of DIMENSION_DEFS) {
+      assert.equal('fields' in d, false);
+      assert.ok(d.code);
+      assert.ok(d.name);
+    }
   });
 });

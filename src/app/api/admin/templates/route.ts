@@ -8,7 +8,7 @@ import { requireAdmin } from '@/lib/auth';
 import { ensureScoreOptionIds } from '@/lib/form-options';
 import {
   isSubDimensionInSection,
-} from '@/lib/performance-dimension-registry';
+} from '@/lib/scoring-standards';
 
 // ---- Validation schemas ----
 

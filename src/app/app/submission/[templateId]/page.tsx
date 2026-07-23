@@ -7,6 +7,8 @@ import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
+import { calculateFullWorkYears } from '@/lib/pre-review';
+import { computeItemScore, parseDateOnly } from '@/lib/submission-score';
 import { isSystemConfirmationDimension } from '@/lib/system-filled-items';
 
 const FORM_2026_TITLE = '2026年能级评价量化积分申报表';
@@ -42,16 +44,6 @@ interface SubItem {
   status?: string; rejectReason?: string | null;
   attachments?: Attachment[];
   optionReviews?: OptionReview[];
-}
-
-// 计算单个申报项得分：COUNTED 模式按 单价×次数 汇总并封顶，TIERS 模式累加选中分值
-function computeItemScore(it: FormItem, sel: Selected[]): number {
-  if (it.scoreMode === 'COUNTED') {
-    const raw = sel.reduce((sum, s) => sum + s.score * (s.count ?? 0), 0);
-    const cap = it.maxScore == null ? Infinity : Number(it.maxScore);
-    return Math.min(raw, cap);
-  }
-  return sel.reduce((sum, s) => sum + s.score, 0);
 }
 
 export default function SubmissionPage() {
@@ -259,27 +251,27 @@ export default function SubmissionPage() {
     () => factsScoreTotal + Object.values(answers).reduce((s, a) => {
       if (systemFilledItemIds.has(a.itemId)) return s;
       const it = itemById.get(a.itemId);
-      return s + (it ? computeItemScore(it, a.selected) : a.selected.reduce((x, y) => x + y.score, 0));
+      return s + (it
+        ? computeItemScore(
+          { scoreMode: it.scoreMode ?? 'TIERS', maxScore: it.maxScore ?? null },
+          a.selected,
+        )
+        : a.selected.reduce((x, y) => x + y.score, 0));
     }, 0),
     [answers, itemById, factsScoreTotal, systemFilledItemIds],
   );
 
   const workYears = useMemo(() => {
-    if (!header.hireDate) return null;
-    const hire = new Date(`${header.hireDate}T00:00:00`);
-    const cutoff = evaluationCutoffDate(tpl?.year ?? new Date().getFullYear());
-    let years = cutoff.getFullYear() - hire.getFullYear();
-    const beforeAnniversary =
-      cutoff.getMonth() < hire.getMonth() ||
-      (cutoff.getMonth() === hire.getMonth() && cutoff.getDate() < hire.getDate());
-    if (beforeAnniversary) years -= 1;
-    return Math.max(0, years);
+    const hire = parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
+    return calculateFullWorkYears(hire, evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()));
   }, [header.hireDate, tpl?.year]);
 
   const calculatedDeclarationLevel = useMemo(() => {
-    if (!header.hireDate) return null;
+    const hire = parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
     return levelFromHireDate(
-      new Date(`${header.hireDate}T00:00:00`),
+      hire,
       evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()),
     );
   }, [header.hireDate, tpl?.year]);
@@ -949,7 +941,10 @@ export default function SubmissionPage() {
                         <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
                           <span>本项得分</span>
                           <span className="text-sm font-bold tabular-nums text-slate-900">
-                            {computeItemScore(it, a?.selected ?? []).toFixed(1)} 分
+                            {computeItemScore(
+                              { scoreMode: it.scoreMode ?? 'TIERS', maxScore: it.maxScore ?? null },
+                              a?.selected ?? [],
+                            ).toFixed(1)} 分
                           </span>
                           <span>（上限 {it.maxScore ?? 0} 分）</span>
                         </div>

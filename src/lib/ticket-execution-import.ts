@@ -6,7 +6,7 @@ import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import { normalizePersonName } from '@/lib/employee-resolver';
 import { parsePersonList } from '@/lib/defect-governance';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/scoring-standards';
 
 export interface TicketScoreBreakdown {
   /** 操作票角色项数（每行每角色每人计 1 项） */

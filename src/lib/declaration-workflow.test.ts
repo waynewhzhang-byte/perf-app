@@ -1,0 +1,395 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  DeclarationError,
+  findUnrepairedRejectedItems,
+  submissionEditBlockReason,
+  systemFilledSubmitError,
+  upsertDeclaration,
+} from './declaration-workflow';
+
+describe('submissionEditBlockReason', () => {
+  it('DRAFT / REJECTED / PRE_REVIEW_REJECTED 可编辑', () => {
+    assert.equal(submissionEditBlockReason('DRAFT'), null);
+    assert.equal(submissionEditBlockReason('REJECTED'), null);
+    assert.equal(submissionEditBlockReason('PRE_REVIEW_REJECTED'), null);
+  });
+
+  it('已提交与审核中状态不可编辑', () => {
+    assert.equal(submissionEditBlockReason('SUBMITTED'), '申报已提交，不可编辑');
+    assert.equal(submissionEditBlockReason('L1_APPROVED'), '申报已通过一级审核，不可编辑');
+    assert.equal(submissionEditBlockReason('L2_APPROVED'), '申报已终审通过，不可编辑');
+  });
+});
+
+describe('findUnrepairedRejectedItems', () => {
+  it('找出未出现在 payload 的驳回项', () => {
+    const rows = findUnrepairedRejectedItems(
+      [
+        { itemId: 'a', status: 'REJECTED' },
+        { itemId: 'b', status: 'REJECTED' },
+        { itemId: 'c', status: 'L1_APPROVED' },
+      ],
+      new Set(['a']),
+      (id) => `标题-${id}`,
+    );
+    assert.deepEqual(rows, [{ itemId: 'b', title: '标题-b' }]);
+  });
+});
+
+describe('systemFilledSubmitError', () => {
+  it('缺确认/申诉时报错', () => {
+    assert.equal(
+      systemFilledSubmitError({
+        title: '缺陷治理',
+        confirmationStatus: null,
+        disputeReason: null,
+        attachmentCount: 0,
+      }),
+      '请对系统填充项「缺陷治理」选择「确认」或「申诉」',
+    );
+  });
+
+  it('申诉缺理由时报错', () => {
+    assert.equal(
+      systemFilledSubmitError({
+        title: '缺陷治理',
+        confirmationStatus: 'DISPUTED',
+        disputeReason: '  ',
+        attachmentCount: 1,
+      }),
+      '请填写「缺陷治理」的申诉理由',
+    );
+  });
+
+  it('申诉缺附件时报错', () => {
+    assert.equal(
+      systemFilledSubmitError({
+        title: '缺陷治理',
+        confirmationStatus: 'DISPUTED',
+        disputeReason: '分数有误',
+        attachmentCount: 0,
+      }),
+      '「缺陷治理」申诉须上传证明材料',
+    );
+  });
+
+  it('已确认时通过', () => {
+    assert.equal(
+      systemFilledSubmitError({
+        title: '缺陷治理',
+        confirmationStatus: 'CONFIRMED',
+        disputeReason: null,
+        attachmentCount: 0,
+      }),
+      null,
+    );
+  });
+});
+
+describe('upsertDeclaration', () => {
+  it('已提交状态不可再编辑', async () => {
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{ items: [{ id: 'item-1', isRequired: false, requireAttachment: false, title: '手工项', dimensionCode: null, scoreMode: 'TIERS', maxScore: null, scoreOptions: [] }] }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: null,
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '运维一分' }) },
+      declarationLevel: { findUnique: async () => null, findFirst: async () => null },
+      declarationSpecialty: { findUnique: async () => null },
+      autoReviewRule: { findMany: async () => [] },
+      submission: {
+        findUnique: async () => ({
+          id: 'sub-1',
+          status: 'SUBMITTED',
+          submittedAt: new Date(),
+          branchId: 'b1',
+          workAreaName: '运维一分',
+        }),
+      },
+    } as any;
+
+    await assert.rejects(
+      () =>
+        upsertDeclaration(tx, {
+          userId: 'u1',
+          templateId: 'tpl-1',
+          items: [],
+          submit: false,
+          workAreaId: 'b1',
+        }),
+      (err: unknown) =>
+        err instanceof DeclarationError &&
+        err.message === '申报已提交，不可编辑' &&
+        err.httpStatus === 400,
+    );
+  });
+
+  it('草稿保存：创建 submission 并写 DRAFT', async () => {
+    const submissionUpdates: unknown[] = [];
+    const itemUpserts: unknown[] = [];
+    let created = false;
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{
+            items: [{
+              id: 'item-1',
+              isRequired: false,
+              requireAttachment: false,
+              title: '手工项',
+              dimensionCode: null,
+              scoreMode: 'TIERS',
+              maxScore: null,
+              scoreOptions: [{ optionId: 'o1', label: '档A', score: 2 }],
+            }],
+          }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: null,
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '运维一分' }) },
+      declarationLevel: { findUnique: async () => null, findFirst: async () => null },
+      declarationSpecialty: { findUnique: async () => null },
+      autoReviewRule: { findMany: async () => [] },
+      submission: {
+        findUnique: async () => (created ? { id: 'sub-new', status: 'DRAFT', submittedAt: null, branchId: 'b1', workAreaName: null } : null),
+        create: async () => {
+          created = true;
+          return { id: 'sub-new', status: 'DRAFT', submittedAt: null, branchId: 'b1', workAreaName: null };
+        },
+        update: async (input: unknown) => {
+          submissionUpdates.push(input);
+          return {};
+        },
+      },
+      submissionItem: {
+        findMany: async () => [],
+        upsert: async (input: unknown) => {
+          itemUpserts.push(input);
+          return {};
+        },
+      },
+      attachment: { findMany: async () => [] },
+      reviewLog: { create: async () => ({}) },
+    } as any;
+
+    const result = await upsertDeclaration(tx, {
+      userId: 'u1',
+      templateId: 'tpl-1',
+      submit: false,
+      workAreaId: 'b1',
+      items: [{
+        itemId: 'item-1',
+        selected: [{ index: 0, optionId: 'o1', label: '档A', score: 2 }],
+      }],
+    });
+
+    assert.equal(result.submissionId, 'sub-new');
+    assert.equal(result.totalScore, 2);
+    assert.equal(result.employeeContact, '13800000000');
+    assert.equal(itemUpserts.length, 1);
+    assert.ok(submissionUpdates.some((u: any) => u.data.status === 'DRAFT' && u.data.totalScore === 2));
+  });
+
+  it('提交时驳回项未重填则 DeclarationError', async () => {
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{
+            items: [
+              { id: 'item-a', isRequired: false, requireAttachment: false, title: '项A', dimensionCode: null, scoreMode: 'TIERS', maxScore: null, scoreOptions: [] },
+              { id: 'item-b', isRequired: false, requireAttachment: false, title: '项B', dimensionCode: null, scoreMode: 'TIERS', maxScore: null, scoreOptions: [] },
+            ],
+          }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: new Date(2010, 0, 1),
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '运维一分' }) },
+      declarationLevel: {
+        findUnique: async () => ({ id: 'lv1', name: '初级' }),
+        findFirst: async () => null,
+      },
+      declarationSpecialty: { findUnique: async () => ({ id: 'sp1', name: '变电运维' }) },
+      autoReviewRule: { findMany: async () => [] },
+      submission: {
+        findUnique: async () => ({
+          id: 'sub-1',
+          status: 'REJECTED',
+          submittedAt: new Date(),
+          branchId: 'b1',
+          workAreaName: '运维一分',
+        }),
+      },
+      submissionItem: {
+        findMany: async () => [
+          { itemId: 'item-a', status: 'REJECTED', score: 0, isSystemFilled: false, confirmationStatus: null, selected: [], optionReviews: [] },
+          { itemId: 'item-b', status: 'REJECTED', score: 0, isSystemFilled: false, confirmationStatus: null, selected: [], optionReviews: [] },
+        ],
+      },
+      attachment: { findMany: async () => [] },
+    } as any;
+
+    await assert.rejects(
+      () =>
+        upsertDeclaration(tx, {
+          userId: 'u1',
+          templateId: 'tpl-1',
+          submit: true,
+          workAreaId: 'b1',
+          hireDate: '2010-01-01',
+          declarationLevelId: 'lv1',
+          declarationSpecialtyId: 'sp1',
+          // 只重填了项A，项B 缺失
+          items: [{ itemId: 'item-a', selected: [] }],
+        }),
+      (err: unknown) =>
+        err instanceof DeclarationError &&
+        err.message.includes('以下驳回项未重新填写') &&
+        err.message.includes('项B'),
+    );
+  });
+
+  it('提交时预审未通过仍成功并带回 messages（软提示）', async () => {
+    const reviewLogs: unknown[] = [];
+    const submissionUpdates: unknown[] = [];
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{
+            items: [{
+              id: 'item-1',
+              isRequired: false,
+              requireAttachment: false,
+              title: '手工项',
+              dimensionCode: null,
+              scoreMode: 'TIERS',
+              maxScore: null,
+              scoreOptions: [{ optionId: 'o1', label: '档A', score: 1 }],
+            }],
+          }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: new Date(2020, 0, 1),
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '运维一分' }) },
+      declarationLevel: {
+        findUnique: async () => ({ id: 'lv1', name: '高级' }),
+        findFirst: async () => null,
+      },
+      declarationSpecialty: { findUnique: async () => ({ id: 'sp1', name: '变电运维' }) },
+      autoReviewRule: {
+        findMany: async () => [{
+          id: 'rule-1',
+          name: '工龄不足不可报高级',
+          enabled: true,
+          // 覆盖所有工龄；allowedLevelIds 不含 lv1 → 选高级时预审软失败
+          minWorkYears: null,
+          maxWorkYears: null,
+          allowedLevelIds: ['other-level'],
+          rejectMessage: '工龄不足，建议改报初级',
+        }],
+      },
+      submission: {
+        findUnique: async () => null,
+        create: async () => ({
+          id: 'sub-new',
+          status: 'DRAFT',
+          submittedAt: null,
+          branchId: 'b1',
+          workAreaName: null,
+        }),
+        update: async (input: unknown) => {
+          submissionUpdates.push(input);
+          return {};
+        },
+      },
+      submissionItem: {
+        findMany: async () => [],
+        upsert: async () => ({}),
+      },
+      attachment: { findMany: async () => [] },
+      reviewLog: {
+        create: async (input: unknown) => {
+          reviewLogs.push(input);
+          return {};
+        },
+      },
+    } as any;
+
+    const result = await upsertDeclaration(tx, {
+      userId: 'u1',
+      templateId: 'tpl-1',
+      submit: true,
+      workAreaId: 'b1',
+      hireDate: '2020-01-01',
+      declarationLevelId: 'lv1',
+      declarationSpecialtyId: 'sp1',
+      items: [{
+        itemId: 'item-1',
+        selected: [{ index: 0, optionId: 'o1', label: '档A', score: 1 }],
+      }],
+    });
+
+    assert.equal(result.submissionId, 'sub-new');
+    assert.deepEqual(result.preReviewMessages, ['工龄不足，建议改报初级']);
+    assert.ok(submissionUpdates.some((u: any) =>
+      u.data.status === 'SUBMITTED' && u.data.preReviewPassed === false,
+    ));
+    assert.ok(reviewLogs.some((log: any) =>
+      log.data.action === 'REJECT' && String(log.data.note).includes('自动预审未通过'),
+    ));
+  });
+});

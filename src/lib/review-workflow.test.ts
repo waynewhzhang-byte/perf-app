@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import {
   applyL1,
   applyL2,
+  buildArchivedSnapshot,
+  finalizeArchive,
   isPendingL2Dispute,
   ReviewError,
   validateL1Decisions,
   validateL2Decisions,
+  type ArchiveSubmissionSource,
 } from './review-workflow';
+import type { ScorableSection } from './score-calculation';
 
 describe('isPendingL2Dispute', () => {
   it('识别不依赖评分子项的待二审申诉', () => {
@@ -239,5 +243,223 @@ describe('applyL1', () => {
     assert.ok(submissionUpdates.some((update: any) => update.data.status === 'L1_APPROVED'));
     assert.ok(itemUpdates.some((update: any) => update.data.status === 'PENDING_L2'));
     assert.ok(!submissionUpdates.some((update: any) => update.data.status === 'L2_APPROVED'));
+  });
+});
+
+describe('buildArchivedSnapshot', () => {
+  const finalizedAt = new Date('2026-07-23T12:00:00.000Z');
+
+  const templateSections: ScorableSection[] = [
+    {
+      id: 'sec-1',
+      title: '工作现场',
+      sortOrder: 0,
+      items: [
+        {
+          id: 'fi-1',
+          scoreMode: 'TIERS',
+          maxSelections: 1,
+          scoreOptions: [{ label: 'A', score: 3 }],
+          sortOrder: 0,
+        },
+      ],
+    },
+  ];
+
+  const sub: ArchiveSubmissionSource = {
+    id: 'sub-1',
+    userId: 'user-1',
+    templateId: 'tpl-1',
+    branchId: 'branch-1',
+    workAreaName: '晋北运维分部',
+    hireDate: new Date('2015-01-01'),
+    workYears: 11,
+    declarationLevelId: 'lv-1',
+    declarationLevelName: '一级',
+    declarationSpecialtyId: 'sp-1',
+    declarationSpecialtyName: '变电运维',
+    preReviewPassed: true,
+    preReviewMessages: [],
+    preReviewMatchedRules: [],
+    items: [
+      {
+        itemId: 'fi-1',
+        selected: [{ optionId: 'opt-1', label: 'A', score: 3 }],
+        content: '备注',
+        score: 3,
+        item: { title: '缺陷治理' },
+        optionReviews: [
+          {
+            optionId: 'opt-1',
+            label: 'A',
+            score: 3,
+            count: 1,
+            departmentId: 'dept-1',
+            department: { name: '运检部' },
+            status: 'L2_APPROVED',
+            rejectReason: null,
+            reviewedBy: 'rev-2',
+            reviewedAt: new Date('2026-07-22T00:00:00.000Z'),
+          },
+        ],
+        attachments: [
+          {
+            id: 'att-1',
+            filename: '证明.pdf',
+            storageKey: 'submissions/sub-1/fi-1/证明.pdf',
+            mimeType: 'application/pdf',
+          },
+        ],
+      },
+    ],
+  };
+
+  it('含 ADR-0002 要求的顶层字段与声明表头', () => {
+    const snap = buildArchivedSnapshot(sub, templateSections, finalizedAt);
+    assert.equal(snap.submissionId, 'sub-1');
+    assert.equal(snap.userId, 'user-1');
+    assert.equal(snap.templateId, 'tpl-1');
+    assert.equal(snap.finalizedAt, finalizedAt);
+    assert.equal(snap.declarationHeader.workAreaName, '晋北运维分部');
+    assert.equal(snap.declarationHeader.workYears, 11);
+    assert.equal(snap.declarationHeader.declarationLevelName, '一级');
+    assert.ok(Array.isArray(snap.sections));
+    assert.equal(typeof snap.templateMaxScore, 'number');
+    assert.ok(snap.templateMaxScore >= 3);
+  });
+
+  it('固化 items / optionReviews / attachments', () => {
+    const snap = buildArchivedSnapshot(sub, templateSections, finalizedAt);
+    assert.equal(snap.items.length, 1);
+    const item = snap.items[0];
+    assert.equal(item.itemId, 'fi-1');
+    assert.equal(item.itemTitle, '缺陷治理');
+    assert.equal(item.optionReviews.length, 1);
+    assert.equal(item.optionReviews[0].departmentName, '运检部');
+    assert.equal(item.optionReviews[0].reviewerId, 'rev-2');
+    assert.equal(item.attachments.length, 1);
+    assert.equal(item.attachments[0].storageKey, 'submissions/sub-1/fi-1/证明.pdf');
+  });
+});
+
+describe('finalizeArchive', () => {
+  it('编排顺序：submission.update → performanceRecord.upsert → 申报事实落库', async () => {
+    const approvedAt = new Date('2026-07-23T12:00:00.000Z');
+    const calls: string[] = [];
+    let archivedPayload: unknown;
+
+    const subRow = {
+      id: 'sub-1',
+      userId: 'user-1',
+      templateId: 'tpl-1',
+      branchId: null,
+      workAreaName: null,
+      hireDate: null,
+      workYears: null,
+      declarationLevelId: null,
+      declarationLevelName: null,
+      declarationSpecialtyId: null,
+      declarationSpecialtyName: null,
+      preReviewPassed: null,
+      preReviewMessages: null,
+      preReviewMatchedRules: null,
+      template: { year: 2026 },
+      items: [
+        {
+          id: 'si-1',
+          itemId: 'fi-1',
+          selected: [],
+          content: null,
+          score: 2,
+          status: 'L2_APPROVED',
+          isSystemFilled: false,
+          item: {
+            id: 'fi-1',
+            title: '手工项',
+            dimensionCode: 'performance.competition',
+            scoreOptions: [{ optionId: 'o1', label: '省公司', score: 2 }],
+          },
+          optionReviews: [],
+          attachments: [],
+        },
+      ],
+      user: { id: 'user-1', employeeNo: 'E001', fullName: '张三' },
+    };
+
+    const tx = {
+      submission: {
+        findUnique: async () => subRow,
+        update: async (args: { data: Record<string, unknown> }) => {
+          calls.push('submission.update');
+          assert.equal(args.data.status, 'L2_APPROVED');
+          assert.equal(args.data.l2ReviewerId, 'reviewer-1');
+          assert.equal(args.data.l2ReviewedAt, approvedAt);
+          assert.equal(args.data.totalScore, 2);
+          return {};
+        },
+      },
+      formSection: {
+        findMany: async () => [
+          {
+            id: 'sec-1',
+            title: '工作业绩',
+            sortOrder: 0,
+            items: [
+              {
+                id: 'fi-1',
+                scoreMode: 'TIERS',
+                maxScore: null,
+                maxSelections: 1,
+                scoreOptions: [{ label: '省公司', score: 2 }],
+                sortOrder: 0,
+              },
+            ],
+          },
+        ],
+      },
+      performanceRecord: {
+        upsert: async (args: { create: { archivedData: unknown; totalScore: number } }) => {
+          calls.push('performanceRecord.upsert');
+          archivedPayload = args.create.archivedData;
+          assert.equal(args.create.totalScore, 2);
+          return {};
+        },
+      },
+      submissionDimensionFact: {
+        deleteMany: async () => {
+          calls.push('submissionDimensionFact.deleteMany');
+          return { count: 0 };
+        },
+        create: async () => {
+          calls.push('submissionDimensionFact.create');
+          return {};
+        },
+      },
+    } as any;
+
+    const total = await finalizeArchive(tx, 'sub-1', 'reviewer-1', approvedAt);
+    assert.equal(total, 2);
+    assert.deepEqual(calls.slice(0, 3), [
+      'submission.update',
+      'performanceRecord.upsert',
+      'submissionDimensionFact.deleteMany',
+    ]);
+    const snap = archivedPayload as { finalizedAt: Date; submissionId: string };
+    assert.equal(snap.submissionId, 'sub-1');
+    assert.equal(snap.finalizedAt, approvedAt);
+  });
+
+  it('申报不存在时返回 0 且不写库', async () => {
+    const calls: string[] = [];
+    const tx = {
+      submission: {
+        findUnique: async () => null,
+        update: async () => { calls.push('update'); return {}; },
+      },
+      formSection: { findMany: async () => { calls.push('sections'); return []; } },
+      performanceRecord: { upsert: async () => { calls.push('upsert'); return {}; } },
+    } as any;
+    assert.equal(await finalizeArchive(tx, 'missing', 'rev'), 0);
+    assert.deepEqual(calls, []);
   });
 });

@@ -3,6 +3,7 @@
  *
  * L1/L2 逐选项审核 → 驳回或写入归档快照 / 绩效档案 / 申报维度事实。
  * Route 开事务并传入 tx；本 module 在事务内加载申报图并推进状态。
+ * 归档拼装：`buildArchivedSnapshot`（纯）→ `finalizeArchive`（内部编排，仅 L1/L2 调用）。
  */
 import { Prisma, type PrismaClient } from '@prisma/client';
 import {
@@ -149,32 +150,111 @@ async function loadSectionsForArchive(tx: ReviewTx, templateId: string): Promise
   }));
 }
 
-/** 终审通过：归档快照 + 绩效档案 + 申报维度事实（内部，不外露） */
-async function finalizeArchive(
-  tx: ReviewTx,
-  submissionId: string,
-  reviewerId: string,
-): Promise<number> {
-  const sub = await tx.submission.findUnique({
-    where: { id: submissionId },
-    include: {
-      template: true,
-      items: {
-        include: {
-          item: true,
-          attachments: true,
-          optionReviews: { include: { department: true } },
-        },
-      },
-    },
-  });
-  if (!sub) return 0;
-  const total = sub.items.reduce((sum, item) => sum + Number(item.score), 0);
-  const templateSections = await loadSectionsForArchive(tx, sub.templateId);
+/** 归档快照输入（submission 已含 items / attachments / optionReviews） */
+export interface ArchiveSubmissionSource {
+  id: string;
+  userId: string;
+  templateId: string;
+  branchId: string | null;
+  workAreaName: string | null;
+  hireDate: Date | null;
+  workYears: number | null;
+  declarationLevelId: string | null;
+  declarationLevelName: string | null;
+  declarationSpecialtyId: string | null;
+  declarationSpecialtyName: string | null;
+  preReviewPassed: boolean | null;
+  preReviewMessages: unknown;
+  preReviewMatchedRules: unknown;
+  items: Array<{
+    itemId: string;
+    selected: unknown;
+    content: string | null;
+    score: unknown;
+    item: { title: string };
+    optionReviews: Array<{
+      optionId: string;
+      label: string;
+      score: unknown;
+      count: number | null;
+      departmentId: string;
+      department: { name: string };
+      status: string;
+      rejectReason: string | null;
+      reviewedBy: string | null;
+      reviewedAt: Date | null;
+    }>;
+    attachments: Array<{
+      id: string;
+      filename: string;
+      storageKey: string;
+      mimeType: string | null;
+    }>;
+  }>;
+}
+
+/** ADR-0002：写入 PerformanceRecord.archivedData 的 JSON 形状 */
+export interface ArchivedSnapshot {
+  submissionId: string;
+  userId: string;
+  templateId: string;
+  declarationHeader: {
+    workAreaId: string | null;
+    workAreaName: string | null;
+    hireDate: Date | null;
+    workYears: number | null;
+    declarationLevelId: string | null;
+    declarationLevelName: string | null;
+    declarationSpecialtyId: string | null;
+    declarationSpecialtyName: string | null;
+    preReviewPassed: boolean | null;
+    preReviewMessages: unknown;
+    preReviewMatchedRules: unknown;
+  };
+  items: Array<{
+    itemId: string;
+    itemTitle: string;
+    selected: unknown;
+    content: string | null;
+    score: unknown;
+    optionReviews: Array<{
+      optionId: string;
+      label: string;
+      score: unknown;
+      count: number | null;
+      departmentId: string;
+      departmentName: string;
+      status: string;
+      rejectReason: string | null;
+      reviewerId: string | null;
+      reviewedAt: Date | null;
+    }>;
+    attachments: Array<{
+      id: string;
+      filename: string;
+      storageKey: string;
+      mimeType: string | null;
+    }>;
+  }>;
+  sections: ReturnType<typeof computeSectionScores>;
+  templateMaxScore: number;
+  finalizedAt: Date;
+}
+
+/**
+ * 纯函数：拼装归档快照（ADR-0002）。
+ * finalizedAt 由调用方注入，便于测试钉死时间，并与申报维度事实 approvedAt 对齐。
+ */
+export function buildArchivedSnapshot(
+  sub: ArchiveSubmissionSource,
+  templateSections: ScorableSection[],
+  finalizedAt: Date,
+): ArchivedSnapshot {
   const scoreByItemId = new Map(sub.items.map((it) => [it.itemId, Number(it.score)]));
   const sectionRows = computeSectionScores(templateSections, scoreByItemId);
   const templateMaxScore = computeTemplateMaxScore(templateSections);
-  const archived = {
+
+  return {
     submissionId: sub.id,
     userId: sub.userId,
     templateId: sub.templateId,
@@ -218,14 +298,43 @@ async function finalizeArchive(
     })),
     sections: sectionRows,
     templateMaxScore,
-    finalizedAt: new Date(),
+    finalizedAt,
   };
+}
+
+/**
+ * 终审通过：归档快照 + 绩效档案 + 申报维度事实。
+ * @internal 仅由 applyL1 / applyL2 在全部通过时调用；导出供编排测试。
+ */
+export async function finalizeArchive(
+  tx: ReviewTx,
+  submissionId: string,
+  reviewerId: string,
+  approvedAt: Date = new Date(),
+): Promise<number> {
+  const sub = await tx.submission.findUnique({
+    where: { id: submissionId },
+    include: {
+      template: true,
+      items: {
+        include: {
+          item: true,
+          attachments: true,
+          optionReviews: { include: { department: true } },
+        },
+      },
+    },
+  });
+  if (!sub) return 0;
+  const total = sub.items.reduce((sum, item) => sum + Number(item.score), 0);
+  const templateSections = await loadSectionsForArchive(tx, sub.templateId);
+  const archived = buildArchivedSnapshot(sub, templateSections, approvedAt);
   await tx.submission.update({
     where: { id: sub.id },
     data: {
       status: 'L2_APPROVED',
       l2ReviewerId: reviewerId,
-      l2ReviewedAt: new Date(),
+      l2ReviewedAt: approvedAt,
       totalScore: total,
     },
   });
@@ -244,7 +353,7 @@ async function finalizeArchive(
       archivedData: archived as unknown as Prisma.InputJsonValue,
     },
   });
-  await persistSubmissionDimensionFacts(tx, sub.id, new Date());
+  await persistSubmissionDimensionFacts(tx, sub.id, approvedAt);
   return total;
 }
 

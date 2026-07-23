@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDateOnly, computeItemScore, UpsertSchema } from './submission-validator';
+import { parseDateOnly, computeItemScore } from './submission-score';
+import { UpsertSchema } from './submission-validator';
 
 describe('parseDateOnly', () => {
   it('解析标准 YYYY-MM-DD 格式', () => {

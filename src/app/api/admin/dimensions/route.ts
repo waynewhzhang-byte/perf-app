@@ -5,7 +5,7 @@
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
-import { buildPerformanceDimensionTree } from '@/lib/performance-dimension-registry';
+import { buildPerformanceDimensionTree } from '@/lib/scoring-standards';
 
 export async function GET() {
   try {

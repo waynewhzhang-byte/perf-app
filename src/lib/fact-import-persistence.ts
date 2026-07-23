@@ -10,7 +10,7 @@ import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import type { PrismaClient, PerformanceFactRole } from '@prisma/client';
 import type { TicketExecutionAggregate } from '@/lib/ticket-execution-import';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/scoring-standards';
 import {
   replaceFactsBySource,
   type PerformanceFactSeed,

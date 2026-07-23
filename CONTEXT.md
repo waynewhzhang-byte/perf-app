@@ -12,6 +12,10 @@ _Avoid_: 绩效考核（口语化、含义更宽）
 
 **申报（Declaration / Submission）**:
 员工对一份申报模板的填写与提交，是一年一次的产物；同一员工同一模板只有一份。
+服务端入口 module 为 `declaration-workflow`（`upsertDeclaration`），与审核工作流
+（`review-workflow` / `applyL1`·`applyL2`）对称：Route 开事务传入 `tx`，通知在事务外发送。
+填报页预览分与工龄分别复用 `submission-score.computeItemScore` /
+`pre-review.calculateFullWorkYears`（与服务端同源），不在页面内联第二套算法。
 _Avoid_: 报名、报名表、申请
 
 **申报模板（Form Template）**:
@@ -51,15 +55,23 @@ _Avoid_: 申报数据（与"申报"本身混淆）
 **评分规则引擎（Scoring Rule Engine）**:
 对导入事实按 `ScoringRule` 配置（`MATRIX` / `SHARE` / `NORMALIZE` / `BASIC_TIER`）
 计算得分的纯函数模块（`src/lib/scoring-engine.ts`）。规则存 DB 可配置，但仅服务系统导入维度。
+缺陷治理（`worksite.defect-governance`）计分只走引擎 MATRIX：分组键为
+`employeeNo|defectRef|defectLevel`（每缺陷独立计分；同缺陷兼岗取高）。
+`defect-governance` 模块只负责问题清单 Excel 解析与姓名分拆，不再内嵌矩阵计分。
+_Avoid_: 在导入 adapter 里再写一套角色×等级查分
 
 **评分标准（Scoring Standard）**:
 《年度能级评价量化积分表》的权威映射：每个维度的满分、数据来源
-（`fact` / `manual` / `deduction`）、规则类型、归属部门。`SCORING_STANDARDS` 是单一事实源，
-`performance-dimension-registry.ts`、`evaluation-dimensions.ts` 都派生自它。
+（`fact` / `manual` / `deduction`）、规则类型、归属部门。`SCORING_STANDARDS` 是单一事实源；
+章节树、查询 helper、导入维度快捷常量均在同模块（`scoring-standards.ts`）派生。
+_Avoid_: 在第二份 registry / dimension-codes 文件里硬编码维度列表
+
 
 **维度聚合（Dimension Aggregation）**:
 对已计分的绩效事实与基本素质事实，按维度求和、按评分标准封顶、按策略做两票归一化，
 得到每人各维度总分。位于评分规则引擎（导入计分）之后、绩效分表展示 / 年度量化报表导出之前。
+权威入口为 `aggregateEmployeeDimensions`；绩效分表对 `dataSource=fact` 的导入维度得分
+读自该聚合（明细行仍由分表生成），年度量化报表直接消费同一 totals。
 两票归一化的 cohort（申报能级 vs 岗位专业）由调用方显式指定，不是第二套封顶表。
 _Avoid_: 二次计分、报表引擎、分表引擎
 
@@ -127,8 +139,10 @@ _Avoid_: 档案（过于宽泛）、考评结果
 
 **归档快照（Archived Snapshot）**:
 `PerformanceRecord.archivedData` —— L2 全部通过时写入的 submission + items + attachments +
-section scores + templateMaxScore 的完整 JSON 副本。模板发布后基本 immutable，
-快照不随代码版本漂移。**不要替换快照语义为实时 join**（见 ADR-0002）。
+section scores + templateMaxScore 的完整 JSON 副本。拼装入口为纯函数
+`buildArchivedSnapshot`（`finalizedAt` 注入）；`finalizeArchive` 负责落库编排
+（submission → PerformanceRecord → SubmissionDimensionFact），仍只由 applyL1/L2 调用。
+模板发布后基本 immutable，快照不随代码版本漂移。**不要替换快照语义为实时 join**（见 ADR-0002）。
 
 **申报表头字段（Declaration Header Fields）**:
 提交时刻固化的员工信息快照（工区、入职时间、申报等级、申报专业、工龄）。
