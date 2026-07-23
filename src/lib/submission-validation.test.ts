@@ -140,12 +140,18 @@ describe('UpsertSchema', () => {
     assert.equal(result.success, false);
   });
 
-  it('confirmationStatus 只能是 CONFIRMED 或 DISPUTED', () => {
+  it('confirmationStatus 支持清空已选择的确认或申诉状态', () => {
     const ok = UpsertSchema.safeParse({
       templateId: 'tpl-01',
       items: [{ itemId: 'i1', selected: [], confirmationStatus: 'CONFIRMED' }],
     });
     assert.ok(ok.success);
+
+    const cleared = UpsertSchema.safeParse({
+      templateId: 'tpl-01',
+      items: [{ itemId: 'i1', selected: [], confirmationStatus: null, disputeReason: null }],
+    });
+    assert.ok(cleared.success);
 
     const bad = UpsertSchema.safeParse({
       templateId: 'tpl-01',

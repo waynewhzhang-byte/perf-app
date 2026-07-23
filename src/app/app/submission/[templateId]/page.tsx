@@ -328,6 +328,17 @@ export default function SubmissionPage() {
     }
   };
 
+  const cancelFactDispute = (itemId: string) => {
+    setFactsConfirmations((previous) => {
+      const { [itemId]: _removed, ...next } = previous;
+      return next;
+    });
+    setFactsDisputes((previous) => {
+      const { [itemId]: _removed, ...next } = previous;
+      return next;
+    });
+  };
+
   const save = async (submit: boolean) => {
     if (!tpl) return;
     if (submit) {
@@ -392,8 +403,8 @@ export default function SubmissionPage() {
             itemId: fi.itemId,
             selected: fi.facts.map((f, index) => ({ index, label: `${f.defectLevel || f.role} ${f.defectRef}`, score: f.score })),
             isSystemFilled: true as any,
-            confirmationStatus: factsConfirmations[fi.itemId] || undefined,
-            disputeReason: factsDisputes[fi.itemId] || undefined,
+            confirmationStatus: factsConfirmations[fi.itemId] ?? null,
+            disputeReason: factsDisputes[fi.itemId] ?? null,
           })),
         ],
       }),
@@ -653,9 +664,20 @@ export default function SubmissionPage() {
                     </span>
                   )}
                   {disputed && (
-                    <span className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
-                      申诉中
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
+                        申诉中
+                      </span>
+                      {itemEditable && (
+                        <button
+                          type="button"
+                          onClick={() => cancelFactDispute(fi.itemId)}
+                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 cursor-pointer"
+                        >
+                          取消申诉
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
                 {disputed && (

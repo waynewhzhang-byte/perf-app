@@ -302,10 +302,12 @@ export async function POST(req: Request) {
 
             const payload = items.find((i) => i.itemId === sys.itemId);
             const existingItem = existingMap.get(sys.itemId);
-            const confStatus = (payload?.confirmationStatus ??
-              existingItem?.confirmationStatus) as ConfirmationStatus | undefined;
-            const disputeReason =
-              payload?.disputeReason ?? existingItem?.disputeReason ?? null;
+            const confStatus = (payload && 'confirmationStatus' in payload
+              ? payload.confirmationStatus
+              : existingItem?.confirmationStatus) as ConfirmationStatus | null | undefined;
+            const disputeReason = confStatus === 'DISPUTED'
+              ? payload?.disputeReason ?? existingItem?.disputeReason ?? null
+              : null;
             const title = itemTitleById.get(sys.itemId) ?? sys.title;
 
             if (submit) {
@@ -334,8 +336,18 @@ export async function POST(req: Request) {
                 score: sys.score,
                 status: itemStatus,
                 isSystemFilled: true,
-                ...(confStatus ? { confirmationStatus: confStatus } : {}),
+                confirmationStatus: confStatus ?? null,
                 disputeReason,
+                ...(confStatus === 'DISPUTED' ? {} : {
+                  disputeL1Result: null,
+                  disputeL1Note: null,
+                  disputeL1ReviewerId: null,
+                  disputeL1ReviewedAt: null,
+                  disputeL2Result: null,
+                  disputeL2Note: null,
+                  disputeL2ReviewerId: null,
+                  disputeL2ReviewedAt: null,
+                }),
                 rejectReason: null,
               },
               create: {
@@ -345,7 +357,7 @@ export async function POST(req: Request) {
                 score: sys.score,
                 status: itemStatus,
                 isSystemFilled: true,
-                ...(confStatus ? { confirmationStatus: confStatus } : {}),
+                confirmationStatus: confStatus ?? null,
                 disputeReason,
               },
             });
