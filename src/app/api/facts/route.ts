@@ -12,7 +12,7 @@ import {
   BASIC_DIMENSION_LABELS,
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
-import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import { loadPerformanceScoreSheet, loadTicketSpecialtyMaxRaw } from '@/lib/performance-score-sheet';
 import { sourceDimensionCodes, sourceDimensionTitle } from '@/lib/scoring-standards';
 import { effectiveHireDate } from '@/lib/declaration-level';
 import {
@@ -21,6 +21,7 @@ import {
   isFactDataSourceDimension,
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
+import { buildDerivation, type DerivationInputFact } from '@/lib/fact-derivation';
 
 export async function GET(req: Request) {
   const s = await getSession(false);
@@ -57,8 +58,11 @@ export async function GET(req: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: s.userId },
-    select: { employeeNo: true, hireDate: true, profile: true },
+    select: { employeeNo: true, hireDate: true, profile: true, branch: { select: { name: true } } },
   });
+
+  // 两票折算基准：同专业原始分最高值（仅两票维度需要，其他维度传入 undefined 忽略）
+  const ticketCohortMax = await loadTicketSpecialtyMaxRaw(prisma, template.year, user?.branch?.name);
 
   const factBoundItems = sections.flatMap((sec) =>
     sec.items
@@ -108,6 +112,15 @@ export async function GET(req: Request) {
       if (isBasicDimensionCode(code)) {
         const dim = basicDimensionFromCode(code);
         const fact = basicFacts.find((f) => f.dimension === dim);
+        const basicDerivationFacts: DerivationInputFact[] = fact ? [{
+          id: fact.id,
+          tierValue: fact.tierValue ?? undefined,
+          score: Number(fact.score),
+          label: dim ? BASIC_DIMENSION_LABELS[dim] : code,
+          thirdLevelTitle: sourceDimensionTitle(code),
+          yearBreakdown: fact.yearBreakdown,
+          sourceFile: fact.sourceFile ?? undefined,
+        } as DerivationInputFact] : [];
         return {
           itemId: item.id,
           itemTitle: item.title,
@@ -131,10 +144,24 @@ export async function GET(req: Request) {
             },
           ] : [],
           totalScore: sys.score,
+          // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
+          derivation: buildDerivation(code, basicDerivationFacts, { finalScore: sys.score }) ?? undefined,
         };
       }
 
       const facts = perfFacts.filter((f) => sourceDimensionCodes(code).includes(f.dimensionCode));
+      const perfDerivationFacts: DerivationInputFact[] = facts.map((f) => ({
+        id: f.id,
+        score: Number(f.score),
+        role: f.role ?? undefined,
+        defectRef: f.defectRef ?? undefined,
+        defectLevel: f.defectLevel ?? undefined,
+        eventDate: f.eventDate,
+        label: f.dimensionTitle || f.dimensionCode,
+        thirdLevelTitle: sourceDimensionTitle(f.dimensionCode),
+        metadata: f.metadata,
+        sourceFile: f.sourceFile ?? undefined,
+      } satisfies DerivationInputFact));
       return {
         itemId: item.id,
         itemTitle: item.title,
@@ -161,6 +188,8 @@ export async function GET(req: Request) {
           sourceFile: f.sourceFile,
         })),
         totalScore: sys.score,
+        // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
+        derivation: buildDerivation(code, perfDerivationFacts, { finalScore: sys.score, ticketCohortMax }) ?? undefined,
       };
     })
     .filter((row): row is NonNullable<typeof row> => row != null);

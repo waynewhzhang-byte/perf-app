@@ -319,7 +319,7 @@ function buildNormalizeDerivation(
   // 第一段：原始分
   if (breakdown && (breakdown.operationItems ?? 0) > 0) {
     steps.push({
-      label: `操作票 ${breakdown.operationItems} 项 × ${operationStepPrice} = ${round2(breakdown.operationPoints ?? breakdown.operationItems * operationStepPrice)}`,
+      label: `操作票 ${breakdown.operationItems!} 项 × ${operationStepPrice} = ${round2(breakdown.operationPoints ?? breakdown.operationItems! * operationStepPrice)}`,
     });
   }
   if (breakdown && (breakdown.workLeaderPoints ?? 0) > 0) {
