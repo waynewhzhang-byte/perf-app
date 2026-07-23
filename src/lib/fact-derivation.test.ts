@@ -198,3 +198,26 @@ describe('buildDerivation — MANUAL (技术贡献/竞赛/创新)', () => {
     assert.match(d.steps[0]!.label, /暂无导入事实/);
   });
 });
+
+describe('buildDerivation — overrideScore 提示', () => {
+  it('overrideScore 与原始推算不一致时前置提示', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 's1', tierValue: '技师', score: 3 },
+    ];
+    // 系统原始推算 3 分，审核员改为 5 分
+    const d = buildDerivation('basic.skill-level', facts, { finalScore: 5, overrideScore: 5 })!;
+    const note = d.steps.find((s) => s.kind === 'note');
+    assert.ok(note, '应包含 note 步骤');
+    assert.match(note!.label, /审核员调整为 5 分.*原始推算.*3 分/);
+    // note 在最前
+    assert.equal(d.steps[0]!.kind, 'note');
+  });
+
+  it('overrideScore 与原始推算一致时不加提示', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 's1', tierValue: '技师', score: 3 },
+    ];
+    const d = buildDerivation('basic.skill-level', facts, { finalScore: 3, overrideScore: 3 })!;
+    assert.equal(d.steps.find((s) => s.kind === 'note'), undefined);
+  });
+});

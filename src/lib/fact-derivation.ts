@@ -87,24 +87,58 @@ export function buildDerivation(
     steps: [],
   };
 
+  let result: Derivation;
   switch (standard.ruleType) {
     case 'BASIC_TIER':
-      return buildBasicTierDerivation(base, facts, context, standard.code);
+      result = buildBasicTierDerivation(base, facts, context, standard.code);
+      break;
     case 'SHARE':
-      return buildShareDerivation(base, facts, context, standard.code);
+      result = buildShareDerivation(base, facts, context, standard.code);
+      break;
     case 'MATRIX_SUM':
-      return buildMatrixDerivation(base, facts, context, standard.code);
+      result = buildMatrixDerivation(base, facts, context, standard.code);
+      break;
     case 'NORMALIZE':
-      return buildNormalizeDerivation(base, facts, context, standard.code);
+      result = buildNormalizeDerivation(base, facts, context, standard.code);
+      break;
     case 'DEDUCTION':
-      return buildDeductionDerivation(base, facts, context, standard.code);
+      result = buildDeductionDerivation(base, facts, context, standard.code);
+      break;
     case 'MANUAL_TIERS':
     case 'MANUAL_COUNTED':
-      return buildManualAggregateDerivation(base, facts, context, standard.code);
+      result = buildManualAggregateDerivation(base, facts, context, standard.code);
+      break;
     default:
       return null;
   }
+
+  // overrideScore 与系统原始推算不一致时，前置诚实提示。
+  // finalScore 可能已是 override 后的值，故对比维度是 overrideScore vs 原始聚合（来自 facts）。
+  if (context.overrideScore != null) {
+    const originalAggregate = computeOriginalAggregate(standard.code, facts, context);
+    const notice = overrideNotice(context.overrideScore, originalAggregate);
+    if (notice) {
+      result = { ...result, steps: [notice, ...result.steps] };
+    }
+  }
+
+  return result;
 }
+
+/** 计算"系统原始推算"得分（不含 override），用于 overrideNotice 对比。 */
+function computeOriginalAggregate(code: string, facts: DerivationInputFact[], context: DerivationContext): number {
+  const standard = SCORING_STANDARD_BY_CODE[code];
+  if (!standard) return 0;
+  if (facts.length === 0) return 0;
+  if (standard.ruleType === 'NORMALIZE') {
+    const raw = facts[0]!.score;
+    const cohortMax = context.ticketCohortMax ?? raw;
+    const targetMax = (ruleConfigFor(code)?.targetMaxScore as number | undefined) ?? standard.maxScore;
+    return cohortMax > 0 ? round2((raw / cohortMax) * targetMax) : 0;
+  }
+  return round2(facts.reduce((s, f) => s + f.score, 0));
+}
+
 
 // ── 专用组装函数（后续 Task 实现）──
 function buildBasicTierDerivation(
