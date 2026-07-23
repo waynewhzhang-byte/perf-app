@@ -109,11 +109,39 @@ export function buildDerivation(
 // ── 专用组装函数（后续 Task 实现）──
 function buildBasicTierDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
+  facts: DerivationInputFact[],
   _context: DerivationContext,
-  _code: string,
+  code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const fact = facts[0]!;
+  const standard = SCORING_STANDARD_BY_CODE[code]!;
+  const steps: DerivationStep[] = [];
+
+  // 绩效等级：展示近三年考核组合（yearBreakdown 存在时）
+  if (code === 'basic.performance-level') {
+    const yb = (fact as DerivationInputFact & { yearBreakdown?: Record<string, string> }).yearBreakdown;
+    if (yb && typeof yb === 'object') {
+      const years = Object.keys(yb).sort();
+      if (years.length > 0) {
+        const chain = years.map((y) => `${y}→${yb[y]}`).join('，');
+        steps.push({
+          label: `近三年考核：${chain} → 组合档位 ${fact.tierValue ?? ''}`.trim(),
+        });
+      }
+    }
+  }
+
+  steps.push({ label: `档位 ${fact.tierValue ?? ''} → ${fact.score} 分` });
+
+  // 触顶提示（BASIC_TIER 的档位分即最终分；仅当等于 maxScore 时标注封顶语义）
+  if (standard.maxScore > 0 && fact.score >= standard.maxScore) {
+    steps.push({ label: `封顶 ${standard.maxScore}`, kind: 'cap' });
+  }
+
+  return { ...base, steps };
 }
 function buildShareDerivation(
   base: Derivation,
