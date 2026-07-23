@@ -30,7 +30,8 @@ export async function GET(req: Request) {
     });
     if (rows.length === 0) return NextResponse.json({ error: '当前范围没有可导出的年度事实数据' }, { status: 404 });
 
-    return new NextResponse(buffer, {
+    // Node 22+/24 下 Buffer 泛型与 BodyInit 不兼容，用 Uint8Array 包装
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(quantitativeReportFilename(unit))}`,
