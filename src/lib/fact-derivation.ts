@@ -341,11 +341,33 @@ function buildDeductionDerivation(
 }
 function buildManualAggregateDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
+  facts: DerivationInputFact[],
   _context: DerivationContext,
-  _code: string,
+  code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const standard = SCORING_STANDARD_BY_CODE[code]!;
+  const steps: DerivationStep[] = [];
+
+  // 按细分维度（thirdLevelTitle）汇总
+  const bySub = new Map<string, number>();
+  for (const f of facts) {
+    const key = f.thirdLevelTitle ?? f.label ?? '导入事实';
+    bySub.set(key, (bySub.get(key) ?? 0) + f.score);
+  }
+  for (const [sub, score] of bySub) {
+    steps.push({ label: `${sub} → ${round2(score)}` });
+  }
+
+  const raw = facts.reduce((s, f) => s + f.score, 0);
+  steps.push({ label: `小计 ${round2(raw)}`, kind: 'subtotal' });
+
+  if (standard.maxScore > 0 && raw >= standard.maxScore) {
+    steps.push({ label: `封顶 ${standard.maxScore}`, kind: 'cap' });
+  }
+  return { ...base, steps };
 }
 
 /** 模块私有：保留两位小数（区别于 dimension-aggregation 的 round1）。 */

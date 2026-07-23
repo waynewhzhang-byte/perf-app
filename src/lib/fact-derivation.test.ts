@@ -171,3 +171,30 @@ describe('buildDerivation — DEDUCTION (违章扣分)', () => {
     assert.match(d.steps[0]!.label, /暂无导入事实/);
   });
 });
+
+describe('buildDerivation — MANUAL (技术贡献/竞赛/创新)', () => {
+  it('技术贡献：按细分维度汇总并封顶', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'x1', thirdLevelTitle: '教材/题库/课件开发', label: '教材', score: 6 },
+      { id: 'x2', thirdLevelTitle: '运规编写/会审', label: '运规', score: 2 },
+    ];
+    const d = buildDerivation('performance.technical-contribution', facts, { finalScore: 8 })!;
+    assert.ok(d.steps.some((s) => /教材\/题库\/课件开发.*6/.test(s.label)));
+    assert.ok(d.steps.some((s) => /运规编写\/会审.*2/.test(s.label)));
+    assert.ok(d.steps.some((s) => s.kind === 'subtotal' && /小计 8/.test(s.label)));
+  });
+
+  it('触顶显示封顶 12', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'x1', thirdLevelTitle: '教材/题库/课件开发', score: 8 },
+      { id: 'x2', thirdLevelTitle: '运规编写/会审', score: 6 },
+    ];
+    const d = buildDerivation('performance.technical-contribution', facts, { finalScore: 12 })!;
+    assert.ok(d.steps.some((s) => s.kind === 'cap' && /封顶 12/.test(s.label)));
+  });
+
+  it('无事实返回 emptyFactsSteps', () => {
+    const d = buildDerivation('performance.competition', [], { finalScore: 0 })!;
+    assert.match(d.steps[0]!.label, /暂无导入事实/);
+  });
+});
