@@ -115,6 +115,14 @@ export default function SubmissionPage() {
   const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
   const [factsItemDbIds, setFactsItemDbIds] = useState<Record<string, string>>({});
   const [factsAttachments, setFactsAttachments] = useState<Record<string, Attachment[]>>({});
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const toggleExpand = (itemId: string) =>
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -663,6 +671,85 @@ export default function SubmissionPage() {
                         </p>
                       ))}
                     </div>
+                    {fi.derivation && fi.factKind !== 'profile' && (
+                      <div className="mt-2 border-t border-slate-100 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(fi.itemId)}
+                          className="text-xs font-medium text-slate-500 transition-colors hover:text-slate-700 cursor-pointer"
+                        >
+                          {expandedItems.has(fi.itemId) ? '▴ 收起' : '▾ 展开原始数据与积分过程'}
+                        </button>
+                      </div>
+                    )}
+                    {fi.derivation && expandedItems.has(fi.itemId) && (
+                      <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        {/* overrideScore 诚实提示（note 步骤置顶） */}
+                        {fi.derivation.steps.filter((s) => s.kind === 'note').map((s, i) => (
+                          <p key={`note-${i}`} className="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-800">
+                            ⚠ {s.label}
+                          </p>
+                        ))}
+
+                        {/* 1. 原始台账明细 */}
+                        <div>
+                          <p className="text-xs font-semibold text-slate-600">原始台账明细</p>
+                          <div className="mt-1 space-y-0.5">
+                            {fi.derivation.rawFactFields.length === 0 ? (
+                              <p className="text-xs text-slate-400">暂无导入事实</p>
+                            ) : (
+                              fi.derivation.rawFactFields.map((rf) => (
+                                <p key={rf.id} className="text-xs text-slate-500">
+                                  {rf.thirdLevelTitle && <span className="font-medium">{rf.thirdLevelTitle}</span>}
+                                  {rf.defectLevel && ` · ${rf.defectLevel}`}
+                                  {rf.defectRef && ` · ${rf.defectRef}`}
+                                  {rf.role && ` · ${rf.role}`}
+                                  {rf.tierValue && ` · 档位 ${rf.tierValue}`}
+                                  {rf.eventDate && ` · ${String(rf.eventDate).slice(0, 10)}`}
+                                  {' → '}<b>{rf.score} 分</b>
+                                  {rf.sourceFile && <span className="text-slate-400"> · 来源：{rf.sourceFile}</span>}
+                                </p>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 2. 计分规则 */}
+                        <div className="border-t border-slate-200 pt-2">
+                          <p className="text-xs font-semibold text-slate-600">计分规则</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{fi.derivation.ruleSummary}</p>
+                          {fi.derivation.referenceFile && (
+                            <p className="mt-0.5 text-xs text-slate-400">参考台账：{fi.derivation.referenceFile}</p>
+                          )}
+                          {fi.derivation.notes && (
+                            <p className="mt-0.5 text-xs text-amber-700">备注：{fi.derivation.notes}</p>
+                          )}
+                        </div>
+
+                        {/* 3. 积分过程 */}
+                        <div className="border-t border-slate-200 pt-2">
+                          <p className="text-xs font-semibold text-slate-600">积分过程</p>
+                          <ol className="mt-1 space-y-1">
+                            {fi.derivation.steps.filter((s) => s.kind !== 'note').map((s, i) => (
+                              <li key={i} className={`flex items-start gap-2 text-xs ${
+                                s.kind === 'final' ? 'font-semibold text-emerald-700' :
+                                s.kind === 'cap' ? 'text-slate-600' :
+                                s.kind === 'subtotal' ? 'text-slate-600' :
+                                'text-slate-500'
+                              }`}>
+                                <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-medium text-slate-600">
+                                  {i + 1}
+                                </span>
+                                <span>
+                                  {s.label}
+                                  {s.detail && <span className="ml-1 text-slate-400">（{s.detail}）</span>}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {!confirmed && !disputed && (
                     <div className="flex shrink-0 gap-2">
