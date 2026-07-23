@@ -13,7 +13,9 @@ import {
 const prisma = new PrismaClient();
 
 const YEAR = 2026;
-const TITLE = '2026年度能级评价申报表（评分标准对应表）';
+const TITLE = '2026年能级评价量化积分申报表';
+const DESCRIPTION =
+  '国网山西超高压变电公司2026年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分，请逐项「确认」或「申诉」（提交申诉理由和证明材料）。';
 
 type ScoreOption = { optionId: string; label: string; score: number; description?: string };
 
@@ -86,7 +88,7 @@ async function main() {
     data: {
       year: YEAR,
       title: TITLE,
-      description: '本模板严格对应《0.20260716评分标准 对应表.xlsx》。全部绩效维度均由系统带出事实及自动计算分数；员工仅可确认，或提交申诉理由和证明材料。',
+      description: DESCRIPTION,
       headerFields: [
         { key: 'workArea', enabled: false, required: false },
         { key: 'hireDate', enabled: false, required: false },

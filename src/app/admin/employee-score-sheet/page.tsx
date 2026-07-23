@@ -103,6 +103,11 @@ export default function EmployeeScoreSheetPage() {
 
   useEffect(() => {
     loadEmployees();
+    const params = new URLSearchParams(window.location.search);
+    const linkedEmployeeNo = params.get('employeeNo');
+    const linkedYear = Number(params.get('year'));
+    if (linkedEmployeeNo) setEmployeeNo(linkedEmployeeNo);
+    if (linkedYear >= 2000 && linkedYear <= 2100) setYear(linkedYear);
   }, [loadEmployees]);
 
   const filteredEmployees = useMemo(() => {

@@ -21,6 +21,13 @@ interface RecordDetail {
     submissionId: string;
     userId: string;
     templateId: string;
+    declarationHeader?: {
+      workAreaName?: string | null;
+      hireDate?: string | null;
+      workYears?: number | null;
+      declarationLevelName?: string | null;
+      declarationSpecialtyName?: string | null;
+    };
     items: {
       itemId: string;
       itemTitle: string;
@@ -75,6 +82,7 @@ export default function RecordsPage() {
 
   // 按 itemId 分组，还原章节结构（简化：直接按顺序排列）
   const items = detail?.archivedData?.items ?? [];
+  const declarationHeader = detail?.archivedData?.declarationHeader;
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -134,6 +142,16 @@ export default function RecordsPage() {
                           归档时间：{new Date(detail.archivedData.finalizedAt).toLocaleString('zh-CN')}
                         </p>
                       </div>
+
+                      {declarationHeader && (
+                        <div className="grid gap-2 rounded-lg border border-slate-200 p-3 text-xs text-slate-600 sm:grid-cols-5">
+                          <span>工区：{declarationHeader.workAreaName || '—'}</span>
+                          <span>入职时间：{declarationHeader.hireDate ? String(declarationHeader.hireDate).slice(0, 10) : '—'}</span>
+                          <span>工作年限：{declarationHeader.workYears ?? '—'}</span>
+                          <span>能级等级：{declarationHeader.declarationLevelName || '—'}</span>
+                          <span>评价专业：{declarationHeader.declarationSpecialtyName || '—'}</span>
+                        </div>
+                      )}
 
                       <SectionRadarPanel
                         fetchUrl={expandedId ? `/api/records/${expandedId}/radar` : null}

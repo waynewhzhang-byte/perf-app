@@ -2,11 +2,15 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
+import { EmployeeFactPanel } from '@/components/employee-fact-panel';
 import { SectionRadarPanel } from '@/components/section-radar-panel';
+import { QuantitativeReportAnalysis } from '@/components/quantitative-report-analysis';
 import type { ReviewProgress } from '@/lib/review-progress';
 
 interface Template { id: string; title: string; year: number }
+interface DictItem { id: string; name: string }
 interface Stats { count: number; avgScore: number; maxScore: number; minScore: number }
+interface BranchBreakdown { unit: string; employeeCount: number; averageTotalScore: number }
 interface RecordItem {
   itemId: string; itemTitle: string; score: number;
   selected: { label: string; score: number }[];
@@ -15,12 +19,16 @@ interface EmployeeRecord {
   submissionId: string; userId: string; userName: string;
   employeeNo: string | null; contact: string;
   branch: string; department: string;
+  declarationLevel: string; declarationSpecialty: string;
   totalScore: number; items: RecordItem[];
 }
 interface Report {
   templateId: string; templateTitle: string; templateYear: number;
-  stats: Stats; records: EmployeeRecord[]; progress: ReviewProgress | null;
+  stats: Stats; branchBreakdown: BranchBreakdown[];
+  records: EmployeeRecord[]; progress: ReviewProgress | null;
 }
+
+const ALL = '';
 
 function distributionBuckets(min: number, max: number, buckets = 8) {
   if (min === max) return [{ label: `${min.toFixed(0)}`, min, max, count: 0 }];
@@ -34,14 +42,42 @@ function distributionBuckets(min: number, max: number, buckets = 8) {
   return result;
 }
 
+function buildFilterQuery(params: {
+  templateId: string;
+  branchId: string;
+  declarationLevelId: string;
+  declarationSpecialtyId: string;
+  complete?: boolean;
+  format?: string;
+  submissionId?: string;
+}) {
+  const q = new URLSearchParams();
+  if (params.format) q.set('format', params.format);
+  if (params.templateId) q.set('templateId', params.templateId);
+  if (params.branchId) q.set('branchId', params.branchId);
+  if (params.declarationLevelId) q.set('declarationLevelId', params.declarationLevelId);
+  if (params.declarationSpecialtyId) q.set('declarationSpecialtyId', params.declarationSpecialtyId);
+  if (params.complete) q.set('complete', '1');
+  if (params.submissionId) q.set('submissionId', params.submissionId);
+  return q.toString();
+}
+
 export default function ReportsPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [branches, setBranches] = useState<DictItem[]>([]);
+  const [declarationLevels, setDeclarationLevels] = useState<DictItem[]>([]);
+  const [declarationSpecialties, setDeclarationSpecialties] = useState<DictItem[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [selectedTpl, setSelectedTpl] = useState<string>('');
+  const [branchId, setBranchId] = useState(ALL);
+  const [declarationLevelId, setDeclarationLevelId] = useState(ALL);
+  const [declarationSpecialtyId, setDeclarationSpecialtyId] = useState(ALL);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState<string | null>(null);
+
+  const hasFilters = Boolean(branchId || declarationLevelId || declarationSpecialtyId);
 
   const active = useMemo(() => {
     if (!selectedTpl) return reports[0] ?? null;
@@ -73,43 +109,78 @@ export default function ReportsPage() {
     }
   }, []);
 
+  const exportQueryBase = useMemo(() => ({
+    templateId: selectedTpl,
+    branchId,
+    declarationLevelId,
+    declarationSpecialtyId,
+  }), [selectedTpl, branchId, declarationLevelId, declarationSpecialtyId]);
+
+  const canExportAll = Boolean(active?.progress?.complete);
+  const canExport = Boolean(selectedTpl) && (hasFilters ? (active?.records.length ?? 0) > 0 : canExportAll);
+
   const exportSummary = useCallback(async () => {
-    if (!selectedTpl || !active?.progress?.complete) return;
+    if (!selectedTpl || !canExport) return;
     setExporting('csv');
-    await downloadFile(`/api/admin/reports/export?format=csv&complete=1&templateId=${encodeURIComponent(selectedTpl)}`, 'summary.csv');
+    await downloadFile(
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'csv', complete: !hasFilters })}`,
+      'summary.csv',
+    );
     setExporting(null);
-  }, [active, selectedTpl, downloadFile]);
+  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
+
+  const exportDetail = useCallback(async () => {
+    if (!selectedTpl || !canExport) return;
+    setExporting('detail');
+    await downloadFile(
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'detail', complete: !hasFilters })}`,
+      'detail-summary.csv',
+    );
+    setExporting(null);
+  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
 
   const exportZip = useCallback(async () => {
-    if (!selectedTpl || !active?.progress?.complete) return;
+    if (!selectedTpl || !canExport) return;
     setExporting('zip');
-    await downloadFile(`/api/admin/reports/export?format=zip&complete=1&templateId=${encodeURIComponent(selectedTpl)}`, 'export.zip');
+    await downloadFile(
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'zip', complete: !hasFilters })}`,
+      'export.zip',
+    );
     setExporting(null);
-  }, [active, selectedTpl, downloadFile]);
+  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
 
   const exportEmployee = useCallback(async (submissionId: string, name: string) => {
     setExporting(submissionId);
-    await downloadFile(`/api/admin/reports/export?format=employee&submissionId=${encodeURIComponent(submissionId)}`, `${name}.zip`);
+    await downloadFile(
+      `/api/admin/reports/export?${buildFilterQuery({ templateId: selectedTpl, branchId: '', declarationLevelId: '', declarationSpecialtyId: '', format: 'employee', submissionId })}`,
+      `${name}.zip`,
+    );
     setExporting(null);
-  }, [downloadFile]);
+  }, [downloadFile, selectedTpl]);
 
   const load = useCallback(async (tplId?: string) => {
     setLoading(true); setError(null);
     try {
-      const params = tplId ? `?templateId=${tplId}` : '';
-      const r = await fetch(`/api/admin/reports${params}`);
+      const params = new URLSearchParams();
+      if (tplId) params.set('templateId', tplId);
+      if (branchId) params.set('branchId', branchId);
+      if (declarationLevelId) params.set('declarationLevelId', declarationLevelId);
+      if (declarationSpecialtyId) params.set('declarationSpecialtyId', declarationSpecialtyId);
+      const r = await fetch(`/api/admin/reports?${params}`);
       if (r.status === 401) { window.location.href = '/admin/login'; return; }
       const d = await r.json();
       if (!r.ok) { setError(d.error || '加载失败'); return; }
       setTemplates(d.templates ?? []);
+      setBranches(d.branches ?? []);
+      setDeclarationLevels(d.declarationLevels ?? []);
+      setDeclarationSpecialties(d.declarationSpecialties ?? []);
       setReports(d.reports ?? []);
     } catch { setError('网络错误'); }
     finally { setLoading(false); }
-  }, []);
+  }, [branchId, declarationLevelId, declarationSpecialtyId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  // Auto-select first template
   useEffect(() => {
     if (!selectedTpl && templates.length > 0) setSelectedTpl(templates[0].id);
   }, [templates, selectedTpl]);
@@ -147,13 +218,14 @@ export default function ReportsPage() {
 
   const maxDistCount = Math.max(1, ...dist.map((d) => d.count));
   const maxItemAvg = Math.max(1, ...perItemAvg.map((i) => i.avg));
+  const maxBranchCount = Math.max(1, ...(active?.branchBreakdown ?? []).map((b) => b.employeeCount));
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">报表分析</h1>
-          <p className="mt-1 text-sm text-slate-500">已审核通过员工的分值统计，按申报表分类</p>
+          <p className="mt-1 text-sm text-slate-500">年度量化积分全员分析与终审申报结果汇总，支持全局与个人多维报表及导出</p>
         </div>
         <AdminPageActions />
       </div>
@@ -162,40 +234,78 @@ export default function ReportsPage() {
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      {/* 模板选择器 */}
-      <div className="mb-4 flex items-center gap-3">
-        <label className="text-sm text-slate-600">
-          选择表单：
-          <select
-            value={selectedTpl}
-            onChange={(e) => setSelectedTpl(e.target.value)}
-            className="ml-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-          >
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>{t.title}（{t.year}）</option>
-            ))}
-          </select>
-        </label>
-        <button onClick={() => load(selectedTpl)} disabled={loading} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
-          {loading ? '加载中…' : '刷新'}
-        </button>
-        <div className="ml-auto flex items-center gap-2">
+      <QuantitativeReportAnalysis />
+
+      <div className="mb-4 border-t border-slate-200 pt-8">
+        <h2 className="text-lg font-semibold text-slate-900">终审申报结果汇总</h2>
+        <p className="mt-1 text-sm text-slate-500">仅统计完成两级审核的申报快照；可按工区、能级、专业筛选并导出。</p>
+      </div>
+
+      <div className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-slate-600">
+            申报表
+            <select
+              value={selectedTpl}
+              onChange={(e) => setSelectedTpl(e.target.value)}
+              className="ml-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium shadow-sm"
+            >
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>{t.title}（{t.year}）</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-slate-600">
+            工区
+            <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
+              <option value="">全部</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-slate-600">
+            能级等级
+            <select value={declarationLevelId} onChange={(e) => setDeclarationLevelId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
+              <option value="">全部</option>
+              {declarationLevels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-slate-600">
+            能级专业
+            <select value={declarationSpecialtyId} onChange={(e) => setDeclarationSpecialtyId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
+              <option value="">全部</option>
+              {declarationSpecialties.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <button onClick={() => void load(selectedTpl)} disabled={loading} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+            {loading ? '加载中…' : '应用筛选'}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
           <button
             onClick={exportSummary}
-            disabled={!selectedTpl || !active?.progress?.complete || exporting !== null}
-            title={active?.progress?.complete ? '导出全员完整绩效报表' : '须等待全体员工完成两级审核'}
+            disabled={!canExport || exporting !== null}
+            title={hasFilters ? '导出当前筛选范围的汇总表' : canExportAll ? '导出全员汇总表' : '须等待全体员工完成两级审核'}
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {exporting === 'csv' ? '导出中…' : '导出汇总表 (CSV)'}
+            {exporting === 'csv' ? '导出中…' : '汇总表 (CSV)'}
+          </button>
+          <button
+            onClick={exportDetail}
+            disabled={!canExport || exporting !== null}
+            title={hasFilters ? '导出当前筛选范围的明细汇总' : canExportAll ? '导出全员明细汇总' : '须等待全体员工完成两级审核'}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {exporting === 'detail' ? '导出中…' : '明细汇总 (CSV)'}
           </button>
           <button
             onClick={exportZip}
-            disabled={!selectedTpl || !active?.progress?.complete || exporting !== null}
-            title={active?.progress?.complete ? '导出全员完整绩效档案' : '须等待全体员工完成两级审核'}
+            disabled={!canExport || exporting !== null}
+            title={hasFilters ? '导出当前筛选范围的完整档案' : canExportAll ? '导出全员完整档案' : '须等待全体员工完成两级审核'}
             className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
-            {exporting === 'zip' ? '打包中…' : '导出完整档案 (ZIP)'}
+            {exporting === 'zip' ? '打包中…' : '完整档案 (ZIP)'}
           </button>
+          {hasFilters && <span className="ml-auto text-xs text-slate-500">已启用筛选，可导出当前范围数据</span>}
         </div>
       </div>
 
@@ -246,7 +356,6 @@ export default function ReportsPage() {
             </section>
           )}
 
-          {/* 汇总统计卡片 */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard label="审核通过人数" value={active.stats.count} unit="人" color="text-slate-900" />
             <StatCard label="平均分" value={Number(active.stats.avgScore.toFixed(1))} unit="分" color="text-blue-600" />
@@ -254,9 +363,25 @@ export default function ReportsPage() {
             <StatCard label="最低分" value={active.stats.minScore} unit="分" color="text-amber-600" />
           </div>
 
-          {/* 图表区 */}
+          {active.branchBreakdown.length > 0 && !hasFilters && (
+            <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+              <h3 className="text-sm font-semibold text-slate-700">各单位终审通过分布</h3>
+              <div className="mt-4 space-y-2">
+                {active.branchBreakdown.map((branch) => (
+                  <div key={branch.unit} className="grid grid-cols-[minmax(0,1fr)_minmax(120px,1fr)_4rem_5rem] items-center gap-2 text-xs">
+                    <span className="truncate text-slate-600" title={branch.unit}>{branch.unit}</span>
+                    <div className="h-2 rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-blue-500" style={{ width: `${(branch.employeeCount / maxBranchCount) * 100}%` }} />
+                    </div>
+                    <span className="text-right tabular-nums text-slate-500">{branch.employeeCount} 人</span>
+                    <span className="text-right font-medium tabular-nums text-slate-700">均 {branch.averageTotalScore.toFixed(1)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            {/* 分值分布 */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <h3 className="text-sm font-semibold text-slate-700">总分分布</h3>
               <div className="mt-4 space-y-2">
@@ -265,10 +390,7 @@ export default function ReportsPage() {
                     <span className="w-16 shrink-0 text-right text-xs tabular-nums text-slate-500">{b.label}</span>
                     <div className="flex-1">
                       <div className="h-5 rounded bg-primary-100 overflow-hidden">
-                        <div
-                          className="h-full rounded bg-primary-500 transition-all duration-300"
-                          style={{ width: `${(b.count / maxDistCount) * 100}%` }}
-                        />
+                        <div className="h-full rounded bg-primary-500 transition-all duration-300" style={{ width: `${(b.count / maxDistCount) * 100}%` }} />
                       </div>
                     </div>
                     <span className="w-8 shrink-0 text-xs font-semibold tabular-nums text-slate-600">{b.count}</span>
@@ -277,21 +399,15 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            {/* 各项平均分 */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <h3 className="text-sm font-semibold text-slate-700">各项平均分</h3>
               <div className="mt-4 space-y-2">
                 {perItemAvg.map((item) => (
                   <div key={item.id} className="flex items-center gap-2">
-                    <span className="w-28 shrink-0 truncate text-right text-xs text-slate-500" title={item.title}>
-                      {item.title}
-                    </span>
+                    <span className="w-28 shrink-0 truncate text-right text-xs text-slate-500" title={item.title}>{item.title}</span>
                     <div className="flex-1">
                       <div className="h-5 rounded bg-amber-100 overflow-hidden">
-                        <div
-                          className="h-full rounded bg-amber-500 transition-all duration-300"
-                          style={{ width: `${(item.avg / maxItemAvg) * 100}%` }}
-                        />
+                        <div className="h-full rounded bg-amber-500 transition-all duration-300" style={{ width: `${(item.avg / maxItemAvg) * 100}%` }} />
                       </div>
                     </div>
                     <span className="w-14 shrink-0 text-xs tabular-nums text-slate-600">
@@ -304,16 +420,14 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* 员工分值明细表 */}
           <section className="mt-6 rounded-xl border border-slate-200 bg-white">
             <div className="flex items-center justify-between border-b px-5 py-3">
-              <h3 className="text-sm font-semibold text-slate-700">
-                员工分值明细（{active.records.length} 人）
-              </h3>
+              <h3 className="text-sm font-semibold text-slate-700">员工分值明细（{active.records.length} 人）</h3>
+              <p className="text-xs text-slate-400">展开可查看雷达图、申报项与事实绩效基础</p>
             </div>
 
             {active.records.length === 0 ? (
-              <p className="p-8 text-center text-sm text-slate-400">暂无记录</p>
+              <p className="p-8 text-center text-sm text-slate-400">当前筛选条件下暂无记录</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -322,7 +436,8 @@ export default function ReportsPage() {
                       <th className="w-8 py-2.5 pl-5" />
                       <th className="py-2.5 pr-3">员工</th>
                       <th className="py-2.5 pr-3">工区</th>
-                      <th className="py-2.5 pr-3">部门</th>
+                      <th className="py-2.5 pr-3">能级等级</th>
+                      <th className="py-2.5 pr-3">能级专业</th>
                       <th className="py-2.5 pr-3 text-right">总分</th>
                       <th className="w-20 py-2.5 pr-5 text-right">申报项</th>
                     </tr>
@@ -340,12 +455,11 @@ export default function ReportsPage() {
                             <p className="text-xs text-slate-400">{rec.employeeNo || rec.contact}</p>
                           </td>
                           <td className="py-3 pr-3 text-slate-600">{rec.branch || '—'}</td>
-                          <td className="py-3 pr-3 text-slate-600">{rec.department || '—'}</td>
+                          <td className="py-3 pr-3 text-slate-600">{rec.declarationLevel || '—'}</td>
+                          <td className="py-3 pr-3 text-slate-600">{rec.declarationSpecialty || '—'}</td>
                           <td className="py-3 pr-3 text-right">
                             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                              rec.totalScore >= active.stats.avgScore
-                                ? 'bg-green-100 text-green-700'
-                                : 'bg-amber-100 text-amber-700'
+                              rec.totalScore >= active.stats.avgScore ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
                             }`}>
                               {rec.totalScore.toFixed(1)}
                             </span>
@@ -359,11 +473,9 @@ export default function ReportsPage() {
                         </tr>
                         {expanded.has(rec.submissionId) && (
                           <tr key={`${rec.submissionId}-exp`}>
-                            <td colSpan={6} className="bg-slate-50 px-5 py-3">
-                              <SectionRadarPanel
-                                fetchUrl={`/api/admin/submissions/${rec.submissionId}/radar`}
-                              />
-                              <table className="mt-4 w-full text-xs">
+                            <td colSpan={7} className="space-y-4 bg-slate-50 px-5 py-4">
+                              <SectionRadarPanel fetchUrl={`/api/admin/submissions/${rec.submissionId}/radar`} />
+                              <table className="w-full text-xs">
                                 <thead>
                                   <tr className="text-slate-400">
                                     <th className="py-1.5 text-left font-medium">申报项</th>
@@ -381,17 +493,18 @@ export default function ReportsPage() {
                                           : '—'}
                                       </td>
                                       <td className="py-2 text-right">
-                                        <span className="rounded bg-slate-200 px-1.5 py-0.5 font-semibold tabular-nums text-slate-700">
-                                          {it.score.toFixed(1)}
-                                        </span>
+                                        <span className="rounded bg-slate-200 px-1.5 py-0.5 font-semibold tabular-nums text-slate-700">{it.score.toFixed(1)}</span>
                                       </td>
                                     </tr>
                                   ))}
                                 </tbody>
                               </table>
-                              <div className="mt-3 flex justify-end">
+                              {rec.employeeNo && (
+                                <EmployeeFactPanel employeeNo={rec.employeeNo} year={active.templateYear} compact />
+                              )}
+                              <div className="flex justify-end">
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); exportEmployee(rec.submissionId, `${rec.employeeNo || ''}-${rec.userName}`); }}
+                                  onClick={(e) => { e.stopPropagation(); void exportEmployee(rec.submissionId, `${rec.employeeNo || ''}-${rec.userName}`); }}
                                   disabled={exporting !== null}
                                   className="rounded-lg border border-primary-300 bg-white px-3 py-1.5 text-xs font-medium text-primary-700 hover:bg-primary-50 disabled:opacity-50"
                                 >

@@ -28,7 +28,9 @@ async function main() {
     await tx.formTemplate.update({
       where: { id: template.id },
       data: {
-        description: '本模板严格对应《0.20260716评分标准 对应表.xlsx》。全部绩效维度均由系统带出事实及自动计算分数；员工仅可确认，或提交申诉理由和证明材料。',
+        title: '2026年能级评价量化积分申报表',
+        description:
+          '国网山西超高压变电公司2026年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分，请逐项「确认」或「申诉」（提交申诉理由和证明材料）。',
         headerFields: [
           { key: 'workArea', enabled: false, required: false },
           { key: 'hireDate', enabled: false, required: false },

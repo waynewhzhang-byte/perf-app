@@ -9,6 +9,10 @@ import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFie
 import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
 import { isSystemConfirmationDimension } from '@/lib/system-filled-items';
 
+const FORM_2026_TITLE = '2026年能级评价量化积分申报表';
+const FORM_2026_DESCRIPTION =
+  '国网山西超高压变电公司2026年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分，请逐项「确认」或「申诉」（提交申诉理由和证明材料）。';
+
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
   id: string; title: string; hint?: string;
@@ -109,7 +113,14 @@ export default function SubmissionPage() {
         steps: { label: string; detail?: string; kind?: 'raw' | 'subtotal' | 'cap' | 'final' | 'note' }[];
       };
     }[];
-    scoreSheet?: { declarationTier?: string | null };
+    scoreSheet?: {
+      totalScore?: number;
+      positiveScore?: number;
+      deductionScore?: number;
+      positiveMaxScore?: number;
+      declarationTier?: string | null;
+      sections?: { code: string; title: string; score: number; maxScore: number }[];
+    };
   } | null>(null);
   const [factsConfirmations, setFactsConfirmations] = useState<Record<string, 'CONFIRMED' | 'DISPUTED'>>({});
   const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
@@ -485,8 +496,18 @@ export default function SubmissionPage() {
           <Link href="/app" className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-700 cursor-pointer">
             ← 返回
           </Link>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight">{tpl.title}</h1>
-          <p className="mt-1 text-sm text-slate-500">{tpl.description}</p>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight">
+            {tpl.year === 2026 ? FORM_2026_TITLE : tpl.title}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {tpl.year === 2026 ? FORM_2026_DESCRIPTION : tpl.description}
+          </p>
+          <Link
+            href="/app/scoring-guide"
+            className="mt-2 inline-block text-sm font-medium text-primary-600 transition-colors hover:text-primary-700"
+          >
+            查看 2026 评分规则说明 →
+          </Link>
         </div>
         <LogoutButton />
       </div>
@@ -522,6 +543,22 @@ export default function SubmissionPage() {
           <span className="text-sm font-medium text-slate-500">累计分数</span>
           <span className="text-2xl font-bold tracking-tight tabular-nums">{total.toFixed(1)}</span>
         </div>
+        {factsData?.scoreSheet?.sections && factsData.scoreSheet.sections.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+            {factsData.scoreSheet.sections
+              .filter((section) => section.code !== 'special')
+              .map((section) => (
+                <span key={section.code} className="rounded-full bg-slate-100 px-2.5 py-0.5 tabular-nums text-slate-600">
+                  {section.title} {section.score.toFixed(1)}/{section.maxScore}
+                </span>
+              ))}
+            {(factsData.scoreSheet.deductionScore ?? 0) > 0 && (
+              <span className="rounded-full bg-red-50 px-2.5 py-0.5 tabular-nums text-red-700">
+                扣分 −{factsData.scoreSheet.deductionScore!.toFixed(1)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {headerFields.filter((f) => f.enabled).length > 0 && (
@@ -607,12 +644,6 @@ export default function SubmissionPage() {
       {/* 系统自动填充项 */}
       {factsData && factsData.items.length > 0 && (
         <div className="mt-5 space-y-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-700">部门导入事实 · 系统自动计分</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              以下维度由外部台账导入，系统已按《评分标准 对应表》计算得分。请逐项「确认」或「申诉」；确认后锁定且无需审核员重复审核该项内容。
-            </p>
-          </div>
           {factsData.items.map((fi) => {
             const confirmed = factsConfirmations[fi.itemId] === 'CONFIRMED';
             const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
@@ -636,7 +667,9 @@ export default function SubmissionPage() {
                     </p>
                     <div className="mt-2 space-y-1">
                       {fi.facts.length === 0 && (
-                        <p className="text-xs text-amber-700">三级事实：暂无系统导入事实（当前按 0 分计入，可提交申诉补正）</p>
+                        <p className="text-xs text-amber-700">
+                          三级事实：暂无部门台账导入记录（当前按 0 分计入）。如有异议请申诉并上传证明材料。
+                        </p>
                       )}
                       {fi.facts.map((f) => (
                         <p key={f.id} className="text-xs text-slate-500">

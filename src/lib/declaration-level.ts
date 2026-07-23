@@ -43,6 +43,12 @@ export function computeLevel(workYears: number): DeclarationLevel {
   return '一级';
 }
 
+/** 自动计算值兼容等级字典的中文与数字两种命名。 */
+export function declarationLevelNameCandidates(level: DeclarationLevel): string[] {
+  const numericName = level === '一级' ? '1级' : level === '二级' ? '2级' : '3级';
+  return [level, numericName];
+}
+
 /** 入职日期 → 能级等级（用截至当前日期的整数年限） */
 export function levelFromHireDate(hireDate: Date, asOf: Date = new Date()): DeclarationLevel {
   let years = asOf.getFullYear() - hireDate.getFullYear();

@@ -77,39 +77,44 @@ export async function GET(req: Request) {
   const departmentId = user?.departmentId ?? null;
 
   if (filter === 'completed') {
-    const reviewedLogs = await prisma.reviewLog.findMany({
-      where: { reviewerId: s.userId },
-      select: { submissionId: true },
-      distinct: ['submissionId'],
-    });
-    const reviewedIds = reviewedLogs.map((r) => r.submissionId);
-    if (reviewedIds.length === 0) {
-      return NextResponse.json({ success: true, submissions: [], level: isL2 ? 2 : 1, filter: 'completed' });
-    }
-
-    const completedWhere: any = { id: { in: reviewedIds } };
+    const completedWhere: any = {};
     if (isL1) {
+      // 已确认的系统填充项无需逐项 L1 审核，不会产生 ReviewLog；以申报的
+      // l1ReviewerId 作为一级审核归属，才能同时覆盖这类申报和历史记录。
+      completedWhere.l1ReviewerId = s.userId;
       completedWhere.status = { not: 'SUBMITTED' };
       if (!l1ScopeWhere) {
         return NextResponse.json({ success: true, submissions: [], level: 1, filter: 'completed' });
       }
       Object.assign(completedWhere, l1ScopeWhere);
-    } else if (departmentId) {
-      completedWhere.NOT = {
-        OR: [
-          { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
-          {
-            items: {
-              some: {
-                isSystemFilled: true,
-                confirmationStatus: 'DISPUTED',
-                disputeL1Result: 'APPROVED',
-                disputeL2Result: null,
+    } else {
+      const reviewedLogs = await prisma.reviewLog.findMany({
+        where: { reviewerId: s.userId },
+        select: { submissionId: true },
+        distinct: ['submissionId'],
+      });
+      const reviewedIds = reviewedLogs.map((r) => r.submissionId);
+      if (reviewedIds.length === 0) {
+        return NextResponse.json({ success: true, submissions: [], level: 2, filter: 'completed' });
+      }
+      completedWhere.id = { in: reviewedIds };
+      if (departmentId) {
+        completedWhere.NOT = {
+          OR: [
+            { items: { some: { optionReviews: { some: { departmentId, status: 'PENDING_L2' } } } } },
+            {
+              items: {
+                some: {
+                  isSystemFilled: true,
+                  confirmationStatus: 'DISPUTED',
+                  disputeL1Result: 'APPROVED',
+                  disputeL2Result: null,
+                },
               },
             },
-          },
-        ],
-      };
+          ],
+        };
+      }
     }
 
     const [submissions, total] = await Promise.all([

@@ -227,6 +227,12 @@ export async function GET(req: Request) {
       deductionScore: sheet.deductionScore,
       positiveMaxScore: sheet.positiveMaxScore,
       declarationTier: sheet.declarationTier,
+      sections: sheet.sections.map((section) => ({
+        code: section.code,
+        title: section.title,
+        score: section.score,
+        maxScore: section.maxScore,
+      })),
     },
   });
 }

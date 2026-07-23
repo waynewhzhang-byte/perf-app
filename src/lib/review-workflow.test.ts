@@ -154,6 +154,50 @@ describe('applyL2', () => {
 });
 
 describe('applyL1', () => {
+  it('已确认的系统填充项不写逐项日志，但保留一级审核归属', async () => {
+    const submissionUpdates: unknown[] = [];
+    let reviewLogCreates = 0;
+    const tx = {
+      submission: {
+        findUnique: async () => ({
+          id: 'sub-1', status: 'SUBMITTED', branchId: 'branch-1',
+          user: { contact: '13800000000', departmentId: 'dept-1' },
+          items: [{
+            id: 'fact-1', itemId: 'basic.skill-level', status: 'L1_APPROVED', score: 0,
+            isSystemFilled: true, confirmationStatus: 'CONFIRMED',
+            disputeL1Result: null, disputeL2Result: null,
+            item: { title: '技能等级', dimensionCode: 'basic.skill-level' },
+            optionReviews: [],
+          }],
+        }),
+        update: async (input: unknown) => { submissionUpdates.push(input); return {}; },
+      },
+      userRole: { findMany: async () => [{ scopeBranchId: 'branch-1', scopeDepartmentId: null }] },
+      dimensionReviewRoute: { findMany: async () => [{ dimensionCode: 'basic.skill-level', departmentId: 'dept-l2' }] },
+      submissionOptionReview: { deleteMany: async () => ({}), upsert: async () => ({}), count: async () => 1 },
+      submissionItem: {
+        findMany: async () => [{
+          id: 'fact-1', isSystemFilled: true, confirmationStatus: 'CONFIRMED',
+          disputeL1Result: null, disputeL2Result: null,
+          optionReviews: [{ status: 'PENDING_L2' }],
+        }],
+        count: async () => 0,
+        update: async () => ({}),
+      },
+      reviewLog: { create: async () => { reviewLogCreates += 1; return {}; } },
+    } as any;
+
+    const result = await applyL1(tx, {
+      submissionId: 'sub-1', reviewerId: 'reviewer-1', decisions: [],
+    });
+
+    assert.equal(result.outcome, 'pending');
+    assert.equal(reviewLogCreates, 0);
+    assert.ok(submissionUpdates.some((update: any) =>
+      update.data.status === 'L1_APPROVED' && update.data.l1ReviewerId === 'reviewer-1',
+    ));
+  });
+
   it('基础事实申诉待二审时不提前归档为终审通过', async () => {
     const submissionUpdates: unknown[] = [];
     const itemUpdates: unknown[] = [];

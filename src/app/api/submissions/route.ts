@@ -6,7 +6,12 @@ import { prisma } from '@/lib/prisma';
 import { getSession, AuthError } from '@/lib/auth';
 import { sendNotice } from '@/lib/notify';
 import { calculateFullWorkYears, evaluatePreReviewRules, type PreReviewRule } from '@/lib/pre-review';
-import { effectiveHireDate, evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
+import {
+  declarationLevelNameCandidates,
+  effectiveHireDate,
+  evaluationCutoffDate,
+  levelFromHireDate,
+} from '@/lib/declaration-level';
 import { UpsertSchema, parseDateOnly, computeItemScore } from '@/lib/submission-validator';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
@@ -143,7 +148,10 @@ export async function POST(req: Request) {
       const [workArea, declarationLevel, declarationSpecialty] = await Promise.all([
         workAreaId ? tx.branch.findUnique({ where: { id: workAreaId } }) : Promise.resolve(null),
         inferredDeclarationLevelName
-          ? tx.declarationLevel.findFirst({ where: { name: inferredDeclarationLevelName } })
+          ? tx.declarationLevel.findFirst({
+              where: { name: { in: declarationLevelNameCandidates(inferredDeclarationLevelName) } },
+              orderBy: { sortOrder: 'asc' },
+            })
           : declarationLevelId
             ? tx.declarationLevel.findUnique({ where: { id: declarationLevelId } })
             : Promise.resolve(null),

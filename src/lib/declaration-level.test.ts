@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeLevel, levelFromHireDate } from './declaration-level';
+import { computeLevel, declarationLevelNameCandidates, levelFromHireDate } from './declaration-level';
 
 describe('computeLevel', () => {
   it('0 年 → 三级', () => assert.equal(computeLevel(0), '三级'));
@@ -43,5 +43,11 @@ describe('levelFromHireDate', () => {
     const d = new Date('2021-06-13');
     const asOf = new Date('2026-06-13');
     assert.equal(levelFromHireDate(d, asOf), '二级');
+  });
+});
+
+describe('declarationLevelNameCandidates', () => {
+  it('自动计算的三级可以匹配等级字典中的 3级', () => {
+    assert.deepEqual(declarationLevelNameCandidates('三级'), ['三级', '3级']);
   });
 });
