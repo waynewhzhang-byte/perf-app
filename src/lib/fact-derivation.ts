@@ -145,11 +145,54 @@ function buildBasicTierDerivation(
 }
 function buildShareDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
+  facts: DerivationInputFact[],
   _context: DerivationContext,
-  _code: string,
+  code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const standard = SCORING_STANDARD_BY_CODE[code]!;
+  const steps: DerivationStep[] = [];
+
+  // 按事件（defectRef）分组
+  const byEvent = new Map<string, DerivationInputFact[]>();
+  for (const f of facts) {
+    const key = f.defectRef ?? '(未分组)';
+    const arr = byEvent.get(key) ?? [];
+    arr.push(f);
+    byEvent.set(key, arr);
+  }
+
+  for (const [eventRef, group] of byEvent) {
+    const first = group.filter((f) => f.role === 'FIRST_DISCOVERER');
+    const co = group.filter((f) => f.role === 'CO_DISCOVERER');
+    if (first.length > 0) {
+      // 第一发现人：3 分/次 × 故障次数（score/3 反推次数）
+      const perIncident = 3;
+      const count = first.reduce((s, f) => s + f.score, 0) / perIncident;
+      const total = first.reduce((s, f) => s + f.score, 0);
+      steps.push({
+        label: `事件 ${eventRef}：第一发现人 ${perIncident} 分/次 × ${count} 次故障 = ${round2(total)}`,
+      });
+    }
+    if (co.length > 0) {
+      // 共同发现人：合计 3 分/次 ÷ 人数；score 即每人所得
+      const perPerson = co[0]!.score;
+      const totalShare = round2(perPerson * co.length);
+      steps.push({
+        label: `事件 ${eventRef}：${co.length} 名共同发现人 均分 3 分/次 × 1 次故障 = ${totalShare} ÷ ${co.length} = ${round2(perPerson)}`,
+      });
+    }
+  }
+
+  const raw = facts.reduce((s, f) => s + f.score, 0);
+  steps.push({ label: `小计原始分 ${round2(raw)}`, kind: 'subtotal' });
+
+  if (standard.maxScore > 0 && raw >= standard.maxScore) {
+    steps.push({ label: `封顶 ${standard.maxScore}`, kind: 'cap' });
+  }
+  return { ...base, steps };
 }
 function buildMatrixDerivation(
   base: Derivation,
@@ -182,6 +225,11 @@ function buildManualAggregateDerivation(
   _code: string,
 ): Derivation {
   return { ...base, steps: [] };
+}
+
+/** 模块私有：保留两位小数（区别于 dimension-aggregation 的 round1）。 */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /** overrideScore 与原始推算不一致时，前置一条诚实提示步骤。 */

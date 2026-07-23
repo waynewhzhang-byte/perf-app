@@ -49,3 +49,27 @@ describe('buildDerivation — BASIC_TIER', () => {
     assert.match(d.steps[0]!.label, /暂无导入事实/);
   });
 });
+
+describe('buildDerivation — SHARE (安全贡献)', () => {
+  it('按事件分组展示第一发现人/共同发现人均分', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'a', defectRef: 'AQ001', role: 'FIRST_DISCOVERER', score: 6, sourceFile: '3.突出贡献奖人员汇总.xlsx' },
+      { id: 'b', defectRef: 'AQ002', role: 'CO_DISCOVERER', score: 1.5, sourceFile: '3.突出贡献奖人员汇总.xlsx' },
+      { id: 'c', defectRef: 'AQ002', role: 'CO_DISCOVERER', score: 1.5, sourceFile: '3.突出贡献奖人员汇总.xlsx' },
+    ];
+    const d = buildDerivation('performance.safety-contribution', facts, { finalScore: 9 })!;
+    assert.equal(d.ruleType, 'SHARE');
+    // 第一发现人事件 + 两个共同发现人事件 + 小计
+    const subtotals = d.steps.filter((s) => s.kind === 'subtotal');
+    assert.equal(subtotals.length, 1);
+    assert.match(subtotals[0]!.label, /小计原始分 9/);
+    // 每条事实对应一行（reverse-engineer 6 = 3×2、1.5 = 3÷2）
+    assert.ok(d.steps.some((s) => /AQ001.*3 分\/次.*× 2 次.*= 6/.test(s.label)));
+    assert.ok(d.steps.some((s) => /AQ002.*均分.*3 ÷ 2 = 1\.5/.test(s.label)));
+  });
+
+  it('无事实返回 emptyFactsSteps', () => {
+    const d = buildDerivation('performance.safety-contribution', [], { finalScore: 0 })!;
+    assert.match(d.steps[0]!.label, /暂无导入事实/);
+  });
+});
