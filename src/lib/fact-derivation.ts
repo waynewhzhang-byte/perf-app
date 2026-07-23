@@ -1,0 +1,171 @@
+/**
+ * 事实积分过程推导：把已计分的事实 + 评分标准 → 人类可读的逐步积分过程。
+ *
+ * 仅做"展示用文本组装"，不重新计算得分（得分来自计分引擎）。所有数字
+ * 取自已落库的事实 / 标准常量，保证与服务器最终得分一致。
+ */
+import {
+  SCORING_STANDARD_BY_CODE,
+  defaultScoringRuleConfigs,
+} from '@/lib/scoring-standards';
+
+/** 单条推导步骤（前端按序渲染为流程节点）。 */
+export interface DerivationStep {
+  label: string;
+  detail?: string;
+  /** 渲染样式提示：原始分小计 / 封顶 / 最终 / 备注提示。 */
+  kind?: 'raw' | 'subtotal' | 'cap' | 'final' | 'note';
+}
+
+/** 原始台账中每条事实的完整字段（复用 /api/facts 已返回的 facts[]）。 */
+export interface DerivationFactField {
+  id: string;
+  label?: string;
+  score: number;
+  role?: string;
+  defectRef?: string;
+  defectLevel?: string;
+  eventDate?: string | null;
+  tierValue?: string;
+  thirdLevelTitle?: string;
+  metadata?: unknown;
+  sourceFile?: string | null;
+}
+
+/** buildDerivation 的输入事实（与 DerivationFactField 同构）。 */
+export type DerivationInputFact = DerivationFactField;
+
+/** 某个维度展开后的完整证明材料。 */
+export interface Derivation {
+  ruleType: string;
+  ruleSummary: string;
+  referenceFile?: string;
+  notes?: string;
+  rawFactFields: DerivationFactField[];
+  steps: DerivationStep[];
+}
+
+/** buildDerivation 运行时上下文（来自 score sheet 的派生值）。 */
+export interface DerivationContext {
+  /** 两票：同专业原始分最高值（折算基准）。 */
+  ticketCohortMax?: number;
+  /** 管理员改分：若存在，提示与原始推算的差异。 */
+  overrideScore?: number | null;
+  /** 该维度最终得分（来自 score sheet，用于"最终"步骤）。 */
+  finalScore: number;
+}
+
+const RULE_CONFIG_BY_CODE: Record<string, { ruleType: string; config: Record<string, unknown> } | undefined> =
+  Object.fromEntries(
+    defaultScoringRuleConfigs().map((c) => [c.dimensionCode, { ruleType: c.ruleType, config: c.config }]),
+  );
+
+/** 取某维度的计分规则配置（matrix/ticketPrices/tiers 等）。 */
+export function ruleConfigFor(dimensionCode: string): Record<string, unknown> | undefined {
+  return RULE_CONFIG_BY_CODE[dimensionCode]?.config;
+}
+
+/**
+ * 组装某个维度的积分过程证明材料。按 ruleType 分派到专用组装函数。
+ *
+ * 未匹配的维度（如 profile.hire-date）返回 null —— 调用方据此不渲染展开区。
+ */
+export function buildDerivation(
+  dimensionCode: string,
+  facts: DerivationInputFact[],
+  context: DerivationContext,
+): Derivation | null {
+  const standard = SCORING_STANDARD_BY_CODE[dimensionCode];
+  if (!standard) return null;
+
+  const base: Derivation = {
+    ruleType: standard.ruleType,
+    ruleSummary: standard.scoringSummary,
+    referenceFile: standard.referenceFile,
+    notes: standard.notes,
+    rawFactFields: facts,
+    steps: [],
+  };
+
+  switch (standard.ruleType) {
+    case 'BASIC_TIER':
+      return buildBasicTierDerivation(base, facts, context, standard.code);
+    case 'SHARE':
+      return buildShareDerivation(base, facts, context, standard.code);
+    case 'MATRIX_SUM':
+      return buildMatrixDerivation(base, facts, context, standard.code);
+    case 'NORMALIZE':
+      return buildNormalizeDerivation(base, facts, context, standard.code);
+    case 'DEDUCTION':
+      return buildDeductionDerivation(base, facts, context, standard.code);
+    case 'MANUAL_TIERS':
+    case 'MANUAL_COUNTED':
+      return buildManualAggregateDerivation(base, facts, context, standard.code);
+    default:
+      return null;
+  }
+}
+
+// ── 专用组装函数（后续 Task 实现）──
+function buildBasicTierDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+function buildShareDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+function buildMatrixDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+function buildNormalizeDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+function buildDeductionDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+function buildManualAggregateDerivation(
+  base: Derivation,
+  _facts: DerivationInputFact[],
+  _context: DerivationContext,
+  _code: string,
+): Derivation {
+  return { ...base, steps: [] };
+}
+
+/** overrideScore 与原始推算不一致时，前置一条诚实提示步骤。 */
+export function overrideNotice(overrideScore: number, originalScore: number): DerivationStep | null {
+  if (overrideScore === originalScore) return null;
+  return {
+    label: `该项得分已由审核员调整为 ${overrideScore} 分，以下积分过程为系统原始推算（${originalScore} 分），仅供参考`,
+    kind: 'note',
+  };
+}
+
+/** 无导入事实的统一兜底 steps。 */
+export function emptyFactsSteps(): DerivationStep[] {
+  return [{ label: '暂无导入事实，按 0 分计入', kind: 'note' }];
+}
