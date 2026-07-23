@@ -88,6 +88,26 @@ export default function SubmissionPage() {
         yearBreakdown?: unknown;
         sourceFile?: string | null;
       }[];
+      derivation?: {
+        ruleType: string;
+        ruleSummary: string;
+        referenceFile?: string;
+        notes?: string;
+        rawFactFields: {
+          id: string;
+          label?: string;
+          score: number;
+          role?: string;
+          defectRef?: string;
+          defectLevel?: string;
+          eventDate?: string | null;
+          tierValue?: string;
+          thirdLevelTitle?: string;
+          metadata?: unknown;
+          sourceFile?: string | null;
+        }[];
+        steps: { label: string; detail?: string; kind?: 'raw' | 'subtotal' | 'cap' | 'final' | 'note' }[];
+      };
     }[];
     scoreSheet?: { declarationTier?: string | null };
   } | null>(null);
