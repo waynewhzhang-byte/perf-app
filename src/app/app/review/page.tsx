@@ -74,7 +74,7 @@ export default function ReviewPage() {
   const openAttachment = async (attId: string) => {
     setOpeningAttId(attId);
     try {
-      const r = await fetch(`/api/attachments/${attId}/view`);
+      const r = await fetch(`/api/attachments/${attId}/view`, { credentials: 'include' });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { alert(d.error || '无法打开附件'); return; }
       if (!d.viewUrl) { alert('无法获取附件地址'); return; }

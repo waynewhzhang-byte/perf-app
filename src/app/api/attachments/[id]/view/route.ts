@@ -4,10 +4,10 @@ import { NextResponse } from 'next/server';
 import { Readable } from 'node:stream';
 import {
   attachmentViewKind,
-  canViewAttachment,
   loadAttachmentForView,
+  resolveAuthorizedAttachmentViewer,
 } from '@/lib/attachment-access';
-import { getSession, getUserRoles } from '@/lib/auth';
+import { getSession } from '@/lib/auth';
 import {
   isMinioConnectivityError,
   MinioUnavailableError,
@@ -61,14 +61,13 @@ export async function GET(
   req: Request,
   { params }: { params: { id: string } },
 ) {
-  const s = await getSession(false) ?? await getSession(true);
-  if (!s) return NextResponse.json({ error: '未授权' }, { status: 401 });
-
   const att = await loadAttachmentForView(params.id);
   if (!att) return NextResponse.json({ error: '附件不存在' }, { status: 404 });
 
-  const roles = await getUserRoles(s.userId);
-  if (!(await canViewAttachment(s.userId, roles, att))) {
+  const viewer = await resolveAuthorizedAttachmentViewer(att);
+  if (!viewer) {
+    const hasSession = (await getSession(true)) ?? (await getSession(false));
+    if (!hasSession) return NextResponse.json({ error: '未授权' }, { status: 401 });
     return NextResponse.json({ error: '无权限查看该附件' }, { status: 403 });
   }
 
