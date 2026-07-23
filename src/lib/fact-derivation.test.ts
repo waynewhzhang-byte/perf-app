@@ -150,3 +150,24 @@ describe('buildDerivation — NORMALIZE (两票执行)', () => {
     assert.match(d.steps[0]!.label, /暂无导入事实/);
   });
 });
+
+describe('buildDerivation — DEDUCTION (违章扣分)', () => {
+  it('展示每条违章扣分并累加', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 'v1', defectRef: 'Z001', role: '直接责任人', score: -10 },
+      { id: 'v2', defectRef: 'Z002', role: '连带责任人', score: -5 },
+    ];
+    const d = buildDerivation('special.violation-severe', facts, { finalScore: -15 })!;
+    assert.equal(d.ruleType, 'DEDUCTION');
+    assert.ok(d.steps.some((s) => /Z001.*直接责任人.*-10/.test(s.label)));
+    assert.ok(d.steps.some((s) => /Z002.*连带责任人.*-5/.test(s.label)));
+    assert.ok(d.steps.some((s) => s.kind === 'subtotal' && /小计 -15/.test(s.label)));
+    // 扣分不封顶：无 cap 步骤
+    assert.equal(d.steps.find((s) => s.kind === 'cap'), undefined);
+  });
+
+  it('无违章事实返回 emptyFactsSteps', () => {
+    const d = buildDerivation('special.violation-severe', [], { finalScore: 0 })!;
+    assert.match(d.steps[0]!.label, /暂无导入事实/);
+  });
+});

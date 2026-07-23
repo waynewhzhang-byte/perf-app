@@ -321,11 +321,23 @@ function buildNormalizeDerivation(
 }
 function buildDeductionDerivation(
   base: Derivation,
-  _facts: DerivationInputFact[],
+  facts: DerivationInputFact[],
   _context: DerivationContext,
   _code: string,
 ): Derivation {
-  return { ...base, steps: [] };
+  if (facts.length === 0) {
+    return { ...base, steps: emptyFactsSteps() };
+  }
+  const steps: DerivationStep[] = [];
+  for (const f of facts) {
+    const ref = f.defectRef ?? '(未编号)';
+    const role = f.role ?? '责任人';
+    steps.push({ label: `违章 ${ref} · ${role} → ${round2(f.score)}` });
+  }
+  const total = facts.reduce((s, f) => s + f.score, 0);
+  steps.push({ label: `小计 ${round2(total)}`, kind: 'subtotal' });
+  // 扣分维度不封顶（capToStandard 在 maxScore<=0 时只 round1）
+  return { ...base, steps };
 }
 function buildManualAggregateDerivation(
   base: Derivation,
