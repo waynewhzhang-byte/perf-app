@@ -534,4 +534,57 @@ describe('upsertDeclaration', () => {
     assert.ok(!submissionUpdates.some((u: any) => u.data.status === 'SUBMITTED'));
     assert.ok(submissionUpdates.some((u: any) => u.data.submittedAt instanceof Date));
   });
+
+  it('模板含事实维度且无工号时阻断 AFFIRM 提交', async () => {
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-1',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: null,
+          sections: [{
+            items: [{
+              id: 'fact-1',
+              isRequired: false,
+              requireAttachment: false,
+              title: '技能等级',
+              dimensionCode: 'basic.skill-level',
+              scoreMode: 'TIERS',
+              maxScore: null,
+              scoreOptions: [],
+            }],
+          }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '13800000000',
+          branchId: 'b1',
+          hireDate: new Date(2010, 0, 1),
+          profile: null,
+          employeeNo: null,
+        }),
+      },
+    } as never;
+
+    await assert.rejects(
+      () => upsertDeclaration(tx, {
+        userId: 'u1',
+        templateId: 'tpl-1',
+        submit: true,
+        submitMode: 'AFFIRM',
+        workAreaId: 'b1',
+        hireDate: '2010-01-01',
+        declarationLevelId: 'lv1',
+        declarationSpecialtyId: 'sp1',
+        items: [],
+      }),
+      (err: unknown) =>
+        err instanceof DeclarationError &&
+        err.message.includes('工号') &&
+        err.httpStatus === 400,
+    );
+  });
 });

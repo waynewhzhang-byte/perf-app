@@ -33,6 +33,7 @@
     "@sentry/nextjs": "^10.59.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
+    "ioredis": "^5.11.1",
     "jose": "^5.9.6",
     "minio": "^8.0.2",
     "next": "14.2.18",

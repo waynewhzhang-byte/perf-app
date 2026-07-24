@@ -4,7 +4,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import {
   buildL1SubmissionScopeWhere,
-  matchesL1Scope,
   type L1ReviewerScope,
 } from '@/lib/reviewer-scope';
 import {
@@ -62,12 +61,22 @@ const itemInclude = {
 
 type LoadedItem = Prisma.SubmissionItemGetPayload<{ include: typeof itemInclude }>;
 
+export function dimensionCodesForL2Department(
+  routeByDimension: Map<string, string>,
+  departmentId: string,
+): string[] {
+  return [...routeByDimension.entries()]
+    .filter(([, deptId]) => deptId === departmentId)
+    .map(([code]) => code);
+}
+
 export function isDisputeVisibleToL2Reviewer(
   dimensionCode: string | null,
   reviewerDepartmentId: string,
   routeByDimension: Map<string, string>,
 ): boolean {
-  if (!dimensionCode || !isReviewableDimensionCode(dimensionCode)) {
+  if (!dimensionCode) return false;
+  if (!isReviewableDimensionCode(dimensionCode)) {
     return true;
   }
   const dept = routeByDimension.get(dimensionCode);
@@ -97,23 +106,6 @@ export function mapAppealReviewRow(
   };
 }
 
-function matchesKeyword(row: AppealReviewRow, keyword: string): boolean {
-  const q = keyword.trim().toLowerCase();
-  if (!q) return true;
-  return [
-    row.employeeNo,
-    row.employeeName,
-    row.contact,
-    row.itemTitle,
-    row.disputeReason ?? '',
-  ].some((part) => part.toLowerCase().includes(q));
-}
-
-function matchesItemTitle(row: AppealReviewRow, itemTitle?: string): boolean {
-  if (!itemTitle?.trim()) return true;
-  return row.itemTitle.includes(itemTitle.trim());
-}
-
 function l1AuditLabel(item: LoadedItem): '确认' | '驳回' | undefined {
   if (item.disputeL1Result === 'APPROVED') return '确认';
   if (item.disputeL1Result === 'REJECTED') return '驳回';
@@ -126,6 +118,33 @@ function l2AuditLabel(item: LoadedItem): '确认' | '驳回' | undefined {
   return undefined;
 }
 
+function buildKeywordWhere(keyword?: string): Prisma.SubmissionItemWhereInput | undefined {
+  const q = keyword?.trim();
+  if (!q) return undefined;
+  return {
+    OR: [
+      { submission: { user: { employeeNo: { contains: q, mode: 'insensitive' } } } },
+      { submission: { user: { fullName: { contains: q, mode: 'insensitive' } } } },
+      { submission: { user: { contact: { contains: q, mode: 'insensitive' } } } },
+      { item: { title: { contains: q, mode: 'insensitive' } } },
+      { disputeReason: { contains: q, mode: 'insensitive' } },
+    ],
+  };
+}
+
+function buildItemTitleWhere(itemTitle?: string): Prisma.SubmissionItemWhereInput | undefined {
+  const title = itemTitle?.trim();
+  if (!title) return undefined;
+  return { item: { title: { contains: title, mode: 'insensitive' } } };
+}
+
+function mergeWhere(
+  ...parts: Array<Prisma.SubmissionItemWhereInput | undefined>
+): Prisma.SubmissionItemWhereInput {
+  const and = parts.filter((part): part is Prisma.SubmissionItemWhereInput => part != null);
+  return and.length === 1 ? and[0]! : { AND: and };
+}
+
 export async function listAppealReviewRows(
   db: Db,
   input: AppealReviewListInput,
@@ -136,7 +155,8 @@ export async function listAppealReviewRows(
   const routes = await db.dimensionReviewRoute.findMany();
   const routeByDimension = new Map(routes.map((r) => [r.dimensionCode, r.departmentId]));
 
-  let items: LoadedItem[] = [];
+  let where: Prisma.SubmissionItemWhereInput;
+  let orderBy: Prisma.SubmissionItemOrderByWithRelationInput | Prisma.SubmissionItemOrderByWithRelationInput[];
 
   if (input.level === 1) {
     const l1ScopeWhere = buildL1SubmissionScopeWhere(input.l1Scopes);
@@ -145,8 +165,8 @@ export async function listAppealReviewRows(
     }
 
     if (input.filter === 'pending') {
-      items = await db.submissionItem.findMany({
-        where: {
+      where = mergeWhere(
+        {
           isSystemFilled: true,
           confirmationStatus: 'DISPUTED',
           status: 'PENDING_L1',
@@ -155,81 +175,79 @@ export async function listAppealReviewRows(
             ...l1ScopeWhere,
           },
         },
-        include: itemInclude,
-        orderBy: { submission: { submittedAt: 'asc' } },
-      });
-      items = items.filter((item) =>
-        matchesL1Scope(input.l1Scopes, {
-          branchId: item.submission.branchId,
-          departmentId: item.submission.user.departmentId,
-        }),
+        buildItemTitleWhere(input.itemTitle),
+        buildKeywordWhere(input.keyword),
       );
+      orderBy = { submission: { submittedAt: 'asc' } };
     } else {
-      items = await db.submissionItem.findMany({
-        where: {
+      where = mergeWhere(
+        {
           isSystemFilled: true,
           confirmationStatus: 'DISPUTED',
           disputeL1ReviewerId: input.reviewerId,
           disputeL1Result: { not: null },
           submission: l1ScopeWhere,
         },
-        include: itemInclude,
-        orderBy: { disputeL1ReviewedAt: 'desc' },
-      });
+        buildItemTitleWhere(input.itemTitle),
+        buildKeywordWhere(input.keyword),
+      );
+      orderBy = { disputeL1ReviewedAt: 'desc' };
     }
   } else {
     if (!input.l2DepartmentId) {
       return { rows: [], total: 0, page, pageSize };
     }
 
+    const routedCodes = dimensionCodesForL2Department(routeByDimension, input.l2DepartmentId);
+    const dimensionWhere: Prisma.SubmissionItemWhereInput = routedCodes.length > 0
+      ? { item: { dimensionCode: { in: routedCodes } } }
+      : { item: { dimensionCode: { in: ['__no_routed_dimensions__'] } } };
+
     if (input.filter === 'pending') {
-      items = await db.submissionItem.findMany({
-        where: {
+      where = mergeWhere(
+        {
           isSystemFilled: true,
           confirmationStatus: 'DISPUTED',
           disputeL1Result: 'APPROVED',
           disputeL2Result: null,
           submission: { status: 'L1_APPROVED' },
         },
-        include: itemInclude,
-        orderBy: { submission: { submittedAt: 'asc' } },
-      });
-      items = items.filter((item) => {
-        const code = resolveFormItemDimension(item.item);
-        return isDisputeVisibleToL2Reviewer(code, input.l2DepartmentId!, routeByDimension);
-      });
+        dimensionWhere,
+        buildItemTitleWhere(input.itemTitle),
+        buildKeywordWhere(input.keyword),
+      );
+      orderBy = { submission: { submittedAt: 'asc' } };
     } else {
-      items = await db.submissionItem.findMany({
-        where: {
+      where = mergeWhere(
+        {
           isSystemFilled: true,
           confirmationStatus: 'DISPUTED',
           disputeL2ReviewerId: input.reviewerId,
           disputeL2Result: { not: null },
         },
-        include: itemInclude,
-        orderBy: { disputeL2ReviewedAt: 'desc' },
-      });
-      items = items.filter((item) => {
-        const code = resolveFormItemDimension(item.item);
-        return isDisputeVisibleToL2Reviewer(code, input.l2DepartmentId!, routeByDimension);
-      });
+        dimensionWhere,
+        buildItemTitleWhere(input.itemTitle),
+        buildKeywordWhere(input.keyword),
+      );
+      orderBy = { disputeL2ReviewedAt: 'desc' };
     }
   }
 
-  const mapped = items.map((item) => {
+  const total = await db.submissionItem.count({ where });
+  const items = await db.submissionItem.findMany({
+    where,
+    include: itemInclude,
+    orderBy,
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  });
+
+  const rows = items.map((item) => {
     const audit = input.filter === 'completed'
       ? (input.level === 1 ? l1AuditLabel(item) : l2AuditLabel(item))
       : undefined;
     return mapAppealReviewRow(item, audit);
   });
-
-  const filtered = mapped.filter(
-    (row) => matchesItemTitle(row, input.itemTitle) && matchesKeyword(row, input.keyword ?? ''),
-  );
-
-  const total = filtered.length;
-  const start = (page - 1) * pageSize;
-  const rows = filtered.slice(start, start + pageSize);
 
   return { rows, total, page, pageSize };
 }

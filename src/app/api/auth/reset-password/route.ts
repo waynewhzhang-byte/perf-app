@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     const ip = extractIP(req);
 
   // Per-IP: max 10 attempts per hour
-  if (isRateLimited(`reset-password:ip:${ip}`, 10, 60 * 60_000)) {
+  if (await isRateLimited(`reset-password:ip:${ip}`, 10, 60 * 60_000)) {
     return NextResponse.json({ error: '重置请求过于频繁，请稍后再试' }, { status: 429 });
   }
 
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
   }
 
   // Per-contact: max 5 attempts per 30 minutes
-  if (isRateLimited(`reset-password:contact:${contact}`, 5, 30 * 60_000)) {
+  if (await isRateLimited(`reset-password:contact:${contact}`, 5, 30 * 60_000)) {
     return NextResponse.json({ error: '该账号重置尝试过多，请稍后再试' }, { status: 429 });
   }
 
@@ -52,7 +52,7 @@ export async function POST(req: Request) {
       orderBy: { createdAt: 'desc' },
     });
     if (!row || row.expiresAt < new Date()) {
-      recordAttempt(`reset-password:contact:${contact}`, 30 * 60_000);
+      await recordAttempt(`reset-password:contact:${contact}`, 30 * 60_000);
       return NextResponse.json({ error: '验证码无效或已过期' }, { status: 400 });
     }
     vc = row;

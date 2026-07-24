@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  dimensionCodesForL2Department,
   isDisputeVisibleToL2Reviewer,
+  listAppealReviewRows,
   mapAppealReviewRow,
 } from './appeal-review-queue';
 
@@ -22,10 +24,35 @@ describe('isDisputeVisibleToL2Reviewer', () => {
     );
   });
 
+  it('未配置路由的可评分维度不可见', () => {
+    assert.equal(
+      isDisputeVisibleToL2Reviewer('performance.technical-contribution', 'dept-any', routes),
+      false,
+    );
+  });
+
+  it('维度代码缺失时不可见', () => {
+    assert.equal(isDisputeVisibleToL2Reviewer(null, 'dept-any', routes), false);
+  });
+
   it('非评分确认维度对所有 L2 可见（如参加工作时间）', () => {
     assert.equal(
       isDisputeVisibleToL2Reviewer('profile.hire-date', 'dept-any', routes),
       true,
+    );
+  });
+});
+
+describe('dimensionCodesForL2Department', () => {
+  it('仅返回归属该部门的维度代码', () => {
+    const routes = new Map([
+      ['performance.safety-contribution', 'dept-a'],
+      ['basic.skill-level', 'dept-b'],
+      ['performance.defect-governance', 'dept-a'],
+    ]);
+    assert.deepEqual(
+      dimensionCodesForL2Department(routes, 'dept-a').sort(),
+      ['performance.defect-governance', 'performance.safety-contribution'].sort(),
     );
   });
 });
@@ -50,5 +77,93 @@ describe('mapAppealReviewRow', () => {
     assert.equal(row.disputeClaimedScore, 5);
     assert.equal(row.attachments[0].filename, 'proof.pdf');
     assert.equal(row.employeeName, '刘涛');
+  });
+});
+
+describe('listAppealReviewRows', () => {
+  const sampleItem = {
+    id: 'si-1',
+    submissionId: 'sub-1',
+    score: '2',
+    disputeReason: '申诉',
+    disputeClaimedScore: '3',
+    disputeL1Result: null,
+    disputeL2Result: null,
+    item: { title: '安全贡献', dimensionCode: 'performance.safety-contribution' },
+    attachments: [],
+    submission: {
+      branchId: 'branch-1',
+      submittedAt: new Date('2026-07-01T00:00:00Z'),
+      user: { fullName: '张三', contact: '13800000001', employeeNo: '1001', departmentId: 'd1' },
+    },
+  };
+
+  it('L2 待审在数据库层分页并按下推的维度路由过滤', async () => {
+    let capturedWhere: unknown;
+    let capturedSkip: number | undefined;
+    let capturedTake: number | undefined;
+    const db = {
+      dimensionReviewRoute: {
+        findMany: async () => [
+          { dimensionCode: 'performance.safety-contribution', departmentId: 'dept-safety' },
+        ],
+      },
+      submissionItem: {
+        count: async (args: { where: unknown }) => {
+          capturedWhere = args.where;
+          return 12;
+        },
+        findMany: async (args: { where: unknown; skip: number; take: number }) => {
+          capturedWhere = args.where;
+          capturedSkip = args.skip;
+          capturedTake = args.take;
+          return [sampleItem];
+        },
+      },
+    };
+
+    const result = await listAppealReviewRows(db as never, {
+      level: 2,
+      reviewerId: 'rev-1',
+      l1Scopes: [],
+      l2DepartmentId: 'dept-safety',
+      filter: 'pending',
+      page: 2,
+      pageSize: 5,
+    });
+
+    assert.equal(result.total, 12);
+    assert.equal(result.page, 2);
+    assert.equal(result.pageSize, 5);
+    assert.equal(result.rows.length, 1);
+    assert.equal(capturedSkip, 5);
+    assert.equal(capturedTake, 5);
+    const where = capturedWhere as { AND?: Array<Record<string, unknown>> };
+    const andClauses = where.AND ?? [where];
+    assert.ok(
+      andClauses.some((clause) =>
+        (clause.item as { dimensionCode?: { in?: string[] } })?.dimensionCode?.in?.includes(
+          'performance.safety-contribution',
+        ),
+      ),
+    );
+  });
+
+  it('L1 无 scope 时返回空列表', async () => {
+    const db = {
+      dimensionReviewRoute: { findMany: async () => [] },
+      submissionItem: {
+        count: async () => { throw new Error('should not count'); },
+        findMany: async () => { throw new Error('should not query'); },
+      },
+    };
+    const result = await listAppealReviewRows(db as never, {
+      level: 1,
+      reviewerId: 'rev-1',
+      l1Scopes: [{ scopeBranchId: null, scopeDepartmentId: null }],
+      l2DepartmentId: null,
+      filter: 'pending',
+    });
+    assert.deepEqual(result, { rows: [], total: 0, page: 1, pageSize: 50 });
   });
 });

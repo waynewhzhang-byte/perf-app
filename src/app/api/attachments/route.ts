@@ -65,11 +65,11 @@ export async function POST(req: Request) {
     if (!s) return NextResponse.json({ error: '未授权' }, { status: 401 });
 
     const ip = extractIP(req);
-    if (isRateLimited(`upload:ip:${ip}`, UPLOAD_RATE_LIMIT_PER_USER * 2, UPLOAD_RATE_WINDOW_MS)) {
+    if (await isRateLimited(`upload:ip:${ip}`, UPLOAD_RATE_LIMIT_PER_USER * 2, UPLOAD_RATE_WINDOW_MS)) {
       return NextResponse.json({ error: '上传过于频繁，请稍后再试' }, { status: 429 });
     }
     if (
-      isRateLimited(`upload:user:${s.userId}`, UPLOAD_RATE_LIMIT_PER_USER, UPLOAD_RATE_WINDOW_MS)
+      await isRateLimited(`upload:user:${s.userId}`, UPLOAD_RATE_LIMIT_PER_USER, UPLOAD_RATE_WINDOW_MS)
     ) {
       return NextResponse.json({ error: '上传次数过多，请稍后再试' }, { status: 429 });
     }
@@ -181,8 +181,8 @@ export async function POST(req: Request) {
       delete (att as any)._mimeType;
     }
 
-    recordAttempt(`upload:user:${s.userId}`, UPLOAD_RATE_WINDOW_MS);
-    recordAttempt(`upload:ip:${ip}`, UPLOAD_RATE_WINDOW_MS);
+    await recordAttempt(`upload:user:${s.userId}`, UPLOAD_RATE_WINDOW_MS);
+    await recordAttempt(`upload:ip:${ip}`, UPLOAD_RATE_WINDOW_MS);
 
     return NextResponse.json({ success: true, attachments });
   } catch (e) {

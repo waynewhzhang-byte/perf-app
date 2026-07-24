@@ -117,6 +117,22 @@ export function isPendingL2Dispute(item: {
     item.disputeL2Result == null;
 }
 
+/** 全单待二审申诉数（跨部门）；L1/L2 归档前均需归零。 */
+export async function countPendingL2Disputes(
+  tx: ReviewTx,
+  submissionId: string,
+): Promise<number> {
+  return tx.submissionItem.count({
+    where: {
+      submissionId,
+      isSystemFilled: true,
+      confirmationStatus: 'DISPUTED',
+      disputeL1Result: 'APPROVED',
+      disputeL2Result: null,
+    },
+  });
+}
+
 async function loadSectionsForArchive(tx: ReviewTx, templateId: string): Promise<ScorableSection[]> {
   const sections = await tx.formSection.findMany({
     where: { templateId },
@@ -524,8 +540,12 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
   );
 
   for (const item of sub.items) {
+    if (item.isSystemFilled && item.confirmationStatus === 'CONFIRMED') {
+      continue;
+    }
     const dimensionCode = resolveFormItemDimension(item.item);
     if (!dimensionCode) {
+      if (item.isSystemFilled) continue;
       throw new ReviewError(`「${item.item.title}」缺少稳定评分点代码，无法进入二审`);
     }
     if (!isReviewableDimensionCode(dimensionCode)) {
@@ -593,15 +613,7 @@ export async function applyL1(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
   const remaining = await tx.submissionOptionReview.count({
     where: { submissionItem: { submissionId: sub.id }, status: 'PENDING_L2' },
   });
-  const pendingDisputeCount = await tx.submissionItem.count({
-    where: {
-      submissionId: sub.id,
-      isSystemFilled: true,
-      confirmationStatus: 'DISPUTED',
-      disputeL1Result: 'APPROVED',
-      disputeL2Result: null,
-    },
-  });
+  const pendingDisputeCount = await countPendingL2Disputes(tx, sub.id);
   if (remaining === 0 && pendingDisputeCount === 0) {
     const totalScore = await finalizeArchive(tx, sub.id, cmd.reviewerId);
     return {
@@ -785,7 +797,8 @@ export async function applyL2(tx: ReviewTx, cmd: ReviewCommand): Promise<ReviewR
   const remaining = await tx.submissionOptionReview.count({
     where: { submissionItem: { submissionId: sub.id }, status: 'PENDING_L2' },
   });
-  if (remaining > 0) {
+  const pendingDisputeCount = await countPendingL2Disputes(tx, sub.id);
+  if (remaining > 0 || pendingDisputeCount > 0) {
     await tx.submission.update({
       where: { id: sub.id },
       data: { l2ReviewerId: cmd.reviewerId, l2ReviewedAt: new Date() },

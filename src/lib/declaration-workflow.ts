@@ -22,6 +22,7 @@ import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import {
   extractSystemFilledFromSheet,
   disputedItemPersistError,
+  factBoundItemIds,
   HIRE_DATE_CONFIRMATION_CODE,
   isFactDataSourceDimension,
   resolveAppealCentricConfirmation,
@@ -194,6 +195,15 @@ export async function upsertDeclaration(
 
   const user = await tx.user.findUnique({ where: { id: userId } });
   if (!user) throw new DeclarationError('用户不存在', 404);
+
+  const templateItems = template.sections.flatMap((sec) => sec.items);
+  const factItems = factBoundItemIds(templateItems);
+  if (submit && submitMode && factItems.size > 0 && !user.employeeNo) {
+    throw new DeclarationError(
+      '您的账号未配置工号，无法核对系统填充分值，请联系管理员补全工号后再申报',
+      400,
+    );
+  }
 
   const workAreaId = hfEnabled('workArea')
     ? requestedWorkAreaId ?? user.branchId ?? undefined

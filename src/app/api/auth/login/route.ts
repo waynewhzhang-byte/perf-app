@@ -49,11 +49,11 @@ export async function POST(req: Request) {
     const accountRateLimitKey = `login:${isStaff ? 'staff' : 'employee'}:${identifier}`;
 
     // Per-IP: max 20 attempts in 15 minutes
-    if (isRateLimited(`login:ip:${ip}`, 20, 15 * 60_000)) {
+    if (await isRateLimited(`login:ip:${ip}`, 20, 15 * 60_000)) {
       return NextResponse.json({ error: '请求过于频繁，请 15 分钟后再试' }, { status: 429 });
     }
     // Per-account: max 10 attempts in 30 minutes
-    if (isRateLimited(accountRateLimitKey, 10, 30 * 60_000)) {
+    if (await isRateLimited(accountRateLimitKey, 10, 30 * 60_000)) {
       return NextResponse.json({ error: '该账号尝试次数过多，请 30 分钟后再试' }, { status: 429 });
     }
 
@@ -67,11 +67,11 @@ export async function POST(req: Request) {
       : false;
 
     if (!user || !passwordValid) {
-      recordAttempt(`login:ip:${ip}`, 15 * 60_000);
-      recordAttempt(accountRateLimitKey, 30 * 60_000);
+      await recordAttempt(`login:ip:${ip}`, 15 * 60_000);
+      await recordAttempt(accountRateLimitKey, 30 * 60_000);
 
       // Progressive delay (exponential backoff) to slow down brute-force
-      const failCount = getAttemptCount(accountRateLimitKey);
+      const failCount = await getAttemptCount(accountRateLimitKey);
       if (failCount >= 10) {
         await new Promise((r) => setTimeout(r, 15_000));
       } else if (failCount >= 5) {

@@ -2,16 +2,15 @@
 //
 // Default backend is in-process memory (Map). For multi-instance production,
 // set REDIS_URL to switch to a Redis-backed store via ioredis.
-//
-// Usage across callers is unchanged — isRateLimited / recordAttempt /
-// getAttemptCount / extractIP keep the same signatures.
+
+import Redis from 'ioredis';
 
 // ---- Store interface ---------------------------------------------------------
 
 export interface RateLimitStore {
-  isLimited(key: string, maxAttempts: number, windowMs: number): boolean;
-  record(key: string, windowMs: number): void;
-  count(key: string): number;
+  isLimited(key: string, maxAttempts: number, windowMs: number): Promise<boolean>;
+  record(key: string, windowMs: number): Promise<void>;
+  count(key: string): Promise<number>;
 }
 
 // ---- Memory backend (default) ------------------------------------------------
@@ -34,14 +33,14 @@ class MemoryRateLimitStore implements RateLimitStore {
     }, 60_000).unref();
   }
 
-  isLimited(key: string, maxAttempts: number, _windowMs: number): boolean {
+  async isLimited(key: string, maxAttempts: number, _windowMs: number): Promise<boolean> {
     const now = Date.now();
     const entry = this.store.get(key);
     if (!entry || entry.resetAt < now) return false;
     return entry.count >= maxAttempts;
   }
 
-  record(key: string, windowMs: number): void {
+  async record(key: string, windowMs: number): Promise<void> {
     const now = Date.now();
     const entry = this.store.get(key);
     if (!entry || entry.resetAt < now) {
@@ -51,11 +50,49 @@ class MemoryRateLimitStore implements RateLimitStore {
     }
   }
 
-  count(key: string): number {
+  async count(key: string): Promise<number> {
     const now = Date.now();
     const entry = this.store.get(key);
     if (!entry || entry.resetAt < now) return 0;
     return entry.count;
+  }
+}
+
+// ---- Redis backend (multi-instance) ------------------------------------------
+
+const INCR_WITH_TTL = `
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return current
+`;
+
+class RedisRateLimitStore implements RateLimitStore {
+  private redis: Redis;
+
+  constructor(url: string) {
+    this.redis = new Redis(url, {
+      maxRetriesPerRequest: 2,
+      enableReadyCheck: true,
+      lazyConnect: false,
+    });
+  }
+
+  async count(key: string): Promise<number> {
+    const raw = await this.redis.get(key);
+    if (!raw) return 0;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  async isLimited(key: string, maxAttempts: number, _windowMs: number): Promise<boolean> {
+    const current = await this.count(key);
+    return current >= maxAttempts;
+  }
+
+  async record(key: string, windowMs: number): Promise<void> {
+    await this.redis.eval(INCR_WITH_TTL, 1, key, String(windowMs));
   }
 }
 
@@ -66,17 +103,12 @@ let _store: RateLimitStore | null = null;
 function getStore(): RateLimitStore {
   if (_store) return _store;
 
-  // Redis integration point: if REDIS_URL is set, swap in a Redis-backed store.
-  // The store must satisfy the RateLimitStore interface.  Because Redis reads
-  // are async, the Redis implementation may need to use a local cache or a
-  // synchronous Redis client.  For now, we always use the memory backend.
-  //
-  // To enable Redis for multi-instance production:
-  //   1. pnpm add ioredis
-  //   2. Implement a class RedisRateLimitStore that satisfies RateLimitStore
-  //      using Lua scripts for atomic check-and-increment.
-  //   3. Return new RedisRateLimitStore(process.env.REDIS_URL!) here.
-  _store = new MemoryRateLimitStore();
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (redisUrl) {
+    _store = new RedisRateLimitStore(redisUrl);
+  } else {
+    _store = new MemoryRateLimitStore();
+  }
   return _store;
 }
 
@@ -85,21 +117,26 @@ export function resetRateLimitStore(): void {
   _store = null;
 }
 
+/** Inject a custom store (tests). */
+export function setRateLimitStore(store: RateLimitStore): void {
+  _store = store;
+}
+
 // ---- Public API --------------------------------------------------------------
 
-export function isRateLimited(
+export async function isRateLimited(
   key: string,
   maxAttempts: number,
   windowMs: number,
-): boolean {
+): Promise<boolean> {
   return getStore().isLimited(key, maxAttempts, windowMs);
 }
 
-export function recordAttempt(key: string, windowMs: number): void {
-  getStore().record(key, windowMs);
+export async function recordAttempt(key: string, windowMs: number): Promise<void> {
+  await getStore().record(key, windowMs);
 }
 
-export function getAttemptCount(key: string): number {
+export async function getAttemptCount(key: string): Promise<number> {
   return getStore().count(key);
 }
 

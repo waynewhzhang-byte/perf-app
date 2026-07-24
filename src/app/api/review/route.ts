@@ -63,7 +63,28 @@ export async function GET(req: Request) {
     prisma.user.findUnique({ where: { id: s.userId }, select: { departmentId: true } }),
   ]);
   const departmentId = user?.departmentId ?? null;
-  const level: 1 | 2 = isL2 ? 2 : 1;
+
+  const levelParam = url.searchParams.get('level');
+  const availableLevels: Array<1 | 2> = [
+    ...(isL1 ? [1 as const] : []),
+    ...(isL2 ? [2 as const] : []),
+  ];
+  let level: 1 | 2;
+  if (levelParam === '1' || levelParam === '2') {
+    level = levelParam === '1' ? 1 : 2;
+    if (level === 1 && !isL1) {
+      return NextResponse.json({ error: '非一级审核员' }, { status: 403 });
+    }
+    if (level === 2 && !isL2) {
+      return NextResponse.json({ error: '非二级审核员' }, { status: 403 });
+    }
+  } else if (isL1 && !isL2) {
+    level = 1;
+  } else if (isL2 && !isL1) {
+    level = 2;
+  } else {
+    level = 1;
+  }
 
   const appealList = await listAppealReviewRows(prisma, {
     level,
@@ -80,6 +101,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     success: true,
     level,
+    availableLevels,
     filter,
     assignedDepartmentId: departmentId,
     appealRows: appealList.rows,
@@ -101,7 +123,12 @@ export async function POST(req: Request) {
   const batchParsed = BatchSchema.safeParse(body);
   if (batchParsed.success) {
     try {
-      const outcomes: ReviewOutcome[] = [];
+      const results: Array<{
+        submissionId: string;
+        outcome: ReviewOutcome;
+        finalized: boolean;
+        totalScore?: number;
+      }> = [];
       for (const batch of batchParsed.data.batches) {
         const statusRow = await prisma.submission.findUnique({
           where: { id: batch.submissionId },
@@ -117,7 +144,12 @@ export async function POST(req: Request) {
             ? applyL1(tx, { submissionId: batch.submissionId, reviewerId: s.userId, decisions: batch.decisions })
             : applyL2(tx, { submissionId: batch.submissionId, reviewerId: s.userId, decisions: batch.decisions }),
         );
-        outcomes.push(result.outcome);
+        results.push({
+          submissionId: batch.submissionId,
+          outcome: result.outcome,
+          finalized: result.outcome === 'finalized',
+          ...(result.totalScore != null ? { totalScore: result.totalScore } : {}),
+        });
         const notice = noticeForOutcome(level, result.outcome);
         if (notice) {
           sendNotice(result.employeeContact, '【绩效申报】审核结果', notice).catch((e) =>
@@ -125,7 +157,7 @@ export async function POST(req: Request) {
           );
         }
       }
-      return NextResponse.json({ success: true, outcomes });
+      return NextResponse.json({ success: true, results });
     } catch (e) {
       if (e instanceof ReviewError) {
         return NextResponse.json({ error: e.message }, { status: e.httpStatus });

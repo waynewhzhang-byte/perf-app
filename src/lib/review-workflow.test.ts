@@ -4,6 +4,7 @@ import {
   applyL1,
   applyL2,
   buildArchivedSnapshot,
+  countPendingL2Disputes,
   finalizeAffirmSubmission,
   finalizeArchive,
   isPendingL2Dispute,
@@ -137,6 +138,7 @@ describe('applyL2', () => {
           disputeL2Result: null,
           item: { title: '技能等级', dimensionCode: 'basic.skill-level' },
         }],
+        count: async () => 0,
         update: async (input: unknown) => { itemUpdates.push(input); return {}; },
       },
       dimensionReviewRoute: {
@@ -158,6 +160,65 @@ describe('applyL2', () => {
     assert.equal(update.data.disputeL2Result, 'APPROVED');
     assert.equal(update.data.disputeL2ReviewerId, 'reviewer-1');
     assert.ok(update.data.disputeL2ReviewedAt instanceof Date);
+  });
+
+  it('本部门申诉处理完后他部门仍有待审申诉时不提前归档', async () => {
+    let finalizeCalled = false;
+    const tx = {
+      submission: {
+        findUnique: async () => ({ id: 'sub-1', status: 'L1_APPROVED', user: { contact: '13800000000' } }),
+        update: async () => ({}),
+      },
+      user: { findUnique: async () => ({ departmentId: 'dept-a' }) },
+      submissionOptionReview: {
+        findMany: async () => [],
+        count: async () => 0,
+      },
+      submissionItem: {
+        findMany: async () => [{
+          id: 'fact-a', itemId: 'performance.safety-contribution',
+          isSystemFilled: true,
+          confirmationStatus: 'DISPUTED',
+          disputeL1Result: 'APPROVED',
+          disputeL2Result: null,
+          item: { title: '安全贡献', dimensionCode: 'performance.safety-contribution' },
+        }],
+        count: async () => 1,
+        update: async () => ({}),
+      },
+      dimensionReviewRoute: {
+        findMany: async () => [
+          { dimensionCode: 'performance.safety-contribution', departmentId: 'dept-a' },
+          { dimensionCode: 'performance.defect-governance', departmentId: 'dept-b' },
+        ],
+      },
+      reviewLog: { create: async () => ({}) },
+      performanceRecord: { upsert: async () => { finalizeCalled = true; return {}; } },
+    } as any;
+
+    const result = await applyL2(tx, {
+      submissionId: 'sub-1',
+      reviewerId: 'reviewer-a',
+      decisions: [{ submissionItemId: 'fact-a', action: 'APPROVE', disputeAction: 'APPROVE' }],
+    });
+
+    assert.equal(result.outcome, 'pending');
+    assert.equal(finalizeCalled, false);
+  });
+});
+
+describe('countPendingL2Disputes', () => {
+  it('统计全单待二审申诉数', async () => {
+    const tx = {
+      submissionItem: {
+        count: async (args: { where: Record<string, unknown> }) => {
+          assert.equal(args.where.submissionId, 'sub-1');
+          assert.equal(args.where.disputeL2Result, null);
+          return 2;
+        },
+      },
+    };
+    assert.equal(await countPendingL2Disputes(tx as never, 'sub-1'), 2);
   });
 });
 
@@ -247,6 +308,49 @@ describe('applyL1', () => {
     assert.ok(submissionUpdates.some((update: any) => update.data.status === 'L1_APPROVED'));
     assert.ok(itemUpdates.some((update: any) => update.data.status === 'PENDING_L2'));
     assert.ok(!submissionUpdates.some((update: any) => update.data.status === 'L2_APPROVED'));
+  });
+
+  it('已确认系统填充项缺二审路由时不阻断一级通过', async () => {
+    let optionReviewUpsert = 0;
+    const tx = {
+      submission: {
+        findUnique: async () => ({
+          id: 'sub-1', status: 'SUBMITTED', branchId: 'branch-1',
+          user: { contact: '13800000000', departmentId: 'dept-1' },
+          items: [{
+            id: 'fact-1', itemId: 'performance.safety-contribution', status: 'L1_APPROVED', score: 1,
+            isSystemFilled: true, confirmationStatus: 'CONFIRMED',
+            disputeL1Result: null, disputeL2Result: null,
+            item: { title: '安全贡献', dimensionCode: 'performance.safety-contribution' },
+            optionReviews: [],
+          }],
+        }),
+        update: async () => ({}),
+      },
+      userRole: { findMany: async () => [{ scopeBranchId: 'branch-1', scopeDepartmentId: null }] },
+      dimensionReviewRoute: { findMany: async () => [] },
+      submissionOptionReview: {
+        deleteMany: async () => ({}),
+        upsert: async () => { optionReviewUpsert += 1; return {}; },
+        count: async () => 0,
+      },
+      submissionItem: {
+        findMany: async () => [{
+          id: 'fact-1', isSystemFilled: true, confirmationStatus: 'CONFIRMED',
+          disputeL1Result: null, disputeL2Result: null, optionReviews: [],
+        }],
+        count: async () => 1,
+        update: async () => ({}),
+      },
+      reviewLog: { create: async () => ({}) },
+    } as any;
+
+    const result = await applyL1(tx, {
+      submissionId: 'sub-1', reviewerId: 'reviewer-1', decisions: [],
+    });
+
+    assert.equal(result.outcome, 'pending');
+    assert.equal(optionReviewUpsert, 0);
   });
 });
 

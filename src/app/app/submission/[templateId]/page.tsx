@@ -145,6 +145,7 @@ export default function SubmissionPage() {
     });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -671,7 +672,7 @@ export default function SubmissionPage() {
       await persistDraft({ submitMode: 'APPEAL', appeal: nextAppeal });
 
       closeAppealModal();
-      alert('申诉已保存');
+      setSaveNotice('申诉已保存，尚未送审。请确认全部申诉项后点击「提交申诉审核」。');
     } catch (err) {
       alert(err instanceof Error ? err.message : '保存申诉失败');
     } finally {
@@ -959,6 +960,12 @@ export default function SubmissionPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
           </svg>
           本次申报已被驳回，仅可修改下方标红的项后重新提交。
+        </div>
+      )}
+
+      {saveNotice && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          {saveNotice}
         </div>
       )}
 

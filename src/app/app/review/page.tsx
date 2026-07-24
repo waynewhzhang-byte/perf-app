@@ -36,6 +36,7 @@ interface RowDecision {
 export default function ReviewPage() {
   const [tab, setTab] = useState<Tab>('pending');
   const [level, setLevel] = useState<1 | 2>(1);
+  const [availableLevels, setAvailableLevels] = useState<Array<1 | 2>>([1]);
   const [rows, setRows] = useState<AppealReviewRow[]>([]);
   const [total, setTotal] = useState(0);
   const [itemTitle, setItemTitle] = useState('');
@@ -47,8 +48,9 @@ export default function ReviewPage() {
   const [preview, setPreview] = useState<{ filename: string; viewUrl: string; kind: ViewKind } | null>(null);
   const [openingAttId, setOpeningAttId] = useState<string | null>(null);
 
-  const load = useCallback(async (nextTab: Tab = tab) => {
+  const load = useCallback(async (nextTab: Tab = tab, nextLevel: 1 | 2 = level) => {
     const params = new URLSearchParams();
+    params.set('level', String(nextLevel));
     if (nextTab === 'completed') params.set('filter', 'completed');
     if (itemTitle.trim()) params.set('itemTitle', itemTitle.trim());
     if (keyword.trim()) params.set('keyword', keyword.trim());
@@ -56,11 +58,12 @@ export default function ReviewPage() {
     const d = await r.json();
     setRows(d.appealRows ?? []);
     setTotal(d.total ?? 0);
-    setLevel(d.level ?? 1);
+    setLevel(d.level ?? nextLevel);
+    setAvailableLevels(d.availableLevels ?? [d.level ?? nextLevel]);
     setSelected(new Set());
     setDecisions({});
     setBatchRejectNote('');
-  }, [tab, itemTitle, keyword]);
+  }, [tab, level, itemTitle, keyword]);
 
   // 仅 tab 切换时自动拉取；关键字/申诉项筛选由「筛选」按钮触发，避免输入时清空勾选。
   useEffect(() => {
@@ -214,7 +217,12 @@ export default function ReviewPage() {
 
   const switchTab = (next: Tab) => {
     setTab(next);
-    void load(next);
+    void load(next, level);
+  };
+
+  const switchLevel = (next: 1 | 2) => {
+    setLevel(next);
+    void load(tab, next);
   };
 
   return (
@@ -252,6 +260,29 @@ export default function ReviewPage() {
           已审核
         </button>
       </div>
+
+      {availableLevels.length > 1 && (
+        <div className="mt-3 inline-flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => switchLevel(1)}
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-all cursor-pointer ${
+              level === 1 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            一级审核
+          </button>
+          <button
+            type="button"
+            onClick={() => switchLevel(2)}
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-all cursor-pointer ${
+              level === 2 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            二级审核
+          </button>
+        </div>
+      )}
 
       <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <label className="text-sm">
