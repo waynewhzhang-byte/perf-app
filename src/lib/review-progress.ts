@@ -164,7 +164,6 @@ export async function getReviewProgress(templateId: string, options: ProgressOpt
   }
   for (const [status, label] of [
     ['DRAFT', '草稿未提交'],
-    ['PRE_REVIEW_REJECTED', '自动预审未通过，待员工修改'],
   ] as const) {
     const count = scopedSubmissions.filter((submission) => submission.status === status).length;
     if (count > 0) blockers.push({ level: 'L1', code: status, label, count });

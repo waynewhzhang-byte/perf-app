@@ -8,7 +8,7 @@ import type { ReviewProgress } from '@/lib/review-progress';
 
 interface BranchFilter { id: string; name: string }
 interface TemplateFilter { id: string; title: string; year: number }
-interface Stats { total: number; draft: number; preReviewRejected: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
+interface Stats { total: number; draft: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
 interface SubUser { id: string; fullName: string; contact: string; employeeNo?: string | null; branch?: { id: string; name: string } | null }
 interface SubTemplate { id: string; title: string; year: number }
 interface SubItem {
@@ -100,7 +100,6 @@ export default function ReviewAuditPage() {
       SUBMITTED: { label: '待一审', cls: 'bg-yellow-100 text-yellow-700' },
       L1_APPROVED: { label: '待二审', cls: 'bg-blue-100 text-blue-700' },
       L2_APPROVED: { label: '终审通过', cls: 'bg-green-100 text-green-700' },
-      PRE_REVIEW_REJECTED: { label: '预审未通过', cls: 'bg-red-100 text-red-700' },
       REJECTED: { label: '已驳回', cls: 'bg-red-100 text-red-700' },
     };
     const m = map[s] ?? { label: s, cls: 'bg-slate-100' };
@@ -152,7 +151,6 @@ export default function ReviewAuditPage() {
           <select value={status} onChange={(e) => setStatus(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
             <option value="all">全部</option>
             <option value="DRAFT">草稿</option>
-            <option value="PRE_REVIEW_REJECTED">预审未通过</option>
             <option value="SUBMITTED">待审核</option>
             <option value="L1_APPROVED">一级已通过</option>
             <option value="L2_APPROVED">终审通过</option>
@@ -204,10 +202,9 @@ export default function ReviewAuditPage() {
 
       {/* 统计卡片 */}
       {stats && (
-        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-7">
+        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-6">
           <StatCard label="总计" value={stats.total} color="text-slate-900" />
           <StatCard label="草稿" value={stats.draft} color="text-slate-500" />
-          <StatCard label="预审未过" value={stats.preReviewRejected} color="text-red-600" />
           <StatCard label="待一审" value={stats.submitted} color="text-yellow-600" />
           <StatCard label="待二审" value={stats.l1Approved} color="text-blue-600" />
           <StatCard label="终审通过" value={stats.l2Approved} color="text-green-600" />
@@ -278,9 +275,9 @@ export default function ReviewAuditPage() {
                           <span>申报等级：{detail?.declarationLevelName || '—'}</span>
                           <span>申报专业：{detail?.declarationSpecialtyName || '—'}</span>
                         </div>
-                        {detail?.status === 'PRE_REVIEW_REJECTED' && (detail?.preReviewMessages ?? []).length > 0 && (
-                          <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                            自动预审说明：{detail!.preReviewMessages!.join('；')}
+                        {(detail?.preReviewMessages ?? []).length > 0 && (
+                          <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            自动预审提示：{detail!.preReviewMessages!.join('；')}
                           </div>
                         )}
                       </div>

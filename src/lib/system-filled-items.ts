@@ -35,7 +35,7 @@ export function isFactDataSourceDimension(code: string | null | undefined): bool
   return source === 'fact' || source === 'deduction';
 }
 
-/** 事实维度与系统带出的参加工作时间都只能确认或申诉，不能由员工填写分数。 */
+/** 事实维度与系统带出的参加工作时间均不可由员工自填分数；参加工作时间只读展示（不可申诉）。 */
 export function isSystemConfirmationDimension(code: string | null | undefined): boolean {
   return code === HIRE_DATE_CONFIRMATION_CODE || isFactDataSourceDimension(code);
 }

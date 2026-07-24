@@ -48,7 +48,7 @@ test('T03 appeal-centric smoke: save two, delete one, edit one, reload', async (
     await expect(page.getByRole('heading', { name: '新增申诉' })).toBeVisible();
 
     await page.locator('label:has-text("一级维度") select').selectOption({ label: sectionText });
-    await page.locator('label:has-text("申诉项") select').selectOption({ label: itemText });
+    await page.locator('label:has-text("二级评分项") select').selectOption({ label: itemText });
 
     await page.getByLabel('申诉分值（主张分）').fill(claimed);
     await page.getByLabel('申诉说明').fill(reason);

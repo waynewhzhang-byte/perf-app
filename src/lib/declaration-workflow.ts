@@ -88,7 +88,7 @@ export class DeclarationError extends Error {
 
 /** 纯函数：已有申报是否允许编辑；不可编辑时返回用户文案 */
 export function submissionEditBlockReason(status: string): string | null {
-  if (status === 'DRAFT' || status === 'REJECTED' || status === 'PRE_REVIEW_REJECTED') return null;
+  if (status === 'DRAFT' || status === 'REJECTED') return null;
   if (status === 'SUBMITTED') return '申报已提交，不可编辑';
   if (status === 'L1_APPROVED') return '申报已通过一级审核，不可编辑';
   if (status === 'L2_APPROVED') return '申报已终审通过，不可编辑';
@@ -227,7 +227,7 @@ export async function upsertDeclaration(
   const skippedItems: string[] = [];
   let unrepairedRejected: Array<{ itemId: string; title: string }> = [];
   let totalScore = 0;
-  let preReviewRejectedMessages: string[] = [];
+  let preReviewMessages: string[] = [];
   let finalized = false;
 
   const [workArea, declarationLevel, declarationSpecialty] = await Promise.all([
@@ -280,7 +280,7 @@ export async function upsertDeclaration(
       declarationLevelId: declarationLevel.id,
       rules,
     });
-    preReviewRejectedMessages = preReview.messages;
+    preReviewMessages = preReview.messages;
   }
 
   let sub = await tx.submission.findUnique({
@@ -387,6 +387,7 @@ export async function upsertDeclaration(
 
       const activeSystemItems = systemItems.filter((sys) => !lockedItemIds.has(sys.itemId));
       const hasDisputedSystemItems = activeSystemItems.some((sys) => {
+        if (sys.dimensionCode === HIRE_DATE_CONFIRMATION_CODE) return false;
         const payload = items.find((i) => i.itemId === sys.itemId);
         const existingItem = existingMap.get(sys.itemId);
         const raw = (
@@ -412,7 +413,7 @@ export async function upsertDeclaration(
         const payload = items.find((i) => i.itemId === sys.itemId);
         const existingItem = existingMap.get(sys.itemId);
         const payloadIncludesStatus = Boolean(payload && 'confirmationStatus' in payload);
-        const confStatus = appealCentric && submitMode
+        let confStatus = appealCentric && submitMode
           ? resolveAppealCentricConfirmation({
               submit,
               submitMode,
@@ -427,6 +428,15 @@ export async function upsertDeclaration(
                 ? payload.confirmationStatus
                 : existingItem?.confirmationStatus
             ) as ConfirmationStatus | null | undefined);
+        // 参加工作时间只读：不可申诉，提交时自动确认；据此计算的能级在填报页明确展示。
+        if (sys.dimensionCode === HIRE_DATE_CONFIRMATION_CODE) {
+          if (confStatus === 'DISPUTED') {
+            throw new DeclarationError('「参加工作时间」不可申诉，系统据此自动计算参评能级');
+          }
+          if (submit || appealCentric) {
+            confStatus = 'CONFIRMED';
+          }
+        }
         const disputeReason = confStatus === 'DISPUTED'
           ? payload?.disputeReason ?? existingItem?.disputeReason ?? null
           : null;
@@ -634,14 +644,14 @@ export async function upsertDeclaration(
   }
 
   if (submit) {
-    if (sub.status === 'REJECTED' || sub.status === 'PRE_REVIEW_REJECTED') {
+    if (sub.status === 'REJECTED') {
       await tx.reviewLog.create({
         data: {
           submissionId: sub.id,
           reviewerId: userId,
           level: 0,
           action: 'APPROVE',
-          note: sub.status === 'PRE_REVIEW_REJECTED' ? '员工重新提交自动预审' : '员工重新提交',
+          note: '员工重新提交',
         },
       });
     }
@@ -708,7 +718,7 @@ export async function upsertDeclaration(
     submissionId,
     totalScore,
     employeeContact: user.contact,
-    preReviewMessages: preReviewRejectedMessages,
+    preReviewMessages,
     skippedItems,
     unrepairedItems: unrepairedRejected,
     ...(finalized ? { finalized: true } : {}),

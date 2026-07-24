@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeLevel, declarationLevelNameCandidates, levelFromHireDate } from './declaration-level';
+import { computeLevel, declarationLevelNameCandidates, formatDeclarationLevelDisplay, levelFromHireDate } from './declaration-level';
 
 describe('computeLevel', () => {
   it('0 年 → 三级', () => assert.equal(computeLevel(0), '三级'));
@@ -49,5 +49,24 @@ describe('levelFromHireDate', () => {
 describe('declarationLevelNameCandidates', () => {
   it('自动计算的三级可以匹配等级字典中的 3级', () => {
     assert.deepEqual(declarationLevelNameCandidates('三级'), ['三级', '3级']);
+  });
+});
+
+describe('formatDeclarationLevelDisplay', () => {
+  it('中文等级转为阿拉伯数字级', () => {
+    assert.equal(formatDeclarationLevelDisplay('一级'), '1级');
+    assert.equal(formatDeclarationLevelDisplay('二级'), '2级');
+    assert.equal(formatDeclarationLevelDisplay('三级'), '3级');
+  });
+
+  it('已是数字或带前缀时仍输出统一标签', () => {
+    assert.equal(formatDeclarationLevelDisplay('1级'), '1级');
+    assert.equal(formatDeclarationLevelDisplay('能级评价二级'), '2级');
+    assert.equal(formatDeclarationLevelDisplay('能级评价3级'), '3级');
+  });
+
+  it('空值返回 null', () => {
+    assert.equal(formatDeclarationLevelDisplay(null), null);
+    assert.equal(formatDeclarationLevelDisplay(''), null);
   });
 });

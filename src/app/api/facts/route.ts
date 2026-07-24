@@ -206,8 +206,8 @@ export async function GET(req: Request) {
     dimensionCode: HIRE_DATE_CONFIRMATION_CODE,
     factKind: 'profile' as const,
     source: 'FACT' as const,
-    ruleSummary: '参加工作时间来自员工花名册；系统据此按年度截止日计算工龄和参评能级。',
-    requiresConfirmation: true,
+    ruleSummary: '参加工作时间来自员工花名册；系统据此按年度截止日计算工龄和参评能级（不可申诉）。',
+    requiresConfirmation: false,
     facts: hireDate ? [{
       id: 'profile-hire-date',
       thirdLevelTitle: '参加工作时间',

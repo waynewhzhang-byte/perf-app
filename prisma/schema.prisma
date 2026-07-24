@@ -335,7 +335,6 @@ model DimensionReviewRoute {
 // ========== 申报 ==========
 enum SubmissionStatus {
   DRAFT
-  PRE_REVIEW_REJECTED // 自动预审未通过，员工修改固定表头后重提
   SUBMITTED
   L1_APPROVED
   L2_APPROVED // 终审通过 → 生成 PerformanceRecord

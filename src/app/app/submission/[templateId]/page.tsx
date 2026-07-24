@@ -6,18 +6,22 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
-import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
+import { evaluationCutoffDate, formatDeclarationLevelDisplay, levelFromHireDate } from '@/lib/declaration-level';
 import { calculateFullWorkYears } from '@/lib/pre-review';
 import { computeItemScore, parseDateOnly } from '@/lib/submission-score';
 import { isSystemConfirmationDimension } from '@/lib/system-filled-items';
-import { groupAppealCascadeItems } from '@/lib/appeal-cascade';
+import { groupAppealCascadeItems, isAppealableDimensionCode } from '@/lib/appeal-cascade';
 import { SupportPhoneFooter } from '@/components/support-phone-footer';
 import { formatDerivationPreview, truncateDerivationPreview } from '@/lib/derivation-display';
-import { PERFORMANCE_SECTIONS } from '@/lib/scoring-standards';
+import { PERFORMANCE_SECTIONS, SCORING_STANDARDS } from '@/lib/scoring-standards';
 
 const FORM_2026_TITLE = '2026 年能级评价量化积分申报表';
 const FORM_2026_DESCRIPTION =
   '国网山西超高压变电公司 2026 年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分。请逐项查看系统分值与计算过程；如有异议，请通过页面底部「申诉」提交理由与证明材料；对系统分值无异议请使用「确认报名」。';
+
+const SCORING_POINT_ORDER = new Map<string, number>(
+  SCORING_STANDARDS.map((standard, index) => [standard.code, index]),
+);
 
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
@@ -274,6 +278,13 @@ export default function SubmissionPage() {
     return header.hireDate || '—';
   }, [profileFactItem, header.hireDate]);
 
+  const participationWorkYears = useMemo(() => {
+    const hire = parseDateOnly(displayHireDate !== '—' ? displayHireDate : undefined)
+      ?? parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
+    return calculateFullWorkYears(hire, evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()));
+  }, [displayHireDate, header.hireDate, tpl?.year]);
+
   const groupedFactSections = useMemo(() => {
     if (!factsData?.items.length) return [];
     const bySection = new Map<string, typeof factsData.items>();
@@ -289,12 +300,18 @@ export default function SubmissionPage() {
       .filter((code) => bySection.has(code))
       .map((code) => {
         const sheet = sheetSections.find((section) => section.code === code);
-        const items = bySection.get(code)!;
+        const sectionDef = PERFORMANCE_SECTIONS.find((section) => section.code === code);
+        const items = [...bySection.get(code)!].sort((a, b) => {
+          const ai = SCORING_POINT_ORDER.get(a.dimensionCode ?? '') ?? 999;
+          const bi = SCORING_POINT_ORDER.get(b.dimensionCode ?? '') ?? 999;
+          return ai - bi;
+        });
         return {
           code,
-          title: sheet?.title ?? items[0]?.sectionTitle ?? code,
+          title: sheet?.title ?? sectionDef?.title ?? items[0]?.sectionTitle ?? code,
           score: sheet?.score ?? items.reduce((sum, fi) => sum + fi.totalScore, 0),
-          maxScore: sheet?.maxScore ?? 0,
+          maxScore: sheet?.maxScore ?? sectionDef?.maxScore ?? 0,
+          excelOrder: sectionDef?.excelOrder ?? 99,
           items,
         };
       });
@@ -307,6 +324,7 @@ export default function SubmissionPage() {
         itemTitle: fi.itemTitle,
         sectionTitle: fi.sectionTitle ?? '系统导入',
         sectionCode: fi.sectionCode,
+        dimensionCode: fi.dimensionCode,
         totalScore: fi.totalScore,
       })),
     ),
@@ -327,11 +345,15 @@ export default function SubmissionPage() {
     const appealed = new Set(
       savedAppeals.map((fi) => fi.itemId).filter((id) => id !== editingAppealItemId),
     );
-    return (factsData?.items ?? []).filter((fi) => !appealed.has(fi.itemId));
+    return (factsData?.items ?? []).filter(
+      (fi) => isAppealableDimensionCode(fi.dimensionCode) && !appealed.has(fi.itemId),
+    );
   }, [factsData, savedAppeals, editingAppealItemId]);
 
   const modalSectionItems = useMemo(() => {
-    const pool = editingAppealItemId ? (factsData?.items ?? []) : availableAppealItems;
+    const pool = editingAppealItemId
+      ? (factsData?.items ?? []).filter((fi) => isAppealableDimensionCode(fi.dimensionCode))
+      : availableAppealItems;
     return pool.filter((fi) => (fi.sectionTitle ?? '系统导入') === modalSectionTitle);
   }, [factsData, availableAppealItems, editingAppealItemId, modalSectionTitle]);
 
@@ -361,18 +383,25 @@ export default function SubmissionPage() {
   }, [header.hireDate, tpl?.year]);
 
   const calculatedDeclarationLevel = useMemo(() => {
-    const hire = parseDateOnly(header.hireDate || undefined);
+    const hire = parseDateOnly(displayHireDate !== '—' ? displayHireDate : undefined)
+      ?? parseDateOnly(header.hireDate || undefined);
     if (!hire) return null;
     return levelFromHireDate(
       hire,
       evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()),
     );
-  }, [header.hireDate, tpl?.year]);
+  }, [displayHireDate, header.hireDate, tpl?.year]);
 
   const displayParticipationLevel = useMemo(() => {
     const tier = factsData?.scoreSheet?.declarationTier ?? calculatedDeclarationLevel;
-    return tier ? `能级评价${tier}` : '—';
+    const label = formatDeclarationLevelDisplay(tier);
+    return label ? `能级评价${label}` : '—';
   }, [factsData, calculatedDeclarationLevel]);
+
+  const displayCalculatedLevel = useMemo(
+    () => formatDeclarationLevelDisplay(calculatedDeclarationLevel) ?? '',
+    [calculatedDeclarationLevel],
+  );
 
   const isLocked = (itemId: string): boolean => {
     if (sub?.status !== 'REJECTED') return false;
@@ -384,7 +413,6 @@ export default function SubmissionPage() {
     const key = optionKey(itemId, option, index);
     return !!answers[itemId]?.optionReviews?.some((review) => review.optionId === key && review.status === 'L2_APPROVED');
   };
-  const isPreReviewRejected = sub?.status === 'PRE_REVIEW_REJECTED';
 
   const toggle = (it: FormItem, idx: number) => {
     if (isLocked(it.id) || isOptionLocked(it.id, it.scoreOptions[idx], idx)) return;
@@ -787,11 +815,10 @@ export default function SubmissionPage() {
     </main>
   );
 
-  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED' || sub.status === 'PRE_REVIEW_REJECTED';
-  const itemEditable = editable && !isPreReviewRejected;
+  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED';
+  const itemEditable = editable;
   const statusMap: Record<string, string> = {
     SUBMITTED: '待审核', L1_APPROVED: '一审通过', L2_APPROVED: '终审通过',
-    PRE_REVIEW_REJECTED: '自动预审未通过',
   };
 
   type FactItem = NonNullable<typeof factsData>['items'][number];
@@ -935,17 +962,6 @@ export default function SubmissionPage() {
         </div>
       )}
 
-      {isPreReviewRejected && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <p className="font-medium">自动预审未通过，请修改固定表头后重新提交。</p>
-          {(sub?.preReviewMessages ?? []).length > 0 && (
-            <ul className="mt-1 list-inside list-disc text-xs">
-              {sub!.preReviewMessages!.map((msg, idx) => <li key={`${msg}-${idx}`}>{msg}</li>)}
-            </ul>
-          )}
-        </div>
-      )}
-
       {sub?.status && sub.status !== 'DRAFT' && sub.status !== 'REJECTED' && (
         <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           当前状态：{statusMap[sub.status] ?? sub.status}，已不可编辑。
@@ -976,12 +992,30 @@ export default function SubmissionPage() {
       </div>
 
       {is2026AppealView && (
-        <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
-          <h2 className="font-semibold">参加工作时间</h2>
-          <div className="mt-3 space-y-2 text-sm text-slate-700">
-            <p>参加工作时间：{displayHireDate}</p>
-            <p>能级评价参评等级：{displayParticipationLevel}</p>
-          </div>
+        <section className="mt-5 rounded-xl border border-primary-200 bg-primary-50/40 p-5">
+          <h2 className="font-semibold text-slate-900">参加工作时间与参评能级</h2>
+          <p className="mt-1 text-xs text-slate-600">
+            参加工作时间由员工花名册导入，只读不可申诉。系统按年度评价截止日（当年 7 月 31 日）自动计算工龄与能级评价等级。
+          </p>
+          <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
+              <dt className="text-xs font-medium text-slate-500">参加工作时间</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">{displayHireDate}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
+              <dt className="text-xs font-medium text-slate-500">工作年限（整年）</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">
+                {participationWorkYears != null ? `${participationWorkYears} 年` : '—'}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 sm:col-span-1">
+              <dt className="text-xs font-medium text-emerald-800">自动计算的能级评价等级</dt>
+              <dd className="mt-1 text-lg font-bold tabular-nums text-emerald-900">
+                {displayParticipationLevel}
+              </dd>
+              <p className="mt-1 text-[11px] text-emerald-700/80">由参加工作时间自动得出，不可手工修改</p>
+            </div>
+          </dl>
         </section>
       )}
 
@@ -1024,10 +1058,10 @@ export default function SubmissionPage() {
                 </label>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">自动计算的能级评价等级</span>
-                  <input type="text" value={calculatedDeclarationLevel ?? ''} readOnly
+                  <input type="text" value={displayCalculatedLevel} readOnly
                     placeholder="填写入职时间后自动计算"
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm font-medium text-slate-700" />
-                  <p className="mt-0.5 text-xs text-slate-400">系统按入职时间自动计算，不能手工选择。</p>
+                  <p className="mt-0.5 text-xs text-slate-400">系统按入职时间自动计算（展示为 1/2/3 级），不能手工选择。</p>
                 </label>
               </>
             )}
@@ -1065,72 +1099,126 @@ export default function SubmissionPage() {
         </section>
       )}
 
-      {/* 系统自动填充项 */}
+      {/* 系统自动填充项：一级维度 → 二级评分项 → 叶级明细 */}
       {appealCentric && groupedFactSections.length > 0 && (
         <div className="mt-5 space-y-5">
+          <p className="text-xs text-slate-500">
+            按量化积分表层级展示：一级评价维度 → 二级评分项 → 叶级评价标准与计算过程。
+          </p>
           {groupedFactSections.map((section) => (
-            <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3">
-                <h2 className="font-semibold text-slate-800">{section.title}</h2>
-                <span className="text-sm font-semibold tabular-nums text-slate-700">
-                  {section.score.toFixed(1)}
-                  {section.maxScore > 0 && <span className="font-normal text-slate-500"> / {section.maxScore}</span>}
-                </span>
+            <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-100/90 px-5 py-3.5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                      一级
+                    </span>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      {section.excelOrder}. {section.title}
+                    </h2>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    下含 {section.items.length} 个二级评分项
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">一级得分</p>
+                  <p className="text-sm font-bold tabular-nums text-slate-900">
+                    {section.score.toFixed(1)}
+                    {section.maxScore > 0 && (
+                      <span className="font-normal text-slate-500"> / {section.maxScore}</span>
+                    )}
+                  </p>
+                </div>
               </div>
-              {section.items.map((fi) => {
-                const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
-                const leafRows = fi.facts.length > 0
-                  ? fi.facts
-                  : [{ id: `${fi.itemId}-empty`, score: fi.totalScore }];
-                return (
-                  <div
-                    key={fi.itemId}
-                    className={`border-t border-slate-200 px-5 py-4 ${disputed ? 'bg-amber-50/60' : ''}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-baseline justify-between gap-2">
-                          <h3 className="text-sm font-semibold text-slate-800">{fi.itemTitle}</h3>
-                          <span className={`text-sm font-semibold tabular-nums ${disputed ? 'text-amber-700' : 'text-emerald-700'}`}>
-                            {fi.totalScore.toFixed(1)} 分
-                          </span>
+
+              <div className="space-y-3 bg-slate-50/60 p-3 sm:p-4">
+                {section.items.map((fi) => {
+                  const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
+                  const leafRows = fi.facts.length > 0
+                    ? fi.facts
+                    : [{ id: `${fi.itemId}-empty`, score: fi.totalScore }];
+                  const standard = fi.dimensionCode
+                    ? SCORING_STANDARDS.find((row) => row.code === fi.dimensionCode)
+                    : undefined;
+                  return (
+                    <div
+                      key={fi.itemId}
+                      className={`rounded-lg border bg-white ${
+                        disputed ? 'border-amber-300 shadow-sm shadow-amber-100' : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded bg-primary-700 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                              二级
+                            </span>
+                            <h3 className="text-sm font-semibold text-slate-800">{fi.itemTitle}</h3>
+                            {disputed && (
+                              <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                申诉中
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            一级：{section.title}
+                            <span className="mx-1 text-slate-300">·</span>
+                            二级：{fi.itemTitle}
+                            {standard?.maxScore != null && standard.maxScore > 0 && (
+                              <>
+                                <span className="mx-1 text-slate-300">·</span>
+                                满分 {standard.maxScore}
+                              </>
+                            )}
+                          </p>
                         </div>
-                        <div className="mt-3 overflow-x-auto">
+                        <div className="shrink-0 text-right">
+                          <p className="text-[10px] font-medium text-slate-500">二级得分</p>
+                          <p className={`text-sm font-bold tabular-nums ${disputed ? 'text-amber-700' : 'text-emerald-700'}`}>
+                            {fi.totalScore.toFixed(1)} 分
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="px-4 py-3">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                            叶级
+                          </span>
+                          <span className="text-[11px] text-slate-500">评价标准 · 得分 · 计算过程</span>
+                        </div>
+                        <div className="overflow-x-auto rounded-md border border-slate-100">
                           <table className="w-full min-w-[28rem] text-left text-xs">
                             <thead>
-                              <tr className="text-slate-500">
-                                <th className="pb-2 pr-3 font-medium">评价标准</th>
-                                <th className="w-16 pb-2 pr-3 font-medium">得分</th>
-                                <th className="pb-2 font-medium">计算过程</th>
+                              <tr className="bg-slate-50 text-slate-500">
+                                <th className="px-3 py-2 font-medium">评价标准</th>
+                                <th className="w-16 px-3 py-2 font-medium">得分</th>
+                                <th className="px-3 py-2 font-medium">计算过程</th>
                               </tr>
                             </thead>
                             <tbody className="text-slate-600">
                               {leafRows.map((fact, index) => (
                                 <tr key={fact.id} className="border-t border-slate-100 align-top">
-                                  <td className="py-2 pr-3">
+                                  <td className="px-3 py-2">
                                     {fi.facts.length === 0 && index === 0 ? (
                                       <span className="text-amber-700">暂无部门台账导入记录（当前按 0 分计入）</span>
                                     ) : (
                                       renderLeafCriterion(fi, fi.facts.length > 0 ? fact : undefined)
                                     )}
                                   </td>
-                                  <td className="py-2 pr-3 font-medium tabular-nums">{Number(fact.score).toFixed(1)}</td>
-                                  <td className="py-2">{index === 0 ? renderDerivationCell(fi) : null}</td>
+                                  <td className="px-3 py-2 font-medium tabular-nums">{Number(fact.score).toFixed(1)}</td>
+                                  <td className="px-3 py-2">{index === 0 ? renderDerivationCell(fi) : null}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
                       </div>
-                      {disputed && (
-                        <span className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
-                          申诉中
-                        </span>
-                      )}
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </section>
           ))}
         </div>
@@ -1144,6 +1232,9 @@ export default function SubmissionPage() {
               <li key={fi.itemId} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white px-4 py-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-800">{fi.itemTitle}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    一级：{fi.sectionTitle ?? '—'} · 二级：{fi.itemTitle}
+                  </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     系统分 {fi.totalScore.toFixed(1)} → 主张分 {factsClaimedScores[fi.itemId]?.toFixed(1) ?? '—'}
                   </p>
@@ -1437,7 +1528,9 @@ export default function SubmissionPage() {
                   onChange={(e) => {
                     const sectionTitle = e.target.value;
                     setModalSectionTitle(sectionTitle);
-                    const pool = editingAppealItemId ? (factsData?.items ?? []) : availableAppealItems;
+                    const pool = editingAppealItemId
+                      ? (factsData?.items ?? []).filter((fi) => isAppealableDimensionCode(fi.dimensionCode))
+                      : availableAppealItems;
                     const first = pool.find((fi) => (fi.sectionTitle ?? '系统导入') === sectionTitle);
                     setModalItemId(first?.itemId ?? '');
                     setModalClaimedScore(first != null ? String(first.totalScore) : '');
@@ -1450,7 +1543,7 @@ export default function SubmissionPage() {
                 </select>
               </label>
               <label className="block text-sm">
-                <span className="font-medium text-slate-700">申诉项（二级）</span>
+                <span className="font-medium text-slate-700">二级评分项</span>
                 <select
                   value={modalItemId}
                   disabled={!!editingAppealItemId}
@@ -1466,6 +1559,9 @@ export default function SubmissionPage() {
                     <option key={fi.itemId} value={fi.itemId}>{fi.itemTitle}</option>
                   ))}
                 </select>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  先选一级维度（如工作现场），再选其下二级评分项（如两票执行）；共 11 项，参加工作时间不可申诉。
+                </p>
               </label>
               {modalFactItem && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">

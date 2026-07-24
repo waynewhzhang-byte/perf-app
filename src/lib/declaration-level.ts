@@ -49,6 +49,19 @@ export function declarationLevelNameCandidates(level: DeclarationLevel): string[
   return [level, numericName];
 }
 
+/**
+ * 展示用能级标签：统一阿拉伯数字（1级/2级/3级），与报表更一致。
+ * 接受「一级」「1级」「能级评价一级」等输入。
+ */
+export function formatDeclarationLevelDisplay(level: string | null | undefined): string | null {
+  if (!level?.trim()) return null;
+  const raw = level.trim();
+  if (/1\s*级/.test(raw) || raw.includes('一级')) return '1级';
+  if (/2\s*级/.test(raw) || raw.includes('二级')) return '2级';
+  if (/3\s*级/.test(raw) || raw.includes('三级')) return '3级';
+  return null;
+}
+
 /** 入职日期 → 能级等级（用截至当前日期的整数年限） */
 export function levelFromHireDate(hireDate: Date, asOf: Date = new Date()): DeclarationLevel {
   let years = asOf.getFullYear() - hireDate.getFullYear();

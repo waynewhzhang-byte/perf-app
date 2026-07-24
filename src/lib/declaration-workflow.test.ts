@@ -9,10 +9,9 @@ import {
 } from './declaration-workflow';
 
 describe('submissionEditBlockReason', () => {
-  it('DRAFT / REJECTED / PRE_REVIEW_REJECTED 可编辑', () => {
+  it('DRAFT / REJECTED 可编辑', () => {
     assert.equal(submissionEditBlockReason('DRAFT'), null);
     assert.equal(submissionEditBlockReason('REJECTED'), null);
-    assert.equal(submissionEditBlockReason('PRE_REVIEW_REJECTED'), null);
   });
 
   it('已提交与审核中状态不可编辑', () => {

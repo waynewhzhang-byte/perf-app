@@ -1,6 +1,7 @@
 /**
  * T04 AFFIRM + T05 审核台 E2E
  *
+ * 覆盖 2026 申诉-centric 主路径（取代已删除的 performance-review.e2e.spec.ts）。
  * 顺序：先 AFFIRM 直通归档；再重置 → 申诉送审 → L1 表格筛选/批量确认。
  * 账号默认：员工 11456348；L1 l1-biandian@perf.local / Test1234!
  */
@@ -115,7 +116,7 @@ test('T05：申诉送审后 L1 表格可见、可筛选、可批量确认', asyn
   await page.locator('label:has-text("一级维度") select').selectOption({
     label: '一、基本素质（满分14分）',
   });
-  await page.locator('label:has-text("申诉项") select').selectOption({
+  await page.locator('label:has-text("二级评分项") select').selectOption({
     label: '参加工作时间（系统导入确认）',
   });
   await page.getByLabel('申诉分值（主张分）').fill('2');

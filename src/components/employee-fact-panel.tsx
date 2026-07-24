@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { formatDeclarationLevelDisplay } from '@/lib/declaration-level';
 
 interface ScoreLine {
   id?: string;
@@ -115,10 +116,16 @@ export function EmployeeFactPanel({
         <div>
           <p className="text-sm font-semibold text-slate-800">事实绩效基础</p>
           <p className="mt-0.5 text-xs text-slate-500">
-            {[result.branchName, result.departmentName, result.declarationTier ? `${result.declarationTier}能级` : null]
+            {[
+              result.branchName,
+              result.departmentName,
+              result.declarationTier
+                ? `${formatDeclarationLevelDisplay(result.declarationTier) ?? result.declarationTier}能级`
+                : null,
+            ]
               .filter(Boolean)
               .join(' · ') || '基于导入事实与积分规则计算'}
-          </p>
+            </p>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
