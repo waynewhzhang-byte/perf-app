@@ -116,7 +116,7 @@ test('T05：申诉送审后 L1 表格可见、可筛选、可批量确认', asyn
   await page.locator('label:has-text("一级维度") select').selectOption({
     label: '一、基本素质（满分14分）',
   });
-  await page.locator('label:has-text("二级评分项") select').selectOption({
+  await page.locator('label:has-text("评分项") select').selectOption({
     label: '参加工作时间（系统导入确认）',
   });
   await page.getByLabel('申诉分值（主张分）').fill('2');

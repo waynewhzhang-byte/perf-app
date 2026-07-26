@@ -31,7 +31,7 @@ const ENTITY_LABEL: Record<z.infer<typeof EntitySchema>['entity'], string> = {
   jobType: '工种',
   employeeLevel: '员工级别',
   declarationLevel: '能级评价等级',
-  declarationSpecialty: '能级评价专业',
+  declarationSpecialty: '申报专业',
 };
 
 

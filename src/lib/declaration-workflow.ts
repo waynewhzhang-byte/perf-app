@@ -230,7 +230,7 @@ export async function upsertDeclaration(
       throw new DeclarationError('请选择能级评价等级', 400);
     }
     if (hfRequired('declarationSpecialty') && !declarationSpecialtyId) {
-      throw new DeclarationError('请选择能级评价专业', 400);
+      throw new DeclarationError('请选择申报专业', 400);
     }
   }
 
@@ -261,7 +261,7 @@ export async function upsertDeclaration(
       throw new DeclarationError('请选择有效的能级评价等级');
     }
     if (hfEnabled('declarationSpecialty') && !declarationSpecialty) {
-      throw new DeclarationError('请选择有效的能级评价专业');
+      throw new DeclarationError('请选择有效的申报专业');
     }
   }
 

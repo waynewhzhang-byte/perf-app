@@ -11,6 +11,7 @@ import { applyTicketCohortNormalization } from '@/lib/dimension-aggregation';
 import { effectiveHireDate, evaluationCutoffDate, levelFromHireDate, parseMockDeclarationTier, type DeclarationTier } from '@/lib/declaration-level';
 import { SCORING_STANDARDS, sourceDimensionCodes } from '@/lib/scoring-standards';
 import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
+import { round2 } from '@/lib/rounding';
 
 // 导入事实既包含正向事实，也包含由台账导入的违章扣分事实。
 // 两者都必须进入分表，才能使“特殊事项（扣分）”和最终积分一致。
@@ -338,10 +339,6 @@ export interface ImportedScoreGroupSummary {
   maxImportedTotal: number;
   withTicketCount: number;
   withDefectCount: number;
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }
 
 /** 按分公司 / 部门汇总导入维度得分 */

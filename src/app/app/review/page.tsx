@@ -9,12 +9,23 @@ interface AppealAttachment {
   mimeType?: string | null;
 }
 
+interface SelectOption {
+  id: string;
+  name: string;
+  branchId?: string;
+}
+
 interface AppealReviewRow {
   submissionItemId: string;
   submissionId: string;
   employeeNo: string;
   employeeName: string;
   contact: string;
+  unitName: string;
+  workAreaName: string | null;
+  departmentName: string | null;
+  declarationSpecialtyId: string | null;
+  declarationSpecialtyName: string | null;
   itemTitle: string;
   systemScore: number;
   disputeReason: string | null;
@@ -27,11 +38,11 @@ type Tab = 'pending' | 'completed';
 type ViewKind = 'image' | 'pdf' | 'other';
 
 interface RowDecision {
-  action: 'APPROVE' | 'REJECT';
-  note?: string;
-  disputeAction?: 'APPROVE' | 'REJECT';
+  disputeAction: 'APPROVE' | 'REJECT';
   disputeNote?: string;
 }
+
+const defaultDecision = (): RowDecision => ({ disputeAction: 'APPROVE' });
 
 export default function ReviewPage() {
   const [tab, setTab] = useState<Tab>('pending');
@@ -41,6 +52,12 @@ export default function ReviewPage() {
   const [total, setTotal] = useState(0);
   const [itemTitle, setItemTitle] = useState('');
   const [keyword, setKeyword] = useState('');
+  const [branchId, setBranchId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [declarationSpecialtyId, setDeclarationSpecialtyId] = useState('');
+  const [branches, setBranches] = useState<SelectOption[]>([]);
+  const [departments, setDepartments] = useState<SelectOption[]>([]);
+  const [declarationSpecialties, setDeclarationSpecialties] = useState<SelectOption[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({});
   const [batchRejectNote, setBatchRejectNote] = useState('');
@@ -54,16 +71,22 @@ export default function ReviewPage() {
     if (nextTab === 'completed') params.set('filter', 'completed');
     if (itemTitle.trim()) params.set('itemTitle', itemTitle.trim());
     if (keyword.trim()) params.set('keyword', keyword.trim());
+    if (branchId) params.set('branchId', branchId);
+    if (departmentId) params.set('departmentId', departmentId);
+    if (declarationSpecialtyId) params.set('declarationSpecialtyId', declarationSpecialtyId);
     const r = await fetch(`/api/review?${params}`);
     const d = await r.json();
     setRows(d.appealRows ?? []);
     setTotal(d.total ?? 0);
     setLevel(d.level ?? nextLevel);
     setAvailableLevels(d.availableLevels ?? [d.level ?? nextLevel]);
+    setBranches(d.branches ?? []);
+    setDepartments(d.departments ?? []);
+    setDeclarationSpecialties(d.declarationSpecialties ?? []);
     setSelected(new Set());
     setDecisions({});
     setBatchRejectNote('');
-  }, [tab, level, itemTitle, keyword]);
+  }, [tab, level, itemTitle, keyword, branchId, departmentId, declarationSpecialtyId]);
 
   // 仅 tab 切换时自动拉取；关键字/申诉项筛选由「筛选」按钮触发，避免输入时清空勾选。
   useEffect(() => {
@@ -76,9 +99,14 @@ export default function ReviewPage() {
     [rows],
   );
 
+  const filteredDepartments = useMemo(
+    () => (branchId ? departments.filter((d) => d.branchId === branchId) : departments),
+    [departments, branchId],
+  );
+
   const setDec = (id: string, patch: Partial<RowDecision>) => {
     setDecisions((prev) => {
-      const current = prev[id] ?? { action: 'APPROVE' as const, disputeAction: 'APPROVE' as const };
+      const current = prev[id] ?? defaultDecision();
       return { ...prev, [id]: { ...current, ...patch } };
     });
   };
@@ -117,21 +145,24 @@ export default function ReviewPage() {
     }
   };
 
+  /** UI 只暴露申诉「确认/驳回」；L1 的项级 action 与之同步，以兼容现有后端。 */
   const buildDecisionForRow = (row: AppealReviewRow, dec: RowDecision) => {
+    const disputeAction = dec.disputeAction ?? 'APPROVE';
+    const disputeNote = disputeAction === 'REJECT' ? dec.disputeNote : undefined;
     if (level === 1) {
       return {
         submissionItemId: row.submissionItemId,
-        action: dec.action,
-        note: dec.action === 'REJECT' ? dec.note : undefined,
-        disputeAction: dec.disputeAction ?? 'APPROVE',
-        disputeNote: dec.disputeAction === 'REJECT' ? dec.disputeNote : undefined,
+        action: disputeAction,
+        note: disputeNote,
+        disputeAction,
+        disputeNote,
       };
     }
     return {
       submissionItemId: row.submissionItemId,
       action: 'APPROVE' as const,
-      disputeAction: dec.disputeAction ?? 'APPROVE',
-      disputeNote: dec.disputeAction === 'REJECT' ? dec.disputeNote : undefined,
+      disputeAction,
+      disputeNote,
     };
   };
 
@@ -142,11 +173,7 @@ export default function ReviewPage() {
     if (targetRows.length === 0) return;
     const decisionMap = decisionOverride ?? decisions;
     for (const row of targetRows) {
-      const dec = decisionMap[row.submissionItemId] ?? { action: 'APPROVE', disputeAction: 'APPROVE' };
-      if (level === 1 && dec.action === 'REJECT' && !dec.note?.trim()) {
-        alert(`请填写「${row.itemTitle}」的驳回原因`);
-        return;
-      }
+      const dec = decisionMap[row.submissionItemId] ?? defaultDecision();
       if (dec.disputeAction === 'REJECT' && !dec.disputeNote?.trim()) {
         alert(`请填写「${row.itemTitle}」的申诉驳回原因`);
         return;
@@ -165,7 +192,7 @@ export default function ReviewPage() {
       decisions: submissionRows.map((row) =>
         buildDecisionForRow(
           row,
-          decisionMap[row.submissionItemId] ?? { action: 'APPROVE', disputeAction: 'APPROVE' },
+          decisionMap[row.submissionItemId] ?? defaultDecision(),
         ),
       ),
     }));
@@ -194,7 +221,7 @@ export default function ReviewPage() {
     if (!confirm(`确认批量通过 ${targets.length} 条申诉？`)) return;
     const next: Record<string, RowDecision> = { ...decisions };
     for (const row of targets) {
-      next[row.submissionItemId] = { action: 'APPROVE', disputeAction: 'APPROVE' };
+      next[row.submissionItemId] = { disputeAction: 'APPROVE' };
     }
     setDecisions(next);
     void submitBatches(targets, next);
@@ -207,9 +234,10 @@ export default function ReviewPage() {
     if (!confirm(`确认批量驳回 ${targets.length} 条申诉？相关申报将整单退回。`)) return;
     const next: Record<string, RowDecision> = { ...decisions };
     for (const row of targets) {
-      next[row.submissionItemId] = level === 1
-        ? { action: 'REJECT', note: batchRejectNote.trim(), disputeAction: 'REJECT', disputeNote: batchRejectNote.trim() }
-        : { action: 'APPROVE', disputeAction: 'REJECT', disputeNote: batchRejectNote.trim() };
+      next[row.submissionItemId] = {
+        disputeAction: 'REJECT',
+        disputeNote: batchRejectNote.trim(),
+      };
     }
     setDecisions(next);
     void submitBatches(targets, next);
@@ -286,6 +314,48 @@ export default function ReviewPage() {
 
       <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <label className="text-sm">
+          <span className="font-medium text-slate-600">单位</span>
+          <select
+            value={branchId}
+            onChange={(e) => {
+              setBranchId(e.target.value);
+              setDepartmentId('');
+            }}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部工区</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">部门</span>
+          <select
+            value={departmentId}
+            onChange={(e) => setDepartmentId(e.target.value)}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部部门</option>
+            {filteredDepartments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">申报专业</span>
+          <select
+            value={declarationSpecialtyId}
+            onChange={(e) => setDeclarationSpecialtyId(e.target.value)}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部</option>
+            {declarationSpecialties.map((sp) => (
+              <option key={sp.id} value={sp.id}>{sp.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
           <span className="font-medium text-slate-600">申诉项</span>
           <select
             value={itemTitle}
@@ -314,6 +384,7 @@ export default function ReviewPage() {
         >
           筛选
         </button>
+        <p className="w-full text-xs text-slate-400">共 {total} 条</p>
       </div>
 
       {tab === 'pending' && (
@@ -362,6 +433,8 @@ export default function ReviewPage() {
               <th className="px-3 py-3">序号</th>
               <th className="px-3 py-3">工号</th>
               <th className="px-3 py-3">申诉人</th>
+              <th className="px-3 py-3">单位</th>
+              <th className="px-3 py-3">申报专业</th>
               <th className="px-3 py-3">申诉项</th>
               <th className="px-3 py-3">系统分值</th>
               <th className="px-3 py-3">申诉内容</th>
@@ -373,13 +446,13 @@ export default function ReviewPage() {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={tab === 'pending' ? 10 : 9} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={tab === 'pending' ? 12 : 11} className="px-4 py-10 text-center text-slate-400">
                   {tab === 'pending' ? '暂无待审核申诉' : '暂无已审核申诉'}
                 </td>
               </tr>
             )}
             {rows.map((row, index) => {
-              const dec = decisions[row.submissionItemId] ?? { action: 'APPROVE', disputeAction: 'APPROVE' };
+              const dec = decisions[row.submissionItemId] ?? defaultDecision();
               return (
                 <tr key={row.submissionItemId} className="border-b border-slate-50 align-top">
                   {tab === 'pending' && (
@@ -395,6 +468,8 @@ export default function ReviewPage() {
                   <td className="px-3 py-3 tabular-nums text-slate-500">{index + 1}</td>
                   <td className="px-3 py-3 tabular-nums">{row.employeeNo || '—'}</td>
                   <td className="px-3 py-3">{row.employeeName}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.unitName || '—'}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.declarationSpecialtyName || '—'}</td>
                   <td className="px-3 py-3 font-medium">{row.itemTitle}</td>
                   <td className="px-3 py-3 tabular-nums">{row.systemScore.toFixed(1)}</td>
                   <td className="max-w-xs px-3 py-3 text-slate-600">{row.disputeReason || '—'}</td>
@@ -427,23 +502,11 @@ export default function ReviewPage() {
                       </span>
                     ) : (
                       <div className="space-y-2">
-                        {level === 1 && (
-                          <div className="flex gap-3 text-xs">
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input type="radio" checked={dec.action === 'APPROVE'} onChange={() => setDec(row.submissionItemId, { action: 'APPROVE' })} />
-                              通过
-                            </label>
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input type="radio" checked={dec.action === 'REJECT'} onChange={() => setDec(row.submissionItemId, { action: 'REJECT' })} />
-                              驳回
-                            </label>
-                          </div>
-                        )}
                         <div className="flex gap-3 text-xs">
                           <label className="flex items-center gap-1 cursor-pointer">
                             <input
                               type="radio"
-                              checked={(dec.disputeAction ?? 'APPROVE') === 'APPROVE'}
+                              checked={dec.disputeAction === 'APPROVE'}
                               onChange={() => setDec(row.submissionItemId, { disputeAction: 'APPROVE' })}
                             />
                             确认
@@ -457,14 +520,6 @@ export default function ReviewPage() {
                             驳回
                           </label>
                         </div>
-                        {level === 1 && dec.action === 'REJECT' && (
-                          <input
-                            value={dec.note ?? ''}
-                            onChange={(e) => setDec(row.submissionItemId, { note: e.target.value })}
-                            placeholder="驳回原因"
-                            className="w-full rounded border border-red-200 px-2 py-1 text-xs"
-                          />
-                        )}
                         {dec.disputeAction === 'REJECT' && (
                           <input
                             value={dec.disputeNote ?? ''}

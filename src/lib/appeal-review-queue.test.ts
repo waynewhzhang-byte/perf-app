@@ -71,12 +71,24 @@ describe('mapAppealReviewRow', () => {
       attachments: [{ id: 'a1', filename: 'proof.pdf', mimeType: 'application/pdf' }],
       submission: {
         submittedAt: new Date('2026-07-01T00:00:00Z'),
-        user: { fullName: '刘涛', contact: '11456348', employeeNo: '11456348', departmentId: 'd1' },
+        workAreaName: '忻州运维站',
+        declarationSpecialtyId: 'sp-1',
+        declarationSpecialtyName: '变电运维',
+        user: {
+          fullName: '刘涛',
+          contact: '11456348',
+          employeeNo: '11456348',
+          departmentId: 'd1',
+          branch: { id: 'b1', name: '忻州运维站' },
+          department: { id: 'd1', name: '运维一班' },
+        },
       },
     } as never);
     assert.equal(row.disputeClaimedScore, 5);
     assert.equal(row.attachments[0].filename, 'proof.pdf');
     assert.equal(row.employeeName, '刘涛');
+    assert.equal(row.unitName, '忻州运维站 · 运维一班');
+    assert.equal(row.declarationSpecialtyName, '变电运维');
   });
 });
 
@@ -93,8 +105,18 @@ describe('listAppealReviewRows', () => {
     attachments: [],
     submission: {
       branchId: 'branch-1',
+      workAreaName: '太原运维站',
+      declarationSpecialtyId: 'sp-1',
+      declarationSpecialtyName: '继电保护',
       submittedAt: new Date('2026-07-01T00:00:00Z'),
-      user: { fullName: '张三', contact: '13800000001', employeeNo: '1001', departmentId: 'd1' },
+      user: {
+        fullName: '张三',
+        contact: '13800000001',
+        employeeNo: '1001',
+        departmentId: 'd1',
+        branch: { id: 'branch-1', name: '太原运维站' },
+        department: { id: 'd1', name: '保护班' },
+      },
     },
   };
 

@@ -13,6 +13,8 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const submissionId = url.searchParams.get('submissionId');
     const branchId = url.searchParams.get('branchId');
+    const departmentId = url.searchParams.get('departmentId');
+    const declarationSpecialtyId = url.searchParams.get('declarationSpecialtyId');
     const year = url.searchParams.get('year');
     const status = url.searchParams.get('status');
     const templateId = url.searchParams.get('templateId');
@@ -54,13 +56,27 @@ export async function GET(req: Request) {
     }
 
     // 列表模式：分页查询
-    const where: any = {};
-    if (branchId && branchId !== 'all') where.branchId = branchId;
+    const where: Record<string, unknown> = {};
     if (templateId && templateId !== 'all') where.templateId = templateId;
     if (year && year !== 'all') {
       where.template = { year: parseInt(year) };
     }
     if (status && status !== 'all') where.status = status;
+    if (declarationSpecialtyId && declarationSpecialtyId !== 'all') {
+      where.declarationSpecialtyId = declarationSpecialtyId;
+    }
+    if (branchId && branchId !== 'all') {
+      where.OR = [
+        { branchId },
+        { branchId: null, user: { branchId } },
+      ];
+    }
+    if (departmentId && departmentId !== 'all') {
+      where.user = {
+        ...((where.user as object | undefined) ?? {}),
+        departmentId,
+      };
+    }
 
     const submissions = await prisma.submission.findMany({
       where,
@@ -72,6 +88,7 @@ export async function GET(req: Request) {
             contact: true,
             employeeNo: true,
             branch: { select: { id: true, name: true } },
+            department: { select: { id: true, name: true } },
           },
         },
         template: { select: { id: true, title: true, year: true } },
@@ -90,20 +107,29 @@ export async function GET(req: Request) {
       rejected: submissions.filter((s) => s.status === 'REJECTED').length,
     };
 
-    // 获取所有工区列表供筛选
-    const branches = await prisma.branch.findMany({
-      select: { id: true, name: true },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    const templates = await prisma.formTemplate.findMany({
-      where: {
-        status: { in: ['PUBLISHED', 'ARCHIVED'] },
-        ...(year && year !== 'all' ? { year: parseInt(year, 10) } : {}),
-      },
-      select: { id: true, title: true, year: true },
-      orderBy: [{ year: 'desc' }, { title: 'asc' }],
-    });
+    // 获取筛选字典
+    const [branches, departments, declarationSpecialties, templates] = await Promise.all([
+      prisma.branch.findMany({
+        select: { id: true, name: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.department.findMany({
+        select: { id: true, name: true, branchId: true },
+        orderBy: [{ branchId: 'asc' }, { createdAt: 'asc' }],
+      }),
+      prisma.declarationSpecialty.findMany({
+        select: { id: true, name: true },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      }),
+      prisma.formTemplate.findMany({
+        where: {
+          status: { in: ['PUBLISHED', 'ARCHIVED'] },
+          ...(year && year !== 'all' ? { year: parseInt(year, 10) } : {}),
+        },
+        select: { id: true, title: true, year: true },
+        orderBy: [{ year: 'desc' }, { title: 'asc' }],
+      }),
+    ]);
     const progressTemplate = templates.find((template) => !templateId || templateId === 'all' || template.id === templateId) ?? null;
     const progress = progressTemplate
       ? await getReviewProgress(progressTemplate.id, { branchId: branchId && branchId !== 'all' ? branchId : undefined })
@@ -114,6 +140,8 @@ export async function GET(req: Request) {
       submissions,
       stats,
       branches,
+      departments,
+      declarationSpecialties,
       templates,
       progressTemplateId: progressTemplate?.id ?? null,
       progress,

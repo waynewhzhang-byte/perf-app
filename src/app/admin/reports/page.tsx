@@ -238,7 +238,7 @@ export default function ReportsPage() {
 
       <div className="mb-4 border-t border-slate-200 pt-8">
         <h2 className="text-lg font-semibold text-slate-900">终审申报结果汇总</h2>
-        <p className="mt-1 text-sm text-slate-500">仅统计完成两级审核的申报快照；可按工区、能级、专业筛选并导出。</p>
+        <p className="mt-1 text-sm text-slate-500">仅统计完成两级审核的申报快照；可按单位、能级、申报专业筛选并导出。</p>
       </div>
 
       <div className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-white p-4">
@@ -256,7 +256,7 @@ export default function ReportsPage() {
             </select>
           </label>
           <label className="text-sm text-slate-600">
-            工区
+            单位
             <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
               <option value="">全部</option>
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -270,7 +270,7 @@ export default function ReportsPage() {
             </select>
           </label>
           <label className="text-sm text-slate-600">
-            能级专业
+            申报专业
             <select value={declarationSpecialtyId} onChange={(e) => setDeclarationSpecialtyId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
               <option value="">全部</option>
               {declarationSpecialties.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -435,9 +435,9 @@ export default function ReportsPage() {
                     <tr className="border-b bg-slate-50 text-xs font-semibold text-slate-500">
                       <th className="w-8 py-2.5 pl-5" />
                       <th className="py-2.5 pr-3">员工</th>
-                      <th className="py-2.5 pr-3">工区</th>
+                      <th className="py-2.5 pr-3">单位</th>
                       <th className="py-2.5 pr-3">能级等级</th>
-                      <th className="py-2.5 pr-3">能级专业</th>
+                      <th className="py-2.5 pr-3">申报专业</th>
                       <th className="py-2.5 pr-3 text-right">总分</th>
                       <th className="w-20 py-2.5 pr-5 text-right">申报项</th>
                     </tr>
@@ -454,7 +454,9 @@ export default function ReportsPage() {
                             <p className="font-medium">{rec.userName}</p>
                             <p className="text-xs text-slate-400">{rec.employeeNo || rec.contact}</p>
                           </td>
-                          <td className="py-3 pr-3 text-slate-600">{rec.branch || '—'}</td>
+                          <td className="py-3 pr-3 text-slate-600">
+                            {[rec.branch, rec.department].filter(Boolean).join(' · ') || '—'}
+                          </td>
                           <td className="py-3 pr-3 text-slate-600">{rec.declarationLevel || '—'}</td>
                           <td className="py-3 pr-3 text-slate-600">{rec.declarationSpecialty || '—'}</td>
                           <td className="py-3 pr-3 text-right">

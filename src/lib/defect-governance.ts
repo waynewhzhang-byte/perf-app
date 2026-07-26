@@ -7,6 +7,7 @@ import {
   type FactInput,
   type ScoringRule,
 } from '@/lib/scoring-engine';
+import { round2 } from '@/lib/rounding';
 
 export type DefectLevel = '危急' | '严重' | '一般';
 
@@ -438,6 +439,3 @@ export function importDefectGovernanceFacts(
   };
 }
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
-}

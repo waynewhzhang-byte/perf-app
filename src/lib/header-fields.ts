@@ -20,7 +20,7 @@ export const HEADER_FIELD_LABELS: Record<HeaderFieldKey, string> = {
   workArea: '工区',
   hireDate: '入职时间',
   declarationLevel: '能级评价等级',
-  declarationSpecialty: '能级评价专业',
+  declarationSpecialty: '申报专业',
 };
 
 /**

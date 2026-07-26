@@ -366,8 +366,8 @@ export default function OrganizationPage() {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="font-semibold">能级评价专业</h2>
-        <p className="mt-1 text-xs text-slate-400">员工申报表头中可选择的能级评价专业</p>
+        <h2 className="font-semibold">申报专业</h2>
+        <p className="mt-1 text-xs text-slate-400">员工申报表头中可选择的申报专业</p>
         <EntityForm
           name={declarationSpecialtyName}
           onNameChange={setDeclarationSpecialtyName}
@@ -378,7 +378,7 @@ export default function OrganizationPage() {
         />
         <EntityList
           items={data.declarationSpecialties}
-          emptyText="暂无能级评价专业"
+          emptyText="暂无申报专业"
           onDelete={(id, name) => remove('declarationSpecialty', id, name)}
           onSave={(id, name) => update('declarationSpecialty', { id, name })}
         />

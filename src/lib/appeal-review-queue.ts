@@ -22,6 +22,12 @@ export interface AppealReviewRow {
   employeeNo: string;
   employeeName: string;
   contact: string;
+  /** 单位展示：工区 · 部门 */
+  unitName: string;
+  workAreaName: string | null;
+  departmentName: string | null;
+  declarationSpecialtyId: string | null;
+  declarationSpecialtyName: string | null;
   itemTitle: string;
   dimensionCode: string | null;
   systemScore: number;
@@ -43,6 +49,10 @@ export interface AppealReviewListInput {
   filter: 'pending' | 'completed';
   itemTitle?: string;
   keyword?: string;
+  declarationSpecialtyId?: string;
+  /** 单位 = 工区（申报快照 branchId，回退员工档案工区） */
+  branchId?: string;
+  departmentId?: string;
   page?: number;
   pageSize?: number;
 }
@@ -54,12 +64,33 @@ const itemInclude = {
   attachments: { select: { id: true, filename: true, mimeType: true } },
   submission: {
     include: {
-      user: { select: { fullName: true, contact: true, employeeNo: true, departmentId: true } },
+      user: {
+        select: {
+          fullName: true,
+          contact: true,
+          employeeNo: true,
+          departmentId: true,
+          branch: { select: { id: true, name: true } },
+          department: { select: { id: true, name: true } },
+        },
+      },
     },
   },
 } as const;
 
 type LoadedItem = Prisma.SubmissionItemGetPayload<{ include: typeof itemInclude }>;
+
+/** 单位文案：工区 · 部门 */
+export function formatEmployeeUnit(
+  workAreaName: string | null | undefined,
+  branchName: string | null | undefined,
+  departmentName: string | null | undefined,
+): string {
+  const area = (workAreaName || branchName || '').trim();
+  const dept = (departmentName || '').trim();
+  if (area && dept) return `${area} · ${dept}`;
+  return area || dept || '—';
+}
 
 export function dimensionCodesForL2Department(
   routeByDimension: Map<string, string>,
@@ -87,12 +118,19 @@ export function mapAppealReviewRow(
   item: LoadedItem,
   auditLabel?: '确认' | '驳回',
 ): AppealReviewRow {
+  const workAreaName = item.submission.workAreaName ?? item.submission.user.branch?.name ?? null;
+  const departmentName = item.submission.user.department?.name ?? null;
   return {
     submissionItemId: item.id,
     submissionId: item.submissionId,
     employeeNo: item.submission.user.employeeNo ?? '',
     employeeName: item.submission.user.fullName,
     contact: item.submission.user.contact,
+    unitName: formatEmployeeUnit(item.submission.workAreaName, item.submission.user.branch?.name, departmentName),
+    workAreaName,
+    departmentName,
+    declarationSpecialtyId: item.submission.declarationSpecialtyId ?? null,
+    declarationSpecialtyName: item.submission.declarationSpecialtyName ?? null,
     itemTitle: item.item.title,
     dimensionCode: resolveFormItemDimension(item.item),
     systemScore: Number(item.score),
@@ -138,11 +176,46 @@ function buildItemTitleWhere(itemTitle?: string): Prisma.SubmissionItemWhereInpu
   return { item: { title: { contains: title, mode: 'insensitive' } } };
 }
 
+function buildSpecialtyWhere(declarationSpecialtyId?: string): Prisma.SubmissionItemWhereInput | undefined {
+  const id = declarationSpecialtyId?.trim();
+  if (!id) return undefined;
+  return { submission: { declarationSpecialtyId: id } };
+}
+
+function buildBranchWhere(branchId?: string): Prisma.SubmissionItemWhereInput | undefined {
+  const id = branchId?.trim();
+  if (!id) return undefined;
+  return {
+    submission: {
+      OR: [
+        { branchId: id },
+        { branchId: null, user: { branchId: id } },
+      ],
+    },
+  };
+}
+
+function buildDepartmentWhere(departmentId?: string): Prisma.SubmissionItemWhereInput | undefined {
+  const id = departmentId?.trim();
+  if (!id) return undefined;
+  return { submission: { user: { departmentId: id } } };
+}
+
 function mergeWhere(
   ...parts: Array<Prisma.SubmissionItemWhereInput | undefined>
 ): Prisma.SubmissionItemWhereInput {
   const and = parts.filter((part): part is Prisma.SubmissionItemWhereInput => part != null);
   return and.length === 1 ? and[0]! : { AND: and };
+}
+
+function buildListFilters(input: AppealReviewListInput): Array<Prisma.SubmissionItemWhereInput | undefined> {
+  return [
+    buildItemTitleWhere(input.itemTitle),
+    buildKeywordWhere(input.keyword),
+    buildSpecialtyWhere(input.declarationSpecialtyId),
+    buildBranchWhere(input.branchId),
+    buildDepartmentWhere(input.departmentId),
+  ];
 }
 
 export async function listAppealReviewRows(
@@ -175,8 +248,7 @@ export async function listAppealReviewRows(
             ...l1ScopeWhere,
           },
         },
-        buildItemTitleWhere(input.itemTitle),
-        buildKeywordWhere(input.keyword),
+        ...buildListFilters(input),
       );
       orderBy = { submission: { submittedAt: 'asc' } };
     } else {
@@ -188,8 +260,7 @@ export async function listAppealReviewRows(
           disputeL1Result: { not: null },
           submission: l1ScopeWhere,
         },
-        buildItemTitleWhere(input.itemTitle),
-        buildKeywordWhere(input.keyword),
+        ...buildListFilters(input),
       );
       orderBy = { disputeL1ReviewedAt: 'desc' };
     }
@@ -213,8 +284,7 @@ export async function listAppealReviewRows(
           submission: { status: 'L1_APPROVED' },
         },
         dimensionWhere,
-        buildItemTitleWhere(input.itemTitle),
-        buildKeywordWhere(input.keyword),
+        ...buildListFilters(input),
       );
       orderBy = { submission: { submittedAt: 'asc' } };
     } else {
@@ -226,8 +296,7 @@ export async function listAppealReviewRows(
           disputeL2Result: { not: null },
         },
         dimensionWhere,
-        buildItemTitleWhere(input.itemTitle),
-        buildKeywordWhere(input.keyword),
+        ...buildListFilters(input),
       );
       orderBy = { disputeL2ReviewedAt: 'desc' };
     }

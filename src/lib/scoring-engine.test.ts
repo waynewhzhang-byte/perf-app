@@ -2,7 +2,7 @@
  * 评分规则引擎测试
  *
  * 覆盖三种规则类型：MATRIX（矩阵映射）、SHARE（聚合均分）、NORMALIZE（折算归一）
- * 参考：docs/superpowers/specs/2026-06-13-architecture-decisions.md 原则 7
+ * 参考：docs/adr/README.md（评分与架构决策）
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

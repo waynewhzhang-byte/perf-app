@@ -8,6 +8,7 @@ import {
   SCORING_STANDARD_BY_CODE,
   defaultScoringRuleConfigs,
 } from '@/lib/scoring-standards';
+import { round2 } from '@/lib/rounding';
 
 /** 单条推导步骤（前端按序渲染为流程节点）。 */
 export interface DerivationStep {
@@ -402,11 +403,6 @@ function buildManualAggregateDerivation(
     steps.push({ label: `封顶 ${standard.maxScore}`, kind: 'cap' });
   }
   return { ...base, steps };
-}
-
-/** 模块私有：保留两位小数（区别于 dimension-aggregation 的 round1）。 */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 /** overrideScore 与原始推算不一致时，前置一条诚实提示步骤。 */

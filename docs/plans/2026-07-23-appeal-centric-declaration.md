@@ -1,6 +1,6 @@
 # 申诉中心化申报改造 — Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or Matt `/implement` per ticket) to implement task-by-task. Prefer CodeGraph (`codegraph_explore`) before Grep/Read when exploring source.
+> **For agents:** Implement task-by-task. Prefer CodeGraph (`codegraph_explore`) before Grep/Read when exploring source.
 
 **Goal:** 将员工申报从「逐项确认/申诉」迁移为「只读核对 + 底部统一申诉 + 无异议直通终审」，审核台只处理申诉行。
 
@@ -9,7 +9,6 @@
 **Tech Stack:** Next.js 14 App Router, Prisma/PostgreSQL, MinIO attachments, Zod, colocated `src/lib/*.test.ts` (tsx node:test)
 
 **Origin:** `docs/brainstorms/2026-07-23-申报系统修改需求.md`  
-**Spec:** `docs/superpowers/specs/2026-07-23-appeal-centric-declaration-design.md`  
 **ADR:** `docs/adr/0008-appeal-only-review-for-system-filled.md`  
 **Grill:** 2026-07-23 已达成共享理解（只审申诉；确认≠改分；审结即归档系统分；L1/L2 路由沿用现网；整单驳回；申诉保存=草稿；保留蓝框新文案）
 

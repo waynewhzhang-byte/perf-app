@@ -35,7 +35,7 @@ async function main() {
           { key: 'workArea', enabled: false, required: false },
           { key: 'hireDate', enabled: false, required: false },
           { key: 'declarationLevel', enabled: false, required: false },
-          { key: 'declarationSpecialty', enabled: false, required: false },
+          { key: 'declarationSpecialty', enabled: true, required: true },
         ],
       },
     });

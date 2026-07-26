@@ -89,6 +89,35 @@ function isReviewer(user: UserRow) {
   return user.roles.some(({ role }) => role === 'REVIEWER_L1' || role === 'REVIEWER_L2');
 }
 
+function matchesKeyword(user: UserRow, keyword: string): boolean {
+  const q = keyword.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [user.fullName, user.contact, user.employeeNo ?? '']
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+/** 组织筛选：员工看档案工区/部门；审核员同时匹配审核范围。 */
+function matchesOrganization(user: UserRow, branchId: string, departmentId: string): boolean {
+  if (!branchId && !departmentId) return true;
+
+  const profileBranchOk = !branchId || user.branchId === branchId;
+  const profileDeptOk = !departmentId || user.departmentId === departmentId;
+  if (user.employeeNo) return profileBranchOk && profileDeptOk;
+
+  const scopeMatch = user.roles.some((role) => {
+    if (!role.role.startsWith('REVIEWER')) return false;
+    const branchOk = !branchId || role.scopeBranchId === branchId || user.branchId === branchId;
+    const deptOk = !departmentId
+      || role.scopeDepartmentId === departmentId
+      || user.departmentId === departmentId;
+    return branchOk && deptOk;
+  });
+  if (isReviewer(user)) return scopeMatch;
+  return profileBranchOk && profileDeptOk;
+}
+
 function profileFromUser(user: UserRow): EmployeeForm {
   return {
     contact: user.contact,
@@ -118,6 +147,9 @@ export default function AdminUsersPage() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [keyword, setKeyword] = useState('');
+  const [filterBranchId, setFilterBranchId] = useState('');
+  const [filterDepartmentId, setFilterDepartmentId] = useState('');
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -166,20 +198,36 @@ export default function AdminUsersPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const employees = useMemo(() => users.filter(({ employeeNo }) => Boolean(employeeNo)), [users]);
+  const filteredUsers = useMemo(
+    () => users.filter(
+      (user) => matchesKeyword(user, keyword) && matchesOrganization(user, filterBranchId, filterDepartmentId),
+    ),
+    [users, keyword, filterBranchId, filterDepartmentId],
+  );
+
+  const employees = useMemo(() => filteredUsers.filter(({ employeeNo }) => Boolean(employeeNo)), [filteredUsers]);
   const reviewers = useMemo(
-    () => users.filter((user) => !user.employeeNo && isReviewer(user)),
-    [users],
+    () => filteredUsers.filter((user) => !user.employeeNo && isReviewer(user)),
+    [filteredUsers],
   );
   const managementAccounts = useMemo(
-    () => users.filter((user) => !user.employeeNo && !isReviewer(user)),
+    () => filteredUsers.filter((user) => !user.employeeNo && !isReviewer(user)),
+    [filteredUsers],
+  );
+  const totalEmployees = useMemo(() => users.filter(({ employeeNo }) => Boolean(employeeNo)).length, [users]);
+  const totalReviewers = useMemo(
+    () => users.filter((user) => !user.employeeNo && isReviewer(user)).length,
     [users],
   );
+  const hasListFilter = Boolean(keyword.trim() || filterBranchId || filterDepartmentId);
   const hqBranch = org.branches.find(({ name }) => name === HQ_BRANCH_NAME);
   const departmentsForBranch = useCallback(
     (branchId: string) => org.departments.filter((department) => department.branchId === branchId),
     [org.departments],
   );
+  const filterDepartments = filterBranchId
+    ? departmentsForBranch(filterBranchId)
+    : org.departments;
   const reviewerDepartments = reviewerForm.reviewerRole === 'REVIEWER_L2'
     ? org.departments.filter((department) =>
         department.branchId === hqBranch?.id && isSecondLevelReviewDepartment(department.name))
@@ -465,7 +513,11 @@ export default function AdminUsersPage() {
               </Fragment>
             ))}
             {list.length === 0 && !loading && (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-400">暂无账号</td></tr>
+              <tr>
+                <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-400">
+                  {hasListFilter ? '当前筛选条件下暂无账号' : '暂无账号'}
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
@@ -486,12 +538,12 @@ export default function AdminUsersPage() {
       <section className="mb-6 grid gap-3 sm:grid-cols-2">
         <div className="border-l-4 border-slate-700 bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-500">员工账号</p>
-          <p className="mt-1 text-3xl font-semibold tabular-nums text-slate-950">{loading ? '—' : employees.length}</p>
+          <p className="mt-1 text-3xl font-semibold tabular-nums text-slate-950">{loading ? '—' : totalEmployees}</p>
           <p className="mt-1 text-xs text-slate-500">以工号识别，计入员工总数</p>
         </div>
         <div className="border-l-4 border-primary-600 bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-500">审核员账号</p>
-          <p className="mt-1 text-3xl font-semibold tabular-nums text-primary-700">{loading ? '—' : reviewers.length}</p>
+          <p className="mt-1 text-3xl font-semibold tabular-nums text-primary-700">{loading ? '—' : totalReviewers}</p>
           <p className="mt-1 text-xs text-slate-500">独立登录账号，不计入 435 名员工</p>
         </div>
       </section>
@@ -559,6 +611,68 @@ export default function AdminUsersPage() {
             </form>
           )}
         </div>
+      </section>
+
+      <section className="mb-7 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="min-w-[14rem] flex-1 text-sm">
+            <span className="font-medium text-slate-600">关键词</span>
+            <input
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+              placeholder="姓名、工号、登录账号…"
+              className={`mt-1 ${inputClass}`}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">单位</span>
+            <select
+              value={filterBranchId}
+              onChange={(event) => {
+                setFilterBranchId(event.target.value);
+                setFilterDepartmentId('');
+              }}
+              className={`mt-1 min-w-[10rem] ${selectClass}`}
+            >
+              <option value="">全部工区</option>
+              {org.branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>{branch.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600">部门</span>
+            <select
+              value={filterDepartmentId}
+              onChange={(event) => setFilterDepartmentId(event.target.value)}
+              className={`mt-1 min-w-[10rem] ${selectClass}`}
+            >
+              <option value="">全部部门</option>
+              {filterDepartments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+          </label>
+          {hasListFilter && (
+            <button
+              type="button"
+              onClick={() => {
+                setKeyword('');
+                setFilterBranchId('');
+                setFilterDepartmentId('');
+              }}
+              className="rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+        {hasListFilter && (
+          <p className="mt-2 text-xs text-slate-500">
+            当前筛选结果：员工 {employees.length} 人 · 审核员 {reviewers.length} 人
+            {managementAccounts.length > 0 ? ` · 其他 ${managementAccounts.length} 人` : ''}
+          </p>
+        )}
       </section>
 
       <section className="mb-7 overflow-hidden rounded-xl border border-slate-200 bg-white">

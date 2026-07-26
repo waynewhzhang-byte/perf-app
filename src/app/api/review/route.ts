@@ -55,6 +55,9 @@ export async function GET(req: Request) {
   const filter = url.searchParams.get('filter') === 'completed' ? 'completed' : 'pending';
   const itemTitle = url.searchParams.get('itemTitle') ?? undefined;
   const keyword = url.searchParams.get('keyword') ?? undefined;
+  const declarationSpecialtyId = url.searchParams.get('declarationSpecialtyId') || undefined;
+  const branchId = url.searchParams.get('branchId') || undefined;
+  const departmentId = url.searchParams.get('departmentId') || undefined;
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10)));
 
@@ -62,7 +65,7 @@ export async function GET(req: Request) {
     isL1 ? prisma.userRole.findMany({ where: { userId: s.userId, role: 'REVIEWER_L1' } }) : Promise.resolve([]),
     prisma.user.findUnique({ where: { id: s.userId }, select: { departmentId: true } }),
   ]);
-  const departmentId = user?.departmentId ?? null;
+  const departmentIdOfReviewer = user?.departmentId ?? null;
 
   const levelParam = url.searchParams.get('level');
   const availableLevels: Array<1 | 2> = [
@@ -86,28 +89,45 @@ export async function GET(req: Request) {
     level = 1;
   }
 
-  const appealList = await listAppealReviewRows(prisma, {
-    level,
-    reviewerId: s.userId,
-    l1Scopes,
-    l2DepartmentId: departmentId,
-    filter,
-    itemTitle,
-    keyword,
-    page,
-    pageSize,
-  });
+  const [appealList, branches, departments, declarationSpecialties] = await Promise.all([
+    listAppealReviewRows(prisma, {
+      level,
+      reviewerId: s.userId,
+      l1Scopes,
+      l2DepartmentId: departmentIdOfReviewer,
+      filter,
+      itemTitle,
+      keyword,
+      declarationSpecialtyId,
+      branchId,
+      departmentId,
+      page,
+      pageSize,
+    }),
+    prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { createdAt: 'asc' } }),
+    prisma.department.findMany({
+      select: { id: true, name: true, branchId: true },
+      orderBy: [{ branchId: 'asc' }, { createdAt: 'asc' }],
+    }),
+    prisma.declarationSpecialty.findMany({
+      select: { id: true, name: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    }),
+  ]);
 
   return NextResponse.json({
     success: true,
     level,
     availableLevels,
     filter,
-    assignedDepartmentId: departmentId,
+    assignedDepartmentId: departmentIdOfReviewer,
     appealRows: appealList.rows,
     total: appealList.total,
     page: appealList.page,
     pageSize: appealList.pageSize,
+    branches,
+    departments,
+    declarationSpecialties,
   });
 }
 

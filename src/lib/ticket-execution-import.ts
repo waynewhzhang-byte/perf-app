@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import { normalizePersonName } from '@/lib/employee-resolver';
 import { parsePersonList } from '@/lib/defect-governance';
 import { TICKET_EXECUTION_DIMENSION } from '@/lib/scoring-standards';
+import { round2 } from '@/lib/rounding';
 
 export interface TicketScoreBreakdown {
   /** 操作票角色项数（每行每角色每人计 1 项） */
@@ -142,10 +143,6 @@ function getBucket(
 function addPoints(bucket: AggBucket, field: keyof TicketScoreBreakdown, points: number) {
   bucket.breakdown[field] = round2(bucket.breakdown[field] + points);
   bucket.rawScore = round2(bucket.rawScore + points);
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }
 
 export interface TicketExecutionParseResult {

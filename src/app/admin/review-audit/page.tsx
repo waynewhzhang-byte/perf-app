@@ -7,9 +7,18 @@ import { SectionRadarPanel } from '@/components/section-radar-panel';
 import type { ReviewProgress } from '@/lib/review-progress';
 
 interface BranchFilter { id: string; name: string }
+interface DepartmentFilter { id: string; name: string; branchId: string }
+interface SpecialtyFilter { id: string; name: string }
 interface TemplateFilter { id: string; title: string; year: number }
 interface Stats { total: number; draft: number; submitted: number; l1Approved: number; l2Approved: number; rejected: number }
-interface SubUser { id: string; fullName: string; contact: string; employeeNo?: string | null; branch?: { id: string; name: string } | null }
+interface SubUser {
+  id: string;
+  fullName: string;
+  contact: string;
+  employeeNo?: string | null;
+  branch?: { id: string; name: string } | null;
+  department?: { id: string; name: string } | null;
+}
 interface SubTemplate { id: string; title: string; year: number }
 interface SubItem {
   id: string; item: { title: string }; selected: { label: string; score: number }[];
@@ -48,8 +57,12 @@ export default function ReviewAuditPage() {
   const [submissions, setSubmissions] = useState<AuditSubmission[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [branches, setBranches] = useState<BranchFilter[]>([]);
+  const [departments, setDepartments] = useState<DepartmentFilter[]>([]);
+  const [declarationSpecialties, setDeclarationSpecialties] = useState<SpecialtyFilter[]>([]);
   const [templates, setTemplates] = useState<TemplateFilter[]>([]);
   const [branchId, setBranchId] = useState('all');
+  const [departmentId, setDepartmentId] = useState('all');
+  const [declarationSpecialtyId, setDeclarationSpecialtyId] = useState('all');
   const [templateId, setTemplateId] = useState('all');
   const [year, setYear] = useState('all');
   const [status, setStatus] = useState('all');
@@ -64,6 +77,8 @@ export default function ReviewAuditPage() {
     try {
       const params = new URLSearchParams();
       if (branchId !== 'all') params.set('branchId', branchId);
+      if (departmentId !== 'all') params.set('departmentId', departmentId);
+      if (declarationSpecialtyId !== 'all') params.set('declarationSpecialtyId', declarationSpecialtyId);
       if (templateId !== 'all') params.set('templateId', templateId);
       if (year !== 'all') params.set('year', year);
       if (status !== 'all') params.set('status', status);
@@ -74,11 +89,13 @@ export default function ReviewAuditPage() {
       setSubmissions(d.submissions ?? []);
       setStats(d.stats ?? null);
       setBranches(d.branches ?? []);
+      setDepartments(d.departments ?? []);
+      setDeclarationSpecialties(d.declarationSpecialties ?? []);
       setTemplates(d.templates ?? []);
       setProgress(d.progress ?? null);
     } catch { setError('网络错误'); }
     finally { setLoading(false); }
-  }, [branchId, templateId, year, status]);
+  }, [branchId, departmentId, declarationSpecialtyId, templateId, year, status]);
 
   useEffect(() => { loadList(); }, [loadList]);
 
@@ -133,10 +150,33 @@ export default function ReviewAuditPage() {
           </select>
         </label>
         <label className="text-xs text-slate-500">
-          工区
-          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
-            <option value="all">全部</option>
+          单位
+          <select
+            value={branchId}
+            onChange={(e) => {
+              setBranchId(e.target.value);
+              setDepartmentId('all');
+            }}
+            className="ml-1 rounded border px-2 py-1 text-sm"
+          >
+            <option value="all">全部工区</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-500">
+          部门
+          <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
+            <option value="all">全部</option>
+            {departments
+              .filter((d) => branchId === 'all' || d.branchId === branchId)
+              .map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-500">
+          申报专业
+          <select value={declarationSpecialtyId} onChange={(e) => setDeclarationSpecialtyId(e.target.value)} className="ml-1 rounded border px-2 py-1 text-sm">
+            <option value="all">全部</option>
+            {declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
           </select>
         </label>
         <label className="text-xs text-slate-500">
@@ -232,7 +272,13 @@ export default function ReviewAuditPage() {
                   <div>
                     <span className="font-medium text-sm">{sub.user.fullName}</span>
                     <span className="ml-2 text-xs text-slate-400">
-                      {sub.user.employeeNo || sub.user.contact} · {sub.workAreaName || sub.user.branch?.name || '—'} · {sub.template.title}（{sub.template.year}）
+                      {sub.user.employeeNo || sub.user.contact}
+                      {' · '}
+                      {[sub.workAreaName || sub.user.branch?.name, sub.user.department?.name].filter(Boolean).join(' · ') || '—'}
+                      {' · '}
+                      {sub.declarationSpecialtyName || '未选专业'}
+                      {' · '}
+                      {sub.template.title}（{sub.template.year}）
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -269,7 +315,7 @@ export default function ReviewAuditPage() {
                       <div className="rounded-lg border bg-white p-3">
                         <h4 className="text-xs font-semibold text-slate-500">能级评价申报信息</h4>
                         <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
-                          <span>工区：{detail?.workAreaName || detail?.user.branch?.name || '—'}</span>
+                          <span>单位：{[detail?.workAreaName || detail?.user.branch?.name, detail?.user.department?.name].filter(Boolean).join(' · ') || '—'}</span>
                           <span>入职时间：{detail?.hireDate ? String(detail.hireDate).slice(0, 10) : '—'}</span>
                           <span>工作年限：{detail?.workYears ?? '—'}</span>
                           <span>申报等级：{detail?.declarationLevelName || '—'}</span>

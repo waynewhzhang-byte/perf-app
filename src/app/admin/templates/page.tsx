@@ -206,24 +206,12 @@ export default function TemplatesPage() {
   };
 
   const handleEdit = (t: Template) => {
-    if (t.status === 'ARCHIVED') return;
-    const subs = t._count?.submissions ?? 0;
-    if (t.status === 'PUBLISHED' && subs > 0) {
-      alert(
-        `该模板已有 ${subs} 份员工申报，无法直接修改结构。\n如需纠正错别字，请点击「文字修订」；如需改结构，请「复制为草稿」。`,
-      );
+    if (t.status === 'ARCHIVED' || t.status === 'PUBLISHED') {
+      alert('已发布/已归档模板不可修改内容。如需调整，请「复制为草稿」创建新版本后再编辑。');
       return;
     }
     setEditingId(t.id);
     setTextMode(false);
-    setEditing(templateToEditing(t));
-  };
-
-  // 文字修订：仅改文案，不改结构与分值（可用于已发布且有申报的模板）
-  const startTextEdit = (t: Template) => {
-    if (t.status === 'ARCHIVED') return;
-    setEditingId(t.id);
-    setTextMode(true);
     setEditing(templateToEditing(t));
   };
 
@@ -631,17 +619,8 @@ export default function TemplatesPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => openPreview(t)} className={btnOutline}>预览</button>
-              {t.status !== 'ARCHIVED' && (
+              {t.status === 'DRAFT' && (
                 <button type="button" onClick={() => handleEdit(t)} className={btnOutline}>编辑</button>
-              )}
-              {t.status === 'PUBLISHED' && (
-                <button
-                  type="button"
-                  onClick={() => startTextEdit(t)}
-                  className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 cursor-pointer"
-                >
-                  文字修订
-                </button>
               )}
               {t.status !== 'ARCHIVED' && (
                 <button
@@ -652,7 +631,7 @@ export default function TemplatesPage() {
                   二级子项分配
                 </button>
               )}
-              {t.status === 'PUBLISHED' && (t._count?.submissions ?? 0) > 0 && (
+              {t.status === 'PUBLISHED' && (
                 <button
                   type="button"
                   onClick={() => duplicateAsDraft(t)}
@@ -666,12 +645,17 @@ export default function TemplatesPage() {
                   {t.status === 'PUBLISHED' ? '归档' : '发布'}
                 </button>
               )}
+              {t.status === 'PUBLISHED' && (
+                <span className="self-center text-xs text-slate-400">已发布，内容不可编辑</span>
+              )}
               {t.status === 'ARCHIVED' && (
                 <span className="self-center text-xs text-slate-400">已终态，仅可预览</span>
               )}
-              <button type="button" onClick={() => handleDelete(t.id, t.title)} className={btnDanger}>
-                删除
-              </button>
+              {t.status === 'DRAFT' && (
+                <button type="button" onClick={() => handleDelete(t.id, t.title)} className={btnDanger}>
+                  删除
+                </button>
+              )}
             </div>
           </li>
         ))}

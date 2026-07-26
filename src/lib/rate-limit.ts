@@ -1,9 +1,6 @@
 // Sliding-window rate limiter for Next.js Route Handlers.
-//
-// Default backend is in-process memory (Map). For multi-instance production,
-// set REDIS_URL to switch to a Redis-backed store via ioredis.
-
-import Redis from 'ioredis';
+// In-process memory backend (Map). Suitable for single-instance / PM2 cluster
+// with sticky sessions; not shared across separate Node processes.
 
 // ---- Store interface ---------------------------------------------------------
 
@@ -13,7 +10,7 @@ export interface RateLimitStore {
   count(key: string): Promise<number>;
 }
 
-// ---- Memory backend (default) ------------------------------------------------
+// ---- Memory backend ----------------------------------------------------------
 
 interface RateLimitEntry {
   count: number;
@@ -58,57 +55,12 @@ class MemoryRateLimitStore implements RateLimitStore {
   }
 }
 
-// ---- Redis backend (multi-instance) ------------------------------------------
-
-const INCR_WITH_TTL = `
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[1])
-end
-return current
-`;
-
-class RedisRateLimitStore implements RateLimitStore {
-  private redis: Redis;
-
-  constructor(url: string) {
-    this.redis = new Redis(url, {
-      maxRetriesPerRequest: 2,
-      enableReadyCheck: true,
-      lazyConnect: false,
-    });
-  }
-
-  async count(key: string): Promise<number> {
-    const raw = await this.redis.get(key);
-    if (!raw) return 0;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  async isLimited(key: string, maxAttempts: number, _windowMs: number): Promise<boolean> {
-    const current = await this.count(key);
-    return current >= maxAttempts;
-  }
-
-  async record(key: string, windowMs: number): Promise<void> {
-    await this.redis.eval(INCR_WITH_TTL, 1, key, String(windowMs));
-  }
-}
-
 // ---- Singleton ---------------------------------------------------------------
 
 let _store: RateLimitStore | null = null;
 
 function getStore(): RateLimitStore {
-  if (_store) return _store;
-
-  const redisUrl = process.env.REDIS_URL?.trim();
-  if (redisUrl) {
-    _store = new RedisRateLimitStore(redisUrl);
-  } else {
-    _store = new MemoryRateLimitStore();
-  }
+  if (!_store) _store = new MemoryRateLimitStore();
   return _store;
 }
 
