@@ -35,18 +35,17 @@ describe('normalizeHomeNotice', () => {
 });
 
 describe('buildNoticeRevision', () => {
-  it('depends only on declaration notice fields, not home notice', () => {
+  it('depends only on declaration notice fields, not updatedAt or home notice', () => {
     const at = new Date('2026-07-27T00:00:00.000Z');
     const a = buildNoticeRevision('声明文案', 30, at);
-    const b = buildNoticeRevision('声明文案', 30, at);
+    const b = buildNoticeRevision('声明文案', 30, new Date('2026-08-01T00:00:00.000Z'));
     assert.equal(a, b);
-    assert.match(a, new RegExp(`^${at.getTime()}:`));
+    assert.match(a, /^v1:/);
   });
 
   it('changes when declaration text or seconds change', () => {
-    const at = new Date('2026-07-27T00:00:00.000Z');
-    const base = buildNoticeRevision('声明文案', 30, at);
-    assert.notEqual(buildNoticeRevision('声明文案改', 30, at), base);
-    assert.notEqual(buildNoticeRevision('声明文案', 20, at), base);
+    const base = buildNoticeRevision('声明文案', 30, null);
+    assert.notEqual(buildNoticeRevision('声明文案改', 30, null), base);
+    assert.notEqual(buildNoticeRevision('声明文案', 20, null), base);
   });
 });

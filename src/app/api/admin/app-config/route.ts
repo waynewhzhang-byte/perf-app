@@ -16,8 +16,8 @@ const Schema = z.object({
   supportPhone: z.string().max(64),
   noticeText: z.string().min(20).max(20000),
   noticeSeconds: z.number().int().min(0).max(300),
-  homeNoticeTitle: z.string().max(HOME_NOTICE_TITLE_MAX).optional().default(''),
-  homeNoticeBody: z.string().max(HOME_NOTICE_BODY_MAX).optional().default(''),
+  homeNoticeTitle: z.string().max(HOME_NOTICE_TITLE_MAX),
+  homeNoticeBody: z.string().max(HOME_NOTICE_BODY_MAX),
 });
 
 export async function GET() {

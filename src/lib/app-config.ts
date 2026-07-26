@@ -40,20 +40,20 @@ export const DEFAULT_APP_CONFIG: AppConfigPublic = {
   homeNoticeBody: '',
 };
 
-/** 用于客户端判断是否需要重新确认（文案或配置变更后 revision 变化）。 */
+/** 用于客户端判断是否需要重新确认（仅声明弹窗文案/秒数参与；不含 updatedAt，避免首页提示保存误触发重读）。 */
 export function buildNoticeRevision(
   noticeText: string,
   noticeSeconds: number,
-  updatedAt: Date | null,
+  _updatedAt?: Date | null,
 ): string {
-  const stamp = updatedAt?.getTime() ?? 0;
+  void _updatedAt;
   let hash = 0;
   const payload = `${noticeText}\n${noticeSeconds}`;
   for (let i = 0; i < payload.length; i += 1) {
     hash = ((hash << 5) - hash) + payload.charCodeAt(i);
     hash |= 0;
   }
-  return `${stamp}:${hash}`;
+  return `v1:${hash}`;
 }
 
 /** 正文 trim 后非空才在员工首页展示提示区。 */
