@@ -19,11 +19,16 @@ export const DEFAULT_DECLARATION_NOTICE_TEXT = `为确保公司 2026 年能级�
 
 export const DEFAULT_NOTICE_SECONDS = 30;
 
+export const HOME_NOTICE_TITLE_MAX = 100;
+export const HOME_NOTICE_BODY_MAX = 5000;
+
 export type AppConfigPublic = {
   supportPhone: string;
   noticeText: string;
   noticeSeconds: number;
   noticeRevision: string;
+  homeNoticeTitle: string;
+  homeNoticeBody: string;
 };
 
 export const DEFAULT_APP_CONFIG: AppConfigPublic = {
@@ -31,6 +36,8 @@ export const DEFAULT_APP_CONFIG: AppConfigPublic = {
   noticeText: DEFAULT_DECLARATION_NOTICE_TEXT,
   noticeSeconds: DEFAULT_NOTICE_SECONDS,
   noticeRevision: 'default',
+  homeNoticeTitle: '',
+  homeNoticeBody: '',
 };
 
 /** 用于客户端判断是否需要重新确认（文案或配置变更后 revision 变化）。 */
@@ -49,16 +56,33 @@ export function buildNoticeRevision(
   return `${stamp}:${hash}`;
 }
 
+/** 正文 trim 后非空才在员工首页展示提示区。 */
+export function shouldShowHomeNotice(body: string): boolean {
+  return body.trim().length > 0;
+}
+
+export function normalizeHomeNotice(title: string, body: string): {
+  homeNoticeTitle: string;
+  homeNoticeBody: string;
+} {
+  return {
+    homeNoticeTitle: title.trim(),
+    homeNoticeBody: body.trim(),
+  };
+}
+
 export async function getAppConfig(): Promise<AppConfigPublic> {
   const row = await prisma.appConfig.findUnique({ where: { id: 1 } });
   if (!row) return { ...DEFAULT_APP_CONFIG };
   const noticeText = row.noticeText.trim() || DEFAULT_DECLARATION_NOTICE_TEXT;
   const noticeSeconds = row.noticeSeconds > 0 ? row.noticeSeconds : DEFAULT_NOTICE_SECONDS;
+  const home = normalizeHomeNotice(row.homeNoticeTitle ?? '', row.homeNoticeBody ?? '');
   return {
     supportPhone: row.supportPhone.trim(),
     noticeText,
     noticeSeconds,
     noticeRevision: buildNoticeRevision(noticeText, noticeSeconds, row.updatedAt),
+    ...home,
   };
 }
 

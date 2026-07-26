@@ -5,18 +5,24 @@ import { AdminPageActions } from '@/components/admin-page-actions';
 import {
   DEFAULT_DECLARATION_NOTICE_TEXT,
   DEFAULT_NOTICE_SECONDS,
+  HOME_NOTICE_BODY_MAX,
+  HOME_NOTICE_TITLE_MAX,
 } from '@/lib/app-config';
 
 type AppConfigForm = {
   supportPhone: string;
   noticeText: string;
   noticeSeconds: number;
+  homeNoticeTitle: string;
+  homeNoticeBody: string;
 };
 
 const defaults: AppConfigForm = {
   supportPhone: '',
   noticeText: DEFAULT_DECLARATION_NOTICE_TEXT,
   noticeSeconds: DEFAULT_NOTICE_SECONDS,
+  homeNoticeTitle: '',
+  homeNoticeBody: '',
 };
 
 export default function AppConfigPage() {
@@ -34,6 +40,8 @@ export default function AppConfigPage() {
             supportPhone: d.config.supportPhone ?? '',
             noticeText: d.config.noticeText ?? DEFAULT_DECLARATION_NOTICE_TEXT,
             noticeSeconds: d.config.noticeSeconds ?? DEFAULT_NOTICE_SECONDS,
+            homeNoticeTitle: d.config.homeNoticeTitle ?? '',
+            homeNoticeBody: d.config.homeNoticeBody ?? '',
           });
           setUpdatedAt(d.updatedAt);
         }
@@ -56,6 +64,15 @@ export default function AppConfigPage() {
         text: '配置已保存。员工若已确认过旧版弹窗，修改文案后将需重新阅读。',
       });
       setUpdatedAt(new Date().toISOString());
+      if (d.config) {
+        setCfg({
+          supportPhone: d.config.supportPhone ?? '',
+          noticeText: d.config.noticeText ?? DEFAULT_DECLARATION_NOTICE_TEXT,
+          noticeSeconds: d.config.noticeSeconds ?? DEFAULT_NOTICE_SECONDS,
+          homeNoticeTitle: d.config.homeNoticeTitle ?? '',
+          homeNoticeBody: d.config.homeNoticeBody ?? '',
+        });
+      }
     } else {
       setMsg({ type: 'error', text: d.error || '保存失败' });
     }
@@ -67,7 +84,7 @@ export default function AppConfigPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">申报合规与技术支持</h1>
           <p className="mt-2 text-sm text-slate-500">
-            配置员工登录后强制阅读弹窗与申报页技术支持电话
+            配置强制阅读弹窗、申报页技术支持电话，以及员工首页底部提示
             {updatedAt && (
               <span className="ml-2 text-slate-400">
                 （最后更新：{new Date(updatedAt).toLocaleString()}）
@@ -109,6 +126,37 @@ export default function AppConfigPage() {
             value={cfg.noticeText}
             onChange={(e) => setCfg({ ...cfg, noticeText: e.target.value })}
             rows={16}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm leading-relaxed focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
+        </label>
+      </div>
+
+      <div className="mt-6 space-y-4 rounded-xl border border-slate-200 bg-white p-5">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">员工首页提示</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            显示在员工登录后「我的申报」页面底部。正文为空则不显示该区域。
+          </p>
+        </div>
+        <label className="block text-sm">
+          <span className="font-medium text-slate-600">标题</span>
+          <input
+            type="text"
+            value={cfg.homeNoticeTitle}
+            maxLength={HOME_NOTICE_TITLE_MAX}
+            onChange={(e) => setCfg({ ...cfg, homeNoticeTitle: e.target.value })}
+            placeholder="如：技术支持与提示"
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="font-medium text-slate-600">正文</span>
+          <textarea
+            value={cfg.homeNoticeBody}
+            maxLength={HOME_NOTICE_BODY_MAX}
+            onChange={(e) => setCfg({ ...cfg, homeNoticeBody: e.target.value })}
+            rows={6}
+            placeholder={'可填写技术支持电话、微信、申报须知等\n支持多行'}
             className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm leading-relaxed focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
         </label>

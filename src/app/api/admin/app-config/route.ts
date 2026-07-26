@@ -6,13 +6,18 @@ import { requireAdmin } from '@/lib/auth';
 import {
   DEFAULT_DECLARATION_NOTICE_TEXT,
   DEFAULT_NOTICE_SECONDS,
+  HOME_NOTICE_BODY_MAX,
+  HOME_NOTICE_TITLE_MAX,
   getAppConfig,
+  normalizeHomeNotice,
 } from '@/lib/app-config';
 
 const Schema = z.object({
   supportPhone: z.string().max(64),
   noticeText: z.string().min(20).max(20000),
   noticeSeconds: z.number().int().min(0).max(300),
+  homeNoticeTitle: z.string().max(HOME_NOTICE_TITLE_MAX).optional().default(''),
+  homeNoticeBody: z.string().max(HOME_NOTICE_BODY_MAX).optional().default(''),
 });
 
 export async function GET() {
@@ -43,13 +48,15 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: '参数无效' }, { status: 400 });
     }
 
-    const { supportPhone, noticeText, noticeSeconds } = parsed.data;
+    const { supportPhone, noticeText, noticeSeconds, homeNoticeTitle, homeNoticeBody } = parsed.data;
+    const home = normalizeHomeNotice(homeNoticeTitle, homeNoticeBody);
     await prisma.appConfig.upsert({
       where: { id: 1 },
       update: {
         supportPhone: supportPhone.trim(),
         noticeText: noticeText.trim(),
         noticeSeconds,
+        ...home,
         updatedBy: session.userId,
       },
       create: {
@@ -57,6 +64,7 @@ export async function PUT(req: Request) {
         supportPhone: supportPhone.trim(),
         noticeText: noticeText.trim() || DEFAULT_DECLARATION_NOTICE_TEXT,
         noticeSeconds: noticeSeconds > 0 ? noticeSeconds : DEFAULT_NOTICE_SECONDS,
+        ...home,
         updatedBy: session.userId,
       },
     });

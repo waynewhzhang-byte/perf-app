@@ -40,12 +40,16 @@ model AuthConfig {
 
 // ========== 申报合规与运维（系统级单例） ==========
 model AppConfig {
-  id            Int      @id @default(1)
-  supportPhone  String   @default("")
-  noticeText    String   @db.Text
-  noticeSeconds Int      @default(30)
-  updatedAt     DateTime @updatedAt
-  updatedBy     String?
+  id               Int      @id @default(1)
+  supportPhone     String   @default("")
+  noticeText       String   @db.Text
+  noticeSeconds    Int      @default(30)
+  /// 员工首页底部提示标题（可空；仅正文非空时展示）
+  homeNoticeTitle  String   @default("")
+  /// 员工首页底部提示正文（空则不展示该区域）
+  homeNoticeBody   String   @default("") @db.Text
+  updatedAt        DateTime @updatedAt
+  updatedBy        String?
 }
 
 // ========== 验证码 ==========

@@ -2,20 +2,24 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getAppConfig } from '@/lib/app-config';
 import { LogoutButton } from '@/components/logout-button';
+import { HomeNotice } from '@/components/home-notice';
 
 export default async function EmployeeHome() {
   const s = await getSession(false);
   if (!s) redirect('/login');
-  const templates = await prisma.formTemplate.findMany({ where: { status: 'PUBLISHED' } });
-  const subs = await prisma.submission.findMany({
-    where: { userId: s.userId }, include: { template: true },
-  });
-
-  const records = await prisma.performanceRecord.findMany({
-    where: { userId: s.userId },
-    orderBy: { year: 'desc' },
-  });
+  const [templates, subs, records, appConfig] = await Promise.all([
+    prisma.formTemplate.findMany({ where: { status: 'PUBLISHED' } }),
+    prisma.submission.findMany({
+      where: { userId: s.userId }, include: { template: true },
+    }),
+    prisma.performanceRecord.findMany({
+      where: { userId: s.userId },
+      orderBy: { year: 'desc' },
+    }),
+    getAppConfig(),
+  ]);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
@@ -137,6 +141,8 @@ export default async function EmployeeHome() {
           })}
         </ul>
       </section>
+
+      <HomeNotice title={appConfig.homeNoticeTitle} body={appConfig.homeNoticeBody} />
     </main>
   );
 }

@@ -7,6 +7,8 @@ export type PublicAppConfig = {
   noticeText: string;
   noticeSeconds: number;
   noticeRevision: string;
+  homeNoticeTitle: string;
+  homeNoticeBody: string;
 };
 
 export function usePublicAppConfig() {
