@@ -23,6 +23,16 @@ const SCORING_POINT_ORDER = new Map<string, number>(
   SCORING_STANDARDS.map((standard, index) => [standard.code, index]),
 );
 
+/** 员工端展示用：评价维度 工作现场-两票执行（避免「一级/二级」与能级等级混淆） */
+function formatEvaluationDimensionLabel(
+  sectionTitle: string | null | undefined,
+  itemTitle: string,
+): string {
+  const section = (sectionTitle ?? '').trim() || '—';
+  const item = itemTitle.trim() || '—';
+  return `评价维度 ${section}-${item}`;
+}
+
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
   id: string; title: string; hint?: string;
@@ -195,7 +205,8 @@ export default function SubmissionPage() {
           : profileRes?.user?.branch?.id ?? '',
         hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
         declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
-        declarationSpecialtyId: existing?.declarationSpecialtyId ?? nextOptions.declarationSpecialties[0]?.id ?? '',
+        // 申报专业需员工本人选择，不默认第一项
+        declarationSpecialtyId: existing?.declarationSpecialtyId ?? '',
       });
 
       const map: Record<string, SubItem> = {};
@@ -715,7 +726,9 @@ export default function SubmissionPage() {
       if (requireHeader('workArea') && !header.workAreaId) missing.push('工区');
       if (requireHeader('hireDate') && !header.hireDate) missing.push('入职时间');
       if (requireHeader('declarationLevel') && !header.declarationLevelId) missing.push('能级评价等级');
-      if (requireHeader('declarationSpecialty') && !header.declarationSpecialtyId) missing.push('能级评价专业');
+      if ((is2026AppealView || requireHeader('declarationSpecialty')) && !header.declarationSpecialtyId) {
+        missing.push('申报专业');
+      }
       tpl.sections.forEach((s) => s.items.forEach((it) => {
         if (isLocked(it.id) || systemFilledItemIds.has(it.id)) return;
         const a = answers[it.id];
@@ -1000,10 +1013,30 @@ export default function SubmissionPage() {
 
       {is2026AppealView && (
         <section className="mt-5 rounded-xl border border-primary-200 bg-primary-50/40 p-5">
-          <h2 className="font-semibold text-slate-900">参加工作时间与参评能级</h2>
+          <h2 className="font-semibold text-slate-900">申报专业与参评能级</h2>
           <p className="mt-1 text-xs text-slate-600">
-            参加工作时间由员工花名册导入，只读不可申诉。系统按年度评价截止日（当年 7 月 31 日）自动计算工龄与能级评价等级。
+            请先选择本人申报专业；参加工作时间由员工花名册导入（只读）。系统按年度评价截止日（当年 7 月 31 日）自动计算工龄与能级评价等级。
           </p>
+          <label className="mt-4 block text-sm">
+            <span className="font-medium text-slate-700">
+              申报专业
+              <span className="ml-1 text-red-500">*</span>
+            </span>
+            <select
+              value={header.declarationSpecialtyId}
+              disabled={!editable || options.declarationSpecialties.length === 0}
+              onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50 sm:max-w-md"
+            >
+              <option value="">请选择申报专业</option>
+              {options.declarationSpecialties.map((sp) => (
+                <option key={sp.id} value={sp.id}>{sp.name}</option>
+              ))}
+            </select>
+            {options.declarationSpecialties.length === 0 && (
+              <p className="mt-1 text-xs text-amber-700">尚未配置申报专业，请联系管理员在组织架构中维护。</p>
+            )}
+          </label>
           <dl className="mt-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
               <dt className="text-xs font-medium text-slate-500">参加工作时间</dt>
@@ -1030,6 +1063,21 @@ export default function SubmissionPage() {
         <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="font-semibold">能级评价申报信息</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {showHeader('declarationSpecialty') && (
+              <label className="text-sm sm:col-span-2">
+                <span className="font-medium text-slate-600">
+                  申报专业
+                  {requireHeader('declarationSpecialty') && <span className="ml-1 text-red-500">*</span>}
+                </span>
+                <select value={header.declarationSpecialtyId}
+                  disabled={!editable || options.declarationSpecialties.length === 0}
+                  onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+                  <option value="">请选择申报专业</option>
+                  {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+                </select>
+              </label>
+            )}
             {showHeader('workArea') && (
               <label className="text-sm">
                 <span className="font-medium text-slate-600">
@@ -1049,7 +1097,7 @@ export default function SubmissionPage() {
               <>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">
-                    入职时间
+                    参加工作时间
                     {requireHeader('hireDate') && <span className="ml-1 text-red-500">*</span>}
                   </span>
                   <input type="date" value={header.hireDate}
@@ -1060,15 +1108,15 @@ export default function SubmissionPage() {
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">工作年限（年）</span>
                   <input type="text" value={workYears ?? ''} readOnly
-                    placeholder="填写入职时间后自动计算"
+                    placeholder="填写参加工作时间后自动计算"
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600" />
                 </label>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">自动计算的能级评价等级</span>
                   <input type="text" value={displayCalculatedLevel} readOnly
-                    placeholder="填写入职时间后自动计算"
+                    placeholder="填写参加工作时间后自动计算"
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm font-medium text-slate-700" />
-                  <p className="mt-0.5 text-xs text-slate-400">系统按入职时间自动计算（展示为 1/2/3 级），不能手工选择。</p>
+                  <p className="mt-0.5 text-xs text-slate-400">系统按参加工作时间自动计算（展示为 1/2/3 级），不能手工选择。</p>
                 </label>
               </>
             )}
@@ -1087,30 +1135,15 @@ export default function SubmissionPage() {
                 </select>
               </label>
             )}
-            {showHeader('declarationSpecialty') && (
-              <label className="text-sm sm:col-span-2">
-                <span className="font-medium text-slate-600">
-                  能级评价专业
-                  {requireHeader('declarationSpecialty') && <span className="ml-1 text-red-500">*</span>}
-                </span>
-                <select value={header.declarationSpecialtyId}
-                  disabled={!editable || options.declarationSpecialties.length === 0}
-                  onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
-                  {options.declarationSpecialties.length === 0 && <option value="">请先配置专业</option>}
-                  {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
-                </select>
-              </label>
-            )}
           </div>
         </section>
       )}
 
-      {/* 系统自动填充项：一级维度 → 二级评分项 → 叶级明细 */}
+      {/* 系统自动填充项：评价维度 → 评分项 → 评价标准与计算过程 */}
       {appealCentric && groupedFactSections.length > 0 && (
         <div className="mt-5 space-y-5">
           <p className="text-xs text-slate-500">
-            按量化积分表层级展示：一级评价维度 → 二级评分项 → 叶级评价标准与计算过程。
+            按量化积分表层级展示：评价维度 → 评分项 → 评价标准与计算过程。
           </p>
           {groupedFactSections.map((section) => (
             <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1118,18 +1151,18 @@ export default function SubmissionPage() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
-                      一级
+                      评价维度
                     </span>
                     <h2 className="text-base font-semibold text-slate-900">
                       {section.excelOrder}. {section.title}
                     </h2>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    下含 {section.items.length} 个二级评分项
+                    下含 {section.items.length} 个评分项
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">一级得分</p>
+                  <p className="text-[10px] font-medium tracking-wide text-slate-500">维度得分</p>
                   <p className="text-sm font-bold tabular-nums text-slate-900">
                     {section.score.toFixed(1)}
                     {section.maxScore > 0 && (
@@ -1159,7 +1192,7 @@ export default function SubmissionPage() {
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded bg-primary-700 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
-                              二级
+                              评分项
                             </span>
                             <h3 className="text-sm font-semibold text-slate-800">{fi.itemTitle}</h3>
                             {disputed && (
@@ -1169,9 +1202,7 @@ export default function SubmissionPage() {
                             )}
                           </div>
                           <p className="mt-1 text-[11px] text-slate-500">
-                            一级：{section.title}
-                            <span className="mx-1 text-slate-300">·</span>
-                            二级：{fi.itemTitle}
+                            {formatEvaluationDimensionLabel(section.title, fi.itemTitle)}
                             {standard?.maxScore != null && standard.maxScore > 0 && (
                               <>
                                 <span className="mx-1 text-slate-300">·</span>
@@ -1181,7 +1212,7 @@ export default function SubmissionPage() {
                           </p>
                         </div>
                         <div className="shrink-0 text-right">
-                          <p className="text-[10px] font-medium text-slate-500">二级得分</p>
+                          <p className="text-[10px] font-medium text-slate-500">评分项得分</p>
                           <p className={`text-sm font-bold tabular-nums ${disputed ? 'text-amber-700' : 'text-emerald-700'}`}>
                             {fi.totalScore.toFixed(1)} 分
                           </p>
@@ -1190,10 +1221,7 @@ export default function SubmissionPage() {
 
                       <div className="px-4 py-3">
                         <div className="mb-2 flex items-center gap-2">
-                          <span className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                            叶级
-                          </span>
-                          <span className="text-[11px] text-slate-500">评价标准 · 得分 · 计算过程</span>
+                          <span className="text-[11px] font-medium text-slate-600">评价标准与计算过程</span>
                         </div>
                         <div className="overflow-x-auto rounded-md border border-slate-100">
                           <table className="w-full min-w-[28rem] text-left text-xs">
@@ -1240,7 +1268,7 @@ export default function SubmissionPage() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-800">{fi.itemTitle}</p>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    一级：{fi.sectionTitle ?? '—'} · 二级：{fi.itemTitle}
+                    {formatEvaluationDimensionLabel(fi.sectionTitle, fi.itemTitle)}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     系统分 {fi.totalScore.toFixed(1)} → 主张分 {factsClaimedScores[fi.itemId]?.toFixed(1) ?? '—'}
@@ -1528,7 +1556,7 @@ export default function SubmissionPage() {
             </div>
             <div className="mt-4 space-y-4">
               <label className="block text-sm">
-                <span className="font-medium text-slate-700">一级维度</span>
+                <span className="font-medium text-slate-700">评价维度</span>
                 <select
                   value={modalSectionTitle}
                   disabled={!!editingAppealItemId}
@@ -1550,7 +1578,7 @@ export default function SubmissionPage() {
                 </select>
               </label>
               <label className="block text-sm">
-                <span className="font-medium text-slate-700">二级评分项</span>
+                <span className="font-medium text-slate-700">评分项</span>
                 <select
                   value={modalItemId}
                   disabled={!!editingAppealItemId}
@@ -1567,7 +1595,7 @@ export default function SubmissionPage() {
                   ))}
                 </select>
                 <p className="mt-0.5 text-xs text-slate-400">
-                  先选一级维度（如工作现场），再选其下二级评分项（如两票执行）；共 11 项，参加工作时间不可申诉。
+                  先选评价维度（如工作现场），再选其下评分项（如两票执行）；共 11 项，参加工作时间不可申诉。
                 </p>
               </label>
               {modalFactItem && (
