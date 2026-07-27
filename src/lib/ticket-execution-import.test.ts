@@ -5,6 +5,7 @@ import {
   DEFAULT_TICKET_PRICES,
   isOperationTicketEligible,
   aggregateTicketExecutionRows,
+  buildWorkMemberTicketRecords,
   mergeWorkMemberTicketScores,
   type TicketPriceConfig,
 } from './ticket-execution-import';
@@ -63,6 +64,8 @@ describe('aggregateTicketExecutionRows', () => {
   it('操作票：同一员工在同一行的多个角色列只计一次分（规则 xlsx 行 38）', () => {
     const opRows = [{
       单位: '测试',
+      票号: 'CZ-001',
+      操作任务: '母线倒闸操作',
       票状态: '已执行',
       实际操作步数: '54',
       操作人: '张三',
@@ -80,6 +83,24 @@ describe('aggregateTicketExecutionRows', () => {
     const li = result.byEmployeeNo.get('E002')!;
     assert.equal(li.rawScore, 0.01);
     assert.equal(li.breakdown.operationTicketCount, 1);
+    assert.equal(result.records.length, 2);
+    assert.deepEqual(
+      result.records.find((record) => record.employeeNo === 'E001'),
+      {
+        employeeNo: 'E001',
+        employeeName: '张三',
+        recordKey: 'operation:CZ-001:row2:E001',
+        recordType: 'OPERATION_TICKET',
+        recordTitle: '操作票 CZ-001 · 母线倒闸操作',
+        participationRole: '操作人、值班负责人',
+        scoreCategory: 'operationPoints',
+        score: 0.01,
+        eventDate: null,
+        sourceSheet: '操作票',
+        sourceRowNo: 2,
+        sourceData: opRows[0],
+      },
+    );
   });
 
   it('操作票：跨行累计（同一员工在多张票各计一次）', () => {
@@ -136,7 +157,52 @@ describe('aggregateTicketExecutionRows', () => {
       }], resolver);
       assert.equal(split.byEmployeeNo.get('甲')?.breakdown.workPermitterPoints, 0.15);
       assert.equal(split.byEmployeeNo.get('乙')?.breakdown.workPermitterPoints, 0.15);
+      assert.deepEqual(
+        split.records.map((record) => [record.employeeNo, record.participationRole, record.score]),
+        [
+          ['甲', '开工许可人', 0.15],
+          ['乙', '完工许可人', 0.15],
+        ],
+      );
     });
+});
+
+describe('buildWorkMemberTicketRecords', () => {
+  it('将工作班成员源表的每一行保留为独立事实记录', () => {
+    const rows = [
+      { 票类型: '变电站第一种工作票', 姓名: '张三', 人员编号: 'E001' },
+      { 票类型: '变电站第二种工作票', 姓名: '张三', 人员编号: 'E001' },
+    ];
+
+    const records = buildWorkMemberTicketRecords(rows);
+
+    assert.deepEqual(
+      records.map((record) => ({
+        key: record.recordKey,
+        title: record.recordTitle,
+        role: record.participationRole,
+        score: record.score,
+        row: record.sourceRowNo,
+      })),
+      [
+        {
+          key: 'work-member:工作班成员:2:E001',
+          title: '变电站第一种工作票',
+          role: '工作班成员',
+          score: 1.5,
+          row: 2,
+        },
+        {
+          key: 'work-member:工作班成员:3:E001',
+          title: '变电站第二种工作票',
+          role: '工作班成员',
+          score: 0.5,
+          row: 3,
+        },
+      ],
+    );
+    assert.equal(records.reduce((sum, record) => sum + record.score, 0), 2);
+  });
 });
 
 describe('resolveWorkTicketPrice', () => {

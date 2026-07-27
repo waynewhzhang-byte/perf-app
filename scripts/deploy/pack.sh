@@ -101,6 +101,40 @@ if [[ "$INCLUDE_ENV" == true ]]; then
     die "未找到 --include-env 所需的文件: $ENV_FILE"
   fi
   cp "$ENV_FILE" "${BUNDLE_ROOT}/.env.packaged"
+  # 避免把开发机「错误的 MINIO_PUBLIC_*」带到 Ubuntu（常见：对 9000 开 HTTPS → ERR_SSL_PROTOCOL_ERROR）
+  # 目标机 deploy.sh 会按 --server-name 再写入正确的 APP_BASE_URL / 附件模式
+  {
+    echo ""
+    echo "# --- pack.sh: 已注释源机 MINIO_PUBLIC_*，Ubuntu 默认走应用代理附件 ---"
+  } >> "${BUNDLE_ROOT}/.env.packaged"
+  if grep -qE '^[[:space:]]*MINIO_PUBLIC_' "${BUNDLE_ROOT}/.env.packaged" 2>/dev/null; then
+    tmp_env="$(mktemp)"
+    awk '
+      /^[[:space:]]*MINIO_PUBLIC_/ {
+        print "# " $0 "  # stripped by pack.sh (use proxy or minio-https on server)"
+        next
+      }
+      { print }
+    ' "${BUNDLE_ROOT}/.env.packaged" > "$tmp_env"
+    mv "$tmp_env" "${BUNDLE_ROOT}/.env.packaged"
+    log "已注释 .env.packaged 中的 MINIO_PUBLIC_*（防止附件 SSL 协议错误）"
+  fi
+  # 同机部署强制内部 MinIO 为本机 HTTP
+  tmp_env="$(mktemp)"
+  awk '
+    BEGIN { e=0; p=0; s=0 }
+    /^[[:space:]]*MINIO_ENDPOINT=/ { print "MINIO_ENDPOINT=127.0.0.1"; e=1; next }
+    /^[[:space:]]*MINIO_PORT=/ { print "MINIO_PORT=9000"; p=1; next }
+    /^[[:space:]]*MINIO_USE_SSL=/ { print "MINIO_USE_SSL=false"; s=1; next }
+    { print }
+    END {
+      if (!e) print "MINIO_ENDPOINT=127.0.0.1"
+      if (!p) print "MINIO_PORT=9000"
+      if (!s) print "MINIO_USE_SSL=false"
+    }
+  ' "${BUNDLE_ROOT}/.env.packaged" > "$tmp_env"
+  mv "$tmp_env" "${BUNDLE_ROOT}/.env.packaged"
+  chmod 600 "${BUNDLE_ROOT}/.env.packaged"
   log "已包含 .env -> .env.packaged（请妥善保管传输包）"
 fi
 
@@ -125,8 +159,11 @@ cat > "${BUNDLE_ROOT}/deploy.sh" <<'DEPLOYEOF'
 #!/usr/bin/env bash
 # deploy.sh — 目标机一键部署（假定 Node/npm、PostgreSQL、MinIO 已手工装好）
 # 本脚本: 导库 + npm ci/build + 安装配置 PM2 + Nginx 自签名 SSL
+#         + 修正 APP_BASE_URL / 附件访问（默认 proxy，避免 MinIO:9000 误用 HTTPS）
 # 用法:
-#   sudo ./deploy.sh --server-name 192.168.1.10
+#   sudo ./deploy.sh --server-name 1.92.206.86
+#   sudo ./deploy.sh --server-name 1.92.206.86 --attachment-mode proxy
+#   sudo ./deploy.sh --server-name 1.92.206.86 --attachment-mode minio-https --setup-minio-nginx
 #   sudo ./deploy.sh --server-name example.com --skip-nginx
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,15 +171,26 @@ exec bash "${SCRIPT_DIR}/source/scripts/deploy/install-on-server.sh" \
   --bundle-dir "$SCRIPT_DIR" --use-npm "$@"
 DEPLOYEOF
 chmod +x "${BUNDLE_ROOT}/deploy.sh"
-log "已生成 deploy.sh（一键部署：应用 + PM2 + Nginx）"
+log "已生成 deploy.sh（一键部署：应用 + PM2 + Nginx + 附件 env）"
 
-# 复制 PM2/Nginx 配置脚本到 bundle（不装 Node/PG/MinIO）
+# 复制 PM2/Nginx/附件配置脚本到 bundle（不装 Node/PG/MinIO）
 mkdir -p "${BUNDLE_ROOT}/bootstrap"
-for f in setup-pm2-nginx.sh setup-nginx-ssl.sh bootstrap-ubuntu.sh env.ubuntu.example; do
+for f in \
+  setup-pm2-nginx.sh \
+  setup-nginx-ssl.sh \
+  setup-minio-nginx-ssl.sh \
+  bootstrap-ubuntu.sh \
+  configure-env.sh \
+  fix-attachments.sh \
+  env.ubuntu.example
+do
   [[ -f "$ROOT_DIR/scripts/deploy/$f" ]] && cp "$ROOT_DIR/scripts/deploy/$f" "${BUNDLE_ROOT}/bootstrap/"
 done
+chmod +x "${BUNDLE_ROOT}/bootstrap/"*.sh 2>/dev/null || true
 cp -a "$ROOT_DIR/scripts/deploy/nginx" "${BUNDLE_ROOT}/bootstrap/" 2>/dev/null || true
 cp -a "$ROOT_DIR/scripts/deploy/lib" "${BUNDLE_ROOT}/bootstrap/" 2>/dev/null || true
+[[ -f "$ROOT_DIR/scripts/deploy/MIGRATION.md" ]] && cp "$ROOT_DIR/scripts/deploy/MIGRATION.md" "${BUNDLE_ROOT}/MIGRATION.md"
+[[ -f "$ROOT_DIR/scripts/deploy/README.md" ]] && cp "$ROOT_DIR/scripts/deploy/README.md" "${BUNDLE_ROOT}/README.md"
 
 cat > "${BUNDLE_ROOT}/bootstrap.sh" <<'BOOTEOF'
 #!/usr/bin/env bash
@@ -153,6 +201,15 @@ exec bash "${ROOT}/bootstrap/setup-pm2-nginx.sh" "$@"
 BOOTEOF
 chmod +x "${BUNDLE_ROOT}/bootstrap.sh"
 
+cat > "${BUNDLE_ROOT}/fix-attachments.sh" <<'FIXEOF'
+#!/usr/bin/env bash
+# 附件打不开 / ERR_SSL_PROTOCOL_ERROR 一键修复（包装 bootstrap/fix-attachments.sh）
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "${ROOT}/bootstrap/fix-attachments.sh" "$@"
+FIXEOF
+chmod +x "${BUNDLE_ROOT}/fix-attachments.sh"
+
 cat > "${BUNDLE_ROOT}/MANIFEST.txt" <<EOF
 perf-app 迁移包（完整源码 + PostgreSQL dump）
 生成时间: $(date -Iseconds)
@@ -162,25 +219,28 @@ Git: ${GIT_REV}
 【目标机需已手工安装】
   - Node.js 20+ 与 npm
   - PostgreSQL（与 .env DATABASE_URL 一致）
-  - MinIO（与 .env MINIO_* 一致；不迁移对象数据）
+  - MinIO（本机 127.0.0.1:9000 HTTP；不迁移对象数据）
   - psql / pg_restore / rsync
 
 【一键部署会做】
   - 同步源码、导入 database.dump、prisma migrate、npm ci + build
   - 安装并配置 PM2（cluster）
   - 安装并配置 Nginx + 自签名 HTTPS
+  - 按 --server-name 写入 APP_BASE_URL，默认附件走应用代理（避免 MinIO SSL 错配）
 
 包含:
-  - source/          完整源代码（无 node_modules / .next）
-  - database.dump    PostgreSQL 全库 dump（除非 --skip-dump）
-  - deploy.sh        一键部署入口
-  - bootstrap.sh     仅 PM2 + Nginx（一般不必单独跑，deploy.sh 已包含）
+  - source/               完整源代码（无 node_modules / .next）
+  - database.dump         PostgreSQL 全库 dump（除非 --skip-dump）
+  - deploy.sh             一键部署入口
+  - fix-attachments.sh    附件 ERR_SSL_PROTOCOL_ERROR 一键修复
+  - bootstrap.sh          仅 PM2 + Nginx
 
 【推荐流程】:
   tar -xzf ${BUNDLE_NAME}.tar.gz
   cd ${BUNDLE_NAME}
-  # 确认目标机 .env 中 DATABASE_URL / MINIO_* / APP_BASE_URL
-  sudo ./deploy.sh --server-name <服务器IP或域名>
+  sudo ./deploy.sh --server-name <服务器公网IP>
+  # 若旧环境附件已裂开，再跑:
+  # sudo ./fix-attachments.sh --server-name <服务器公网IP>
 EOF
 
 ARCHIVE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}.tar.gz"

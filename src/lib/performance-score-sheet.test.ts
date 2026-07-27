@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { aggregateEmployeeDimensions } from './dimension-aggregation';
 import { buildPerformanceScoreSheet } from './performance-score-sheet';
 
 describe('buildPerformanceScoreSheet', () => {
@@ -171,5 +172,96 @@ describe('buildPerformanceScoreSheet', () => {
       performanceFacts: [],
     });
     assert.equal(sheet.declarationTier, '一级');
+  });
+});
+
+describe('score sheet fact totals ↔ dimension aggregation parity', () => {
+  const fixture = {
+    employeeNo: 'parity-001',
+    basicFacts: [
+      { dimension: 'SKILL_LEVEL' as const, score: 3, tierValue: '技师' },
+      { dimension: 'TITLE_LEVEL' as const, score: 2, tierValue: '//' },
+      { dimension: 'PERFORMANCE_LEVEL' as const, score: 5.5, tierValue: '2A1B' },
+    ],
+    performanceFacts: [
+      { dimensionCode: 'worksite.defect-governance', score: 0.5 },
+      { dimensionCode: 'worksite.defect-governance', score: 1 },
+      { dimensionCode: 'performance.safety-contribution', score: 20 },
+      { dimensionCode: 'worksite.ticket-execution', score: 0.06 },
+      { dimensionCode: 'performance.technical-contribution.textbook', score: 6 },
+      { dimensionCode: 'performance.technical-contribution.regulation', score: 4 },
+      { dimensionCode: 'performance.technical-contribution.ticket-revision', score: 4 },
+      { dimensionCode: 'special.violation-severe', score: -2 },
+    ],
+    ticketCohortMax: 0.11,
+  };
+
+  it('fact 维度得分与 aggregateEmployeeDimensions 一致', () => {
+    const totals = aggregateEmployeeDimensions({
+      employeeNo: fixture.employeeNo,
+      performanceFacts: fixture.performanceFacts,
+      basicFacts: fixture.basicFacts,
+      ticketCohortMax: fixture.ticketCohortMax,
+    });
+
+    const sheet = buildPerformanceScoreSheet({
+      year: 2026,
+      employeeNo: fixture.employeeNo,
+      employeeName: '对照',
+      templateItems: [],
+      basicFacts: fixture.basicFacts.map((f, i) => ({
+        id: `b${i}`,
+        dimension: f.dimension,
+        tierValue: f.tierValue,
+        score: f.score,
+      })),
+      performanceFacts: fixture.performanceFacts.map((f, i) => ({
+        id: `p${i}`,
+        dimensionCode: f.dimensionCode,
+        score: f.score,
+      })),
+      ticketCohortMax: fixture.ticketCohortMax,
+    });
+
+    const factCodes = [
+      'basic.skill-level',
+      'basic.performance-level',
+      'worksite.defect-governance',
+      'performance.safety-contribution',
+      'worksite.ticket-execution',
+      'performance.technical-contribution',
+    ];
+
+    for (const code of factCodes) {
+      const row = sheet.sections.flatMap((s) => s.items).find((i) => i.dimensionCode === code);
+      assert.ok(row, `missing sheet row ${code}`);
+      assert.equal(row!.source, 'FACT', code);
+      assert.equal(row!.score, totals.byCode[code]?.score, `score mismatch ${code}`);
+    }
+
+    // 空档位不进聚合、分表也为 0 / NONE
+    const title = sheet.sections.flatMap((s) => s.items).find((i) => i.dimensionCode === 'basic.title-level');
+    assert.equal(title?.score, 0);
+    assert.equal(totals.byCode['basic.title-level'], undefined);
+  });
+
+  it('未传 ticketCohortMax 时分表与「本人 raw 当地最高」的聚合一致', () => {
+    const performanceFacts = [{ dimensionCode: 'worksite.ticket-execution', score: 45 }];
+    const totals = aggregateEmployeeDimensions({
+      employeeNo: 't1',
+      performanceFacts,
+      ticketCohortMax: 45,
+    });
+    const sheet = buildPerformanceScoreSheet({
+      year: 2026,
+      employeeNo: 't1',
+      employeeName: '票',
+      templateItems: [],
+      basicFacts: [],
+      performanceFacts: performanceFacts.map((f) => ({ id: 'p1', ...f })),
+    });
+    const ticket = sheet.sections.flatMap((s) => s.items).find((i) => i.dimensionCode === 'worksite.ticket-execution');
+    assert.equal(ticket?.score, 30);
+    assert.equal(ticket?.score, totals.byCode['worksite.ticket-execution']?.score);
   });
 });

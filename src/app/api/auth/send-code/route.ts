@@ -49,11 +49,11 @@ export async function POST(req: Request) {
     const ip = extractIP(req);
 
     // Per-IP: max 10 requests per minute (prevents SMS/email bombing)
-    if (isRateLimited(`send-code:ip:${ip}`, 10, 60_000)) {
+    if (await isRateLimited(`send-code:ip:${ip}`, 10, 60_000)) {
       return NextResponse.json({ error: '请求过于频繁，请稍后再试' }, { status: 429 });
     }
     // Per-target: max 3 requests per 10 minutes
-    if (isRateLimited(`send-code:target:${target}`, 3, 10 * 60_000)) {
+    if (await isRateLimited(`send-code:target:${target}`, 3, 10 * 60_000)) {
       return NextResponse.json({ error: '该联系方式请求过于频繁，请稍后再试' }, { status: 429 });
     }
 
@@ -92,8 +92,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '验证码发送失败，请稍后再试' }, { status: 502 });
     }
 
-    recordAttempt(`send-code:ip:${ip}`, 60_000);
-    recordAttempt(`send-code:target:${target}`, 10 * 60_000);
+    await recordAttempt(`send-code:ip:${ip}`, 60_000);
+    await recordAttempt(`send-code:target:${target}`, 10 * 60_000);
 
     return NextResponse.json({ success: true, expiresIn: 300 });
   } catch (e) {

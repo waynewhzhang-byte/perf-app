@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import ExcelJS from 'exceljs';
 import type { PrismaClient } from '@prisma/client';
 import {
+  buildAnnualQuantitativeReportAnalysis,
   buildAnnualQuantitativeReportRows,
   buildAnnualQuantitativeReportWorkbook,
   loadAnnualQuantitativeReportRows,
@@ -86,6 +87,20 @@ describe('annual quantitative report', () => {
     assert.equal(rows.find((row) => row.employeeNo === '1001')?.ticketExecution, 16.4);
     assert.equal(rows.find((row) => row.employeeNo === '1004')?.ticketExecution, 30);
     assert.equal(rows.find((row) => row.employeeNo === '1001')?.factCount, 2);
+  });
+
+  it('builds dashboard totals from the same 14-dimension report rows', () => {
+    const analysis = buildAnnualQuantitativeReportAnalysis(rows);
+    const employee = analysis.records.find((row) => row.employeeNo === '1001');
+
+    assert.equal(analysis.employeeCount, 4);
+    assert.deepEqual(analysis.tierCounts, { 一级: 1, 二级: 2, 三级: 1 });
+    assert.equal(analysis.branchBreakdown.length, 4);
+    assert.equal(analysis.branchBreakdown[0]?.employeeCount, 1);
+    assert.equal(employee?.basicScore, 10);
+    assert.equal(employee?.worksiteScore, 17.9);
+    assert.equal(employee?.totalScore, 27.9);
+    assert.equal(analysis.dimensionAverages.find((dimension) => dimension.key === 'ticketExecution')?.average, 26.6);
   });
 
   it('uses each specialty maximum before filtering a department', async () => {

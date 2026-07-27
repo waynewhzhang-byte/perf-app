@@ -10,7 +10,13 @@ import {
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
 import type { DeclarationTier } from '@/lib/declaration-level';
-import { capToStandard, normalizeWithinCohort, round1 } from '@/lib/dimension-aggregation';
+import {
+  aggregateEmployeeDimensions,
+  capToStandard,
+  round1,
+  sumTicketFactsByEmployee,
+  type EmployeeDimensionTotals,
+} from '@/lib/dimension-aggregation';
 import {
   inferDimensionCodeFromTitle,
   SCORING_STANDARDS,
@@ -118,6 +124,12 @@ export interface ScoreSheetInput {
     eventType?: string;
     metadata?: unknown;
     sourceFile?: string | null;
+    recordKey?: string | null;
+    recordType?: string | null;
+    recordTitle?: string | null;
+    participationRole?: string | null;
+    sourceSheet?: string | null;
+    sourceRowNo?: number | null;
   }>;
   /** L2 归档后落库的手工/扣分维度事实 */
   submissionFacts?: Array<{
@@ -179,63 +191,53 @@ function sumSubmissionFactScore(facts: NonNullable<ScoreSheetInput['submissionFa
   return facts.reduce((sum, f) => sum + Number(f.score), 0);
 }
 
-function computeFactDimensionScore(
+const TICKET_CODE = 'worksite.ticket-execution';
+
+/**
+ * 为分表调用聚合时解析两票 cohort：
+ * 旧分表在未传 ticketCohortMax 时用「本人原始分」当地最高，等价于折满。
+ * 聚合在缺省时保留 raw——此处显式对齐旧分表金样。
+ */
+function resolveTicketCohortMaxForSheet(input: ScoreSheetInput): number | undefined {
+  if (input.ticketCohortMax != null) return input.ticketCohortMax;
+  const ticketFacts = input.performanceFacts.filter((f) => f.dimensionCode === TICKET_CODE);
+  if (ticketFacts.length === 0) return undefined;
+  return ticketFacts.reduce((sum, f) => sum + Number(f.score), 0);
+}
+
+/** 展示用明细行（不计分）；得分由维度聚合提供 */
+function buildFactDimensionLines(
   standard: DimensionScoringStandard,
   input: ScoreSheetInput,
   perfFacts: ScoreSheetInput['performanceFacts'],
-  basicFact?: ScoreSheetInput['basicFacts'][number],
-): { score: number; lines: DimensionScoreLine[]; hasFacts: boolean } {
+  basicFact: ScoreSheetInput['basicFacts'][number] | undefined,
+  aggregatedScore: number,
+): DimensionScoreLine[] {
   if (standard.ruleType === 'BASIC_TIER' && basicFact) {
     const tier = basicFact.tierValue.trim();
-    // 空值、花名册占位符不能伪装成“其他”或“无”并自动给分；此时应由员工申报事实。
-    if (!tier || tier === '//' || tier === '无') {
-      return { score: 0, lines: [], hasFacts: false };
-    }
-    const score = Number(basicFact.score);
-    return {
-      score,
-      hasFacts: true,
-      lines: [
-        {
-          id: basicFact.id,
-          label: tier,
-          score,
-          detail: basicFact.yearBreakdown ? JSON.stringify(basicFact.yearBreakdown) : undefined,
-        },
-      ],
-    };
+    if (!tier || tier === '//' || tier === '无') return [];
+    return [
+      {
+        id: basicFact.id,
+        label: tier,
+        score: Number(basicFact.score),
+        detail: basicFact.yearBreakdown ? JSON.stringify(basicFact.yearBreakdown) : undefined,
+      },
+    ];
   }
 
-  if (standard.code === 'worksite.ticket-execution') {
-    const agg = perfFacts[0];
-    if (!agg) return { score: 0, lines: [], hasFacts: false };
-    const raw = Number(agg.score);
-    const meta = agg.metadata as { breakdown?: Record<string, number>; isRawScore?: boolean } | undefined;
-    const cohortMax = input.ticketCohortMax ?? raw;
-    const score = normalizeWithinCohort(raw, cohortMax, standard.maxScore);
-    return {
-      score,
-      hasFacts: true,
-      lines: [
-        {
-          id: agg.id,
-          label: `原始分 ${raw}（专业最高 ${cohortMax}，折算后 ${score}）`,
-          score,
-          detail: meta?.breakdown ? JSON.stringify(meta.breakdown) : undefined,
-          sourceDimensionCode: agg.dimensionCode,
-          sourceFile: agg.sourceFile,
-        },
-      ],
-    };
+  if (standard.code === TICKET_CODE) {
+    return perfFacts.map((fact) => ({
+      id: fact.id,
+      label: fact.recordTitle || fact.defectRef || standard.title,
+      score: Number(fact.score),
+      detail: fact.participationRole || fact.role,
+      sourceDimensionCode: fact.dimensionCode,
+      sourceFile: fact.sourceFile,
+    }));
   }
 
-  if (perfFacts.length === 0) {
-    return { score: 0, lines: [], hasFacts: false };
-  }
-
-  const raw = perfFacts.reduce((sum, fact) => sum + Number(fact.score), 0);
-  const score = capToStandard(standard.code, raw);
-  const lines: DimensionScoreLine[] = perfFacts.map((fact) => ({
+  return perfFacts.map((fact) => ({
     id: fact.id,
     label:
       standard.code === 'worksite.defect-governance'
@@ -248,8 +250,6 @@ function computeFactDimensionScore(
     sourceDimensionCode: fact.dimensionCode,
     sourceFile: fact.sourceFile,
   }));
-
-  return { score, hasFacts: true, lines };
 }
 
 function buildDimensionRow(
@@ -257,6 +257,7 @@ function buildDimensionRow(
   input: ScoreSheetInput,
   itemByDimension: Map<string, TemplateItemLike>,
   subByItemId: Map<string, SubmissionItemLike>,
+  totals: EmployeeDimensionTotals,
 ): DimensionScoreRow {
   const item = itemByDimension.get(standard.code);
   const sub = item ? subByItemId.get(item.id) : undefined;
@@ -272,10 +273,11 @@ function buildDimensionRow(
   let hasImportedFacts = false;
 
   if (standard.dataSource === 'fact') {
-    const computed = computeFactDimensionScore(standard, input, perfFacts, basicFact);
-    if (computed.hasFacts) {
-      score = computed.score;
-      lines = computed.lines;
+    const dimTotal = totals.byCode[standard.code];
+    if (dimTotal?.hasFacts) {
+      // 导入事实维度总分：唯一权威来自维度聚合
+      score = dimTotal.score;
+      lines = buildFactDimensionLines(standard, input, perfFacts, basicFact, score);
       source = 'FACT';
       hasImportedFacts = true;
     } else if (item && sub && !sub.isSystemFilled) {
@@ -380,6 +382,20 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
     (input.submissionItems ?? []).map((s) => [s.itemId, s]),
   );
 
+  const totals = aggregateEmployeeDimensions({
+    employeeNo: input.employeeNo,
+    performanceFacts: input.performanceFacts.map((f) => ({
+      dimensionCode: f.dimensionCode,
+      score: f.score,
+    })),
+    basicFacts: input.basicFacts.map((f) => ({
+      dimension: f.dimension,
+      score: f.score,
+      tierValue: f.tierValue,
+    })),
+    ticketCohortMax: resolveTicketCohortMaxForSheet(input),
+  });
+
   const activeStandards = SCORING_STANDARDS.filter((std) => {
     if (std.dataSource === 'fact') return true;
     if (itemByDimension.has(std.code)) return true;
@@ -390,11 +406,11 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
   });
 
   const dimensionRows = activeStandards.filter((s) => s.dataSource !== 'deduction').map((std) =>
-    buildDimensionRow(std, input, itemByDimension, subByItemId),
+    buildDimensionRow(std, input, itemByDimension, subByItemId, totals),
   );
 
   const deductionRows = activeStandards.filter((s) => s.dataSource === 'deduction').map((std) =>
-    buildDimensionRow(std, input, itemByDimension, subByItemId),
+    buildDimensionRow(std, input, itemByDimension, subByItemId, totals),
   );
 
   // 模板已定义的严重/一般违章即使当前为 0 分，也必须保留为系统确认项；
@@ -462,7 +478,7 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
 
 /** 查询同一专业的两票原始最高分。 */
 export async function loadTicketSpecialtyMaxRaw(
-  prisma: PrismaClient,
+  prisma: Pick<PrismaClient, 'performanceFact' | 'user'>,
   year: number,
   workArea: string | null | undefined,
 ): Promise<number> {
@@ -480,13 +496,13 @@ export async function loadTicketSpecialtyMaxRaw(
   const specialtyByNo = new Map(
     users.map((u) => [u.employeeNo!, ticketSpecialtyFromWorkArea(u.branch?.name)]),
   );
-  let max = 0;
-  for (const f of facts) {
-    if (specialtyByNo.get(f.employeeNo) === specialty) {
-      max = Math.max(max, Number(f.score));
-    }
-  }
-  return max;
+  const rawByEmployee = sumTicketFactsByEmployee(facts);
+  return Math.max(
+    0,
+    ...rawByEmployee
+      .filter(({ employeeNo }) => specialtyByNo.get(employeeNo) === specialty)
+      .map(({ rawTicketScore }) => rawTicketScore),
+  );
 }
 
 export interface LoadScoreSheetParams {
@@ -590,6 +606,12 @@ export async function loadPerformanceScoreSheet(
       eventType: f.eventType,
       metadata: f.metadata,
       sourceFile: f.sourceFile,
+      recordKey: f.recordKey,
+      recordType: f.recordType,
+      recordTitle: f.recordTitle,
+      participationRole: f.participationRole,
+      sourceSheet: f.sourceSheet,
+      sourceRowNo: f.sourceRowNo,
     })),
     submissionFacts: submissionFacts.map((f) => ({
       id: f.id,

@@ -1,4 +1,5 @@
 import type { AppRole } from '@prisma/client';
+import { getSession, getUserRoles, type SessionPayload } from './auth';
 import { prisma } from './prisma';
 import { matchesL1Scope } from './reviewer-scope';
 
@@ -9,8 +10,10 @@ export function attachmentViewKind(
   filename: string,
 ): AttachmentViewKind {
   const mt = (mimeType ?? '').toLowerCase();
+  const lower = filename.toLowerCase();
   if (mt.startsWith('image/')) return 'image';
-  if (mt === 'application/pdf' || filename.toLowerCase().endsWith('.pdf')) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(lower)) return 'image';
+  if (mt === 'application/pdf' || lower.endsWith('.pdf')) return 'pdf';
   return 'other';
 }
 
@@ -61,4 +64,29 @@ export async function canViewAttachment(
   }
 
   return false;
+}
+
+/**
+ * 审核端走 perf_session_admin，员工端走 perf_session。
+ * 若两个 cookie 同时存在（常见：先登录员工账号再登录审核员），
+ * 需逐个尝试，避免误用员工会话导致 403。
+ */
+export async function resolveAuthorizedAttachmentViewer(
+  att: NonNullable<Awaited<ReturnType<typeof loadAttachmentForView>>>,
+): Promise<SessionPayload | null> {
+  const candidates = [await getSession(true), await getSession(false)].filter(
+    (session): session is SessionPayload => session != null,
+  );
+  const seen = new Set<string>();
+
+  for (const session of candidates) {
+    if (seen.has(session.userId)) continue;
+    seen.add(session.userId);
+    const roles = await getUserRoles(session.userId);
+    if (await canViewAttachment(session.userId, roles, att)) {
+      return session;
+    }
+  }
+
+  return null;
 }

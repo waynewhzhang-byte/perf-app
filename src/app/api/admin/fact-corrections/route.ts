@@ -120,7 +120,9 @@ export async function GET(req: Request) {
       const facts = kind === 'BASIC'
         ? basicFacts.filter((fact) => fact.dimension === BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode])
         : performanceFacts.filter((fact) => sourceDimensionCodes(dimensionCode).includes(fact.dimensionCode));
-      return { item, kind, facts };
+      // 客户端 FactCorrectionPage 期望 item 为 FormItem（{ id, title, dimensionCode }），
+      // attachments / factCorrections 平铺在顶层；与 SubmissionItem 区分以避免结构错位。
+      return { item: item.item, kind, attachments: item.attachments, factCorrections: item.factCorrections, facts };
     }).filter((detail): detail is NonNullable<typeof detail> => detail !== null);
     return NextResponse.json({ success: true, employee: submission.user, year: submission.template.year, items: details });
   } catch (error) {

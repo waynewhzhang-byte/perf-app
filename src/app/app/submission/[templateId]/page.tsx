@@ -6,8 +6,32 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
 import { UPLOAD_ACCEPT } from '@/lib/upload-security';
 import { type HeaderFieldConfig, type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
-import { evaluationCutoffDate, levelFromHireDate } from '@/lib/declaration-level';
+import { evaluationCutoffDate, formatDeclarationLevelDisplay, levelFromHireDate } from '@/lib/declaration-level';
+import { calculateFullWorkYears } from '@/lib/pre-review';
+import { computeItemScore, parseDateOnly } from '@/lib/submission-score';
 import { isSystemConfirmationDimension } from '@/lib/system-filled-items';
+import { groupAppealCascadeItems, isAppealableDimensionCode } from '@/lib/appeal-cascade';
+import { SupportPhoneFooter } from '@/components/support-phone-footer';
+import { formatDerivationPreview, truncateDerivationPreview } from '@/lib/derivation-display';
+import { PERFORMANCE_SECTIONS, SCORING_STANDARDS } from '@/lib/scoring-standards';
+
+const FORM_2026_TITLE = '2026 年能级评价量化积分申报表';
+const FORM_2026_DESCRIPTION =
+  '国网山西超高压变电公司 2026 年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分。请逐项查看系统分值与计算过程；如有异议，请通过页面底部「申诉」提交理由与证明材料；对系统分值无异议请使用「确认报名」。';
+
+const SCORING_POINT_ORDER = new Map<string, number>(
+  SCORING_STANDARDS.map((standard, index) => [standard.code, index]),
+);
+
+/** 员工端展示用：评价维度 工作现场-两票执行（避免「一级/二级」与能级等级混淆） */
+function formatEvaluationDimensionLabel(
+  sectionTitle: string | null | undefined,
+  itemTitle: string,
+): string {
+  const section = (sectionTitle ?? '').trim() || '—';
+  const item = itemTitle.trim() || '—';
+  return `评价维度 ${section}-${item}`;
+}
 
 interface ScoreOpt { optionId?: string; label: string; score: number; description?: string }
 interface FormItem {
@@ -39,15 +63,16 @@ interface SubItem {
   attachments?: Attachment[];
   optionReviews?: OptionReview[];
 }
-
-// 计算单个申报项得分：COUNTED 模式按 单价×次数 汇总并封顶，TIERS 模式累加选中分值
-function computeItemScore(it: FormItem, sel: Selected[]): number {
-  if (it.scoreMode === 'COUNTED') {
-    const raw = sel.reduce((sum, s) => sum + s.score * (s.count ?? 0), 0);
-    const cap = it.maxScore == null ? Infinity : Number(it.maxScore);
-    return Math.min(raw, cap);
-  }
-  return sel.reduce((sum, s) => sum + s.score, 0);
+interface FactRecordResponse {
+  id: string;
+  recordKey: string;
+  recordType: string;
+  title: string;
+  roleLabel?: string;
+  score: number;
+  occurredAt?: string;
+  details: { label: string; value: string }[];
+  source: { file?: string; sheet?: string; rowNo?: number };
 }
 
 export default function SubmissionPage() {
@@ -73,6 +98,7 @@ export default function SubmissionPage() {
       sectionCode?: string | null;
       dimensionCode?: string;
       factKind?: 'basic' | 'performance' | 'profile';
+      ruleSummary?: string;
       totalScore: number;
       facts: {
         id: string;
@@ -87,16 +113,62 @@ export default function SubmissionPage() {
         thirdLevelTitle?: string;
         yearBreakdown?: unknown;
         sourceFile?: string | null;
+        record?: FactRecordResponse;
       }[];
+      derivation?: {
+        ruleType: string;
+        ruleSummary: string;
+        referenceFile?: string;
+        notes?: string;
+        rawFactFields: {
+          id: string;
+          label?: string;
+          score: number;
+          role?: string;
+          defectRef?: string;
+          defectLevel?: string;
+          eventDate?: string | null;
+          tierValue?: string;
+          thirdLevelTitle?: string;
+          metadata?: unknown;
+          sourceFile?: string | null;
+          record?: FactRecordResponse;
+        }[];
+        steps: { label: string; detail?: string; kind?: 'raw' | 'subtotal' | 'cap' | 'final' | 'note' }[];
+      };
     }[];
-    scoreSheet?: { declarationTier?: string | null };
+    scoreSheet?: {
+      totalScore?: number;
+      positiveScore?: number;
+      deductionScore?: number;
+      positiveMaxScore?: number;
+      declarationTier?: string | null;
+      sections?: { code: string; title: string; score: number; maxScore: number }[];
+    };
   } | null>(null);
   const [factsConfirmations, setFactsConfirmations] = useState<Record<string, 'CONFIRMED' | 'DISPUTED'>>({});
   const [factsDisputes, setFactsDisputes] = useState<Record<string, string>>({});
+  const [factsClaimedScores, setFactsClaimedScores] = useState<Record<string, number>>({});
   const [factsItemDbIds, setFactsItemDbIds] = useState<Record<string, string>>({});
   const [factsAttachments, setFactsAttachments] = useState<Record<string, Attachment[]>>({});
+  const [appealModalOpen, setAppealModalOpen] = useState(false);
+  const [editingAppealItemId, setEditingAppealItemId] = useState<string | null>(null);
+  const [modalSectionTitle, setModalSectionTitle] = useState('');
+  const [modalItemId, setModalItemId] = useState('');
+  const [modalReason, setModalReason] = useState('');
+  const [modalClaimedScore, setModalClaimedScore] = useState('');
+  const [modalPendingFiles, setModalPendingFiles] = useState<File[]>([]);
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const toggleExpand = (itemId: string) =>
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -146,7 +218,8 @@ export default function SubmissionPage() {
           : profileRes?.user?.branch?.id ?? '',
         hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
         declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
-        declarationSpecialtyId: existing?.declarationSpecialtyId ?? nextOptions.declarationSpecialties[0]?.id ?? '',
+        // 申报专业需员工本人选择，不默认第一项
+        declarationSpecialtyId: existing?.declarationSpecialtyId ?? '',
       });
 
       const map: Record<string, SubItem> = {};
@@ -169,6 +242,7 @@ export default function SubmissionPage() {
         // 从已有 submission item 恢复确认/申诉状态
         const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
         const disps: Record<string, string> = {};
+        const claimed: Record<string, number> = {};
         if (existing?.items) {
           const dbIds: Record<string, string> = {};
           const factAtts: Record<string, Attachment[]> = {};
@@ -176,6 +250,9 @@ export default function SubmissionPage() {
             if ((si as any).isSystemFilled && (si as any).confirmationStatus) {
               confs[si.itemId] = (si as any).confirmationStatus;
               if ((si as any).disputeReason) disps[si.itemId] = (si as any).disputeReason;
+              if ((si as any).disputeClaimedScore != null) {
+                claimed[si.itemId] = Number((si as any).disputeClaimedScore);
+              }
             }
             if ((si as any).isSystemFilled) {
               if (si.id) dbIds[si.itemId] = si.id;
@@ -187,6 +264,7 @@ export default function SubmissionPage() {
         }
         setFactsConfirmations(confs);
         setFactsDisputes(disps);
+        setFactsClaimedScores(claimed);
       }
       setLoading(false);
     })();
@@ -211,6 +289,99 @@ export default function SubmissionPage() {
     [factsData],
   );
 
+  const appealCentric = Boolean(factsData?.items?.length);
+  const is2026AppealView = tpl?.year === 2026 && appealCentric;
+
+  const profileFactItem = useMemo(
+    () => factsData?.items.find((fi) => fi.factKind === 'profile') ?? null,
+    [factsData],
+  );
+
+  const displayHireDate = useMemo(() => {
+    const fromProfile = profileFactItem?.facts[0]?.label;
+    if (fromProfile) return String(fromProfile).slice(0, 10);
+    return header.hireDate || '—';
+  }, [profileFactItem, header.hireDate]);
+
+  const participationWorkYears = useMemo(() => {
+    const hire = parseDateOnly(displayHireDate !== '—' ? displayHireDate : undefined)
+      ?? parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
+    return calculateFullWorkYears(hire, evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()));
+  }, [displayHireDate, header.hireDate, tpl?.year]);
+
+  const groupedFactSections = useMemo(() => {
+    if (!factsData?.items.length) return [];
+    const bySection = new Map<string, typeof factsData.items>();
+    for (const fi of factsData.items) {
+      if (fi.factKind === 'profile') continue;
+      const code = fi.sectionCode ?? 'other';
+      if (!bySection.has(code)) bySection.set(code, []);
+      bySection.get(code)!.push(fi);
+    }
+    const sheetSections = factsData.scoreSheet?.sections ?? [];
+    const order = PERFORMANCE_SECTIONS.map((section) => section.code);
+    return order
+      .filter((code) => bySection.has(code))
+      .map((code) => {
+        const sheet = sheetSections.find((section) => section.code === code);
+        const sectionDef = PERFORMANCE_SECTIONS.find((section) => section.code === code);
+        const items = [...bySection.get(code)!].sort((a, b) => {
+          const ai = SCORING_POINT_ORDER.get(a.dimensionCode ?? '') ?? 999;
+          const bi = SCORING_POINT_ORDER.get(b.dimensionCode ?? '') ?? 999;
+          return ai - bi;
+        });
+        return {
+          code,
+          title: sheet?.title ?? sectionDef?.title ?? items[0]?.sectionTitle ?? code,
+          score: sheet?.score ?? items.reduce((sum, fi) => sum + fi.totalScore, 0),
+          maxScore: sheet?.maxScore ?? sectionDef?.maxScore ?? 0,
+          excelOrder: sectionDef?.excelOrder ?? 99,
+          items,
+        };
+      });
+  }, [factsData]);
+
+  const appealCascadeGroups = useMemo(
+    () => groupAppealCascadeItems(
+      (factsData?.items ?? []).map((fi) => ({
+        itemId: fi.itemId,
+        itemTitle: fi.itemTitle,
+        sectionTitle: fi.sectionTitle ?? '系统导入',
+        sectionCode: fi.sectionCode,
+        dimensionCode: fi.dimensionCode,
+        totalScore: fi.totalScore,
+      })),
+    ),
+    [factsData],
+  );
+
+  const savedAppeals = useMemo(
+    () => (factsData?.items ?? []).filter((fi) => factsConfirmations[fi.itemId] === 'DISPUTED'),
+    [factsData, factsConfirmations],
+  );
+
+  const modalFactItem = useMemo(
+    () => (factsData?.items ?? []).find((fi) => fi.itemId === modalItemId) ?? null,
+    [factsData, modalItemId],
+  );
+
+  const availableAppealItems = useMemo(() => {
+    const appealed = new Set(
+      savedAppeals.map((fi) => fi.itemId).filter((id) => id !== editingAppealItemId),
+    );
+    return (factsData?.items ?? []).filter(
+      (fi) => isAppealableDimensionCode(fi.dimensionCode) && !appealed.has(fi.itemId),
+    );
+  }, [factsData, savedAppeals, editingAppealItemId]);
+
+  const modalSectionItems = useMemo(() => {
+    const pool = editingAppealItemId
+      ? (factsData?.items ?? []).filter((fi) => isAppealableDimensionCode(fi.dimensionCode))
+      : availableAppealItems;
+    return pool.filter((fi) => (fi.sectionTitle ?? '系统导入') === modalSectionTitle);
+  }, [factsData, availableAppealItems, editingAppealItemId, modalSectionTitle]);
+
   const factsScoreTotal = useMemo(
     () => factsData?.items.reduce((s, fi) => s + fi.totalScore, 0) ?? 0,
     [factsData],
@@ -220,30 +391,42 @@ export default function SubmissionPage() {
     () => factsScoreTotal + Object.values(answers).reduce((s, a) => {
       if (systemFilledItemIds.has(a.itemId)) return s;
       const it = itemById.get(a.itemId);
-      return s + (it ? computeItemScore(it, a.selected) : a.selected.reduce((x, y) => x + y.score, 0));
+      return s + (it
+        ? computeItemScore(
+          { scoreMode: it.scoreMode ?? 'TIERS', maxScore: it.maxScore ?? null },
+          a.selected,
+        )
+        : a.selected.reduce((x, y) => x + y.score, 0));
     }, 0),
     [answers, itemById, factsScoreTotal, systemFilledItemIds],
   );
 
   const workYears = useMemo(() => {
-    if (!header.hireDate) return null;
-    const hire = new Date(`${header.hireDate}T00:00:00`);
-    const cutoff = evaluationCutoffDate(tpl?.year ?? new Date().getFullYear());
-    let years = cutoff.getFullYear() - hire.getFullYear();
-    const beforeAnniversary =
-      cutoff.getMonth() < hire.getMonth() ||
-      (cutoff.getMonth() === hire.getMonth() && cutoff.getDate() < hire.getDate());
-    if (beforeAnniversary) years -= 1;
-    return Math.max(0, years);
+    const hire = parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
+    return calculateFullWorkYears(hire, evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()));
   }, [header.hireDate, tpl?.year]);
 
   const calculatedDeclarationLevel = useMemo(() => {
-    if (!header.hireDate) return null;
+    const hire = parseDateOnly(displayHireDate !== '—' ? displayHireDate : undefined)
+      ?? parseDateOnly(header.hireDate || undefined);
+    if (!hire) return null;
     return levelFromHireDate(
-      new Date(`${header.hireDate}T00:00:00`),
+      hire,
       evaluationCutoffDate(tpl?.year ?? new Date().getFullYear()),
     );
-  }, [header.hireDate, tpl?.year]);
+  }, [displayHireDate, header.hireDate, tpl?.year]);
+
+  const displayParticipationLevel = useMemo(() => {
+    const tier = factsData?.scoreSheet?.declarationTier ?? calculatedDeclarationLevel;
+    const label = formatDeclarationLevelDisplay(tier);
+    return label ? `能级评价${label}` : '—';
+  }, [factsData, calculatedDeclarationLevel]);
+
+  const displayCalculatedLevel = useMemo(
+    () => formatDeclarationLevelDisplay(calculatedDeclarationLevel) ?? '',
+    [calculatedDeclarationLevel],
+  );
 
   const isLocked = (itemId: string): boolean => {
     if (sub?.status !== 'REJECTED') return false;
@@ -255,7 +438,6 @@ export default function SubmissionPage() {
     const key = optionKey(itemId, option, index);
     return !!answers[itemId]?.optionReviews?.some((review) => review.optionId === key && review.status === 'L2_APPROVED');
   };
-  const isPreReviewRejected = sub?.status === 'PRE_REVIEW_REJECTED';
 
   const toggle = (it: FormItem, idx: number) => {
     if (isLocked(it.id) || isOptionLocked(it.id, it.scoreOptions[idx], idx)) return;
@@ -328,14 +510,240 @@ export default function SubmissionPage() {
     }
   };
 
-  const save = async (submit: boolean) => {
+  const buildItemsPayload = (override?: {
+    confirmations?: Record<string, 'CONFIRMED' | 'DISPUTED'>;
+    disputes?: Record<string, string>;
+    claimedScores?: Record<string, number>;
+  }) => {
+    const confs = override?.confirmations ?? factsConfirmations;
+    const disps = override?.disputes ?? factsDisputes;
+    const claimed = override?.claimedScores ?? factsClaimedScores;
+    return [
+      ...Object.values(answers).map((a) => ({
+        itemId: a.itemId,
+        selected: a.selected,
+        content: a.content,
+        declaredScore: a.declaredScore ?? undefined,
+      })),
+      ...(factsData?.items ?? []).map((fi) => ({
+        itemId: fi.itemId,
+        selected: fi.facts.map((f, index) => ({
+          index,
+          label: f.record?.title
+            ?? (`${f.defectLevel || f.role || ''} ${f.defectRef || f.label || ''}`.trim()
+              || fi.itemTitle),
+          score: f.score,
+        })),
+        isSystemFilled: true as const,
+        confirmationStatus: confs[fi.itemId] === 'DISPUTED' ? 'DISPUTED' as const : null,
+        disputeReason: disps[fi.itemId] ?? null,
+        disputeClaimedScore: claimed[fi.itemId] ?? null,
+      })),
+    ];
+  };
+
+  const refreshSubmissionFromServer = async (): Promise<Record<string, string>> => {
+    const subRes = await fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json());
+    const existing = subRes.submissions?.[0];
+    if (!existing) return {};
+    setSub({
+      id: existing.id,
+      status: existing.status,
+      preReviewMessages: Array.isArray(existing.preReviewMessages) ? existing.preReviewMessages : null,
+    });
+    const dbIds: Record<string, string> = {};
+    const factAtts: Record<string, Attachment[]> = {};
+    const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
+    const disps: Record<string, string> = {};
+    const claimed: Record<string, number> = {};
+    for (const si of existing.items ?? []) {
+      if (!(si as { isSystemFilled?: boolean }).isSystemFilled) continue;
+      if (si.id) dbIds[si.itemId] = si.id;
+      if (si.attachments?.length) factAtts[si.itemId] = si.attachments;
+      const conf = (si as { confirmationStatus?: 'CONFIRMED' | 'DISPUTED' }).confirmationStatus;
+      if (conf) confs[si.itemId] = conf;
+      const reason = (si as { disputeReason?: string }).disputeReason;
+      if (reason) disps[si.itemId] = reason;
+      const score = (si as { disputeClaimedScore?: string | number }).disputeClaimedScore;
+      if (score != null) claimed[si.itemId] = Number(score);
+    }
+    setFactsItemDbIds(dbIds);
+    setFactsAttachments(factAtts);
+    setFactsConfirmations(confs);
+    setFactsDisputes(disps);
+    setFactsClaimedScores(claimed);
+    return dbIds;
+  };
+
+  const persistDraft = async (opts?: {
+    submitMode?: 'APPEAL';
+    appeal?: {
+      confirmations?: Record<string, 'CONFIRMED' | 'DISPUTED'>;
+      disputes?: Record<string, string>;
+      claimedScores?: Record<string, number>;
+    };
+  }) => {
+    const confs = opts?.appeal?.confirmations ?? factsConfirmations;
+    const hasDisputed = Object.values(confs).some((s) => s === 'DISPUTED');
+    const r = await fetch('/api/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        templateId,
+        submit: false,
+        ...header,
+        ...(opts?.submitMode || (appealCentric && hasDisputed) ? { submitMode: opts?.submitMode ?? 'APPEAL' } : {}),
+        items: buildItemsPayload(opts?.appeal),
+      }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || `保存失败（${r.status}）`);
+    }
+    const dbIds = await refreshSubmissionFromServer();
+    return { dbIds, data: await r.json().catch(() => ({})) };
+  };
+
+  const closeAppealModal = () => {
+    setAppealModalOpen(false);
+    setEditingAppealItemId(null);
+    setModalSectionTitle('');
+    setModalItemId('');
+    setModalReason('');
+    setModalClaimedScore('');
+    setModalPendingFiles([]);
+  };
+
+  const openAppealModal = (itemId?: string) => {
+    if (itemId) {
+      const fi = factsData?.items.find((row) => row.itemId === itemId);
+      setEditingAppealItemId(itemId);
+      setModalSectionTitle(fi?.sectionTitle ?? '');
+      setModalItemId(itemId);
+      setModalReason(factsDisputes[itemId] ?? '');
+      setModalClaimedScore(
+        factsClaimedScores[itemId] != null
+          ? String(factsClaimedScores[itemId])
+          : fi != null
+            ? String(fi.totalScore)
+            : '',
+      );
+    } else {
+      setEditingAppealItemId(null);
+      const firstGroup = appealCascadeGroups[0];
+      const firstItem = availableAppealItems.find((fi) => fi.sectionTitle === firstGroup?.sectionTitle)
+        ?? availableAppealItems[0];
+      setModalSectionTitle(firstItem?.sectionTitle ?? firstGroup?.sectionTitle ?? '');
+      setModalItemId(firstItem?.itemId ?? '');
+      setModalReason('');
+      setModalClaimedScore(firstItem != null ? String(firstItem.totalScore) : '');
+    }
+    setModalPendingFiles([]);
+    setAppealModalOpen(true);
+  };
+
+  const saveAppealFromModal = async () => {
+    if (!modalItemId) {
+      alert('请选择申诉项');
+      return;
+    }
+    if (!modalReason.trim()) {
+      alert('请填写申诉说明');
+      return;
+    }
+    const claimed = Number(modalClaimedScore);
+    if (!Number.isFinite(claimed)) {
+      alert('请填写申诉分值（主张分）');
+      return;
+    }
+    const existingAttCount = factsAttachments[modalItemId]?.length ?? 0;
+    if (existingAttCount === 0 && modalPendingFiles.length === 0) {
+      alert('请上传申诉证明材料');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const nextAppeal = {
+        confirmations: { ...factsConfirmations, [modalItemId]: 'DISPUTED' as const },
+        disputes: { ...factsDisputes, [modalItemId]: modalReason.trim() },
+        claimedScores: { ...factsClaimedScores, [modalItemId]: claimed },
+      };
+
+      let dbIds = factsItemDbIds;
+      if (modalPendingFiles.length > 0) {
+        if (!dbIds[modalItemId]) {
+          const boot = await persistDraft();
+          dbIds = boot.dbIds;
+        }
+        const dbId = dbIds[modalItemId];
+        if (!dbId) throw new Error('申诉项尚未创建，请稍后重试');
+        const fd = new FormData();
+        fd.append('submissionItemId', dbId);
+        modalPendingFiles.forEach((f) => fd.append('files', f));
+        const uploadRes = await fetch('/api/attachments', { method: 'POST', body: fd });
+        if (!uploadRes.ok) throw new Error('附件上传失败');
+        const uploadData = await uploadRes.json();
+        const newAtts = uploadData.attachments ?? [];
+        setFactsAttachments((prev) => ({
+          ...prev,
+          [modalItemId]: [...(prev[modalItemId] ?? []), ...newAtts],
+        }));
+      }
+
+      setFactsConfirmations(nextAppeal.confirmations);
+      setFactsDisputes(nextAppeal.disputes);
+      setFactsClaimedScores(nextAppeal.claimedScores);
+
+      await persistDraft({ submitMode: 'APPEAL', appeal: nextAppeal });
+
+      closeAppealModal();
+      setSaveNotice('申诉已保存，尚未送审。请确认全部申诉项后点击「提交申诉审核」。');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '保存申诉失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteAppeal = async (itemId: string) => {
+    if (!confirm('确定删除该申诉？')) return;
+    const nextAppeal = {
+      confirmations: { ...factsConfirmations },
+      disputes: { ...factsDisputes },
+      claimedScores: { ...factsClaimedScores },
+    };
+    delete nextAppeal.confirmations[itemId];
+    delete nextAppeal.disputes[itemId];
+    delete nextAppeal.claimedScores[itemId];
+    setFactsConfirmations(nextAppeal.confirmations);
+    setFactsDisputes(nextAppeal.disputes);
+    setFactsClaimedScores(nextAppeal.claimedScores);
+    setFactsAttachments((prev) => {
+      const { [itemId]: _removed, ...next } = prev;
+      return next;
+    });
+    setBusy(true);
+    try {
+      const hasDisputed = Object.values(nextAppeal.confirmations).some((s) => s === 'DISPUTED');
+      await persistDraft(hasDisputed ? { submitMode: 'APPEAL', appeal: nextAppeal } : { appeal: nextAppeal });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '删除申诉失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async (submit: boolean, opts?: { submitMode?: 'AFFIRM' | 'APPEAL' }) => {
     if (!tpl) return;
     if (submit) {
       const missing: string[] = [];
       if (requireHeader('workArea') && !header.workAreaId) missing.push('工区');
       if (requireHeader('hireDate') && !header.hireDate) missing.push('入职时间');
       if (requireHeader('declarationLevel') && !header.declarationLevelId) missing.push('能级评价等级');
-      if (requireHeader('declarationSpecialty') && !header.declarationSpecialtyId) missing.push('能级评价专业');
+      if ((is2026AppealView || requireHeader('declarationSpecialty')) && !header.declarationSpecialtyId) {
+        missing.push('申报专业');
+      }
       tpl.sections.forEach((s) => s.items.forEach((it) => {
         if (isLocked(it.id) || systemFilledItemIds.has(it.id)) return;
         const a = answers[it.id];
@@ -350,27 +758,28 @@ export default function SubmissionPage() {
         else if (a.selected.length && it.requireAttachment && !(a.attachments?.length)) missing.push(`${it.title}（缺附件）`);
       }));
       if (missing.length) { alert('请补全：\n' + missing.join('\n')); return; }
-      const missingFactConfirm = (factsData?.items ?? []).filter(
-        (fi) => !factsConfirmations[fi.itemId],
-      );
-      if (missingFactConfirm.length > 0) {
-        alert('请对以下系统填充项选择「确认」或「申诉」：\n' + missingFactConfirm.map((fi) => fi.itemTitle).join('\n'));
-        return;
-      }
-      // 校验：申诉项必须填写原因
-      const missingDisputeReason = (factsData?.items ?? []).filter(
-        (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsDisputes[fi.itemId] ?? '').trim(),
-      );
-      if (missingDisputeReason.length > 0) {
-        alert('请为以下申诉项填写原因：\n' + missingDisputeReason.map((fi) => fi.itemTitle).join('\n'));
-        return;
-      }
-      const missingDisputeAtt = (factsData?.items ?? []).filter(
-        (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsAttachments[fi.itemId]?.length),
-      );
-      if (missingDisputeAtt.length > 0) {
-        alert('请为以下申诉项上传证明材料（需先保存草稿）：\n' + missingDisputeAtt.map((fi) => fi.itemTitle).join('\n'));
-        return;
+      if (!appealCentric) {
+        const missingFactConfirm = (factsData?.items ?? []).filter(
+          (fi) => !factsConfirmations[fi.itemId],
+        );
+        if (missingFactConfirm.length > 0) {
+          alert('请对以下系统填充项选择「确认」或「申诉」：\n' + missingFactConfirm.map((fi) => fi.itemTitle).join('\n'));
+          return;
+        }
+        const missingDisputeReason = (factsData?.items ?? []).filter(
+          (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsDisputes[fi.itemId] ?? '').trim(),
+        );
+        if (missingDisputeReason.length > 0) {
+          alert('请为以下申诉项填写原因：\n' + missingDisputeReason.map((fi) => fi.itemTitle).join('\n'));
+          return;
+        }
+        const missingDisputeAtt = (factsData?.items ?? []).filter(
+          (fi) => factsConfirmations[fi.itemId] === 'DISPUTED' && !(factsAttachments[fi.itemId]?.length),
+        );
+        if (missingDisputeAtt.length > 0) {
+          alert('请为以下申诉项上传证明材料（需先保存草稿）：\n' + missingDisputeAtt.map((fi) => fi.itemTitle).join('\n'));
+          return;
+        }
       }
     }
     setBusy(true);
@@ -379,28 +788,21 @@ export default function SubmissionPage() {
       body: JSON.stringify({
         templateId, submit,
         ...header,
-        items: [
-          ...Object.values(answers).map((a) => ({
-            itemId: a.itemId, selected: a.selected, content: a.content,
-            declaredScore: a.declaredScore ?? undefined,
-            confirmationStatus: (a as any).confirmationStatus,
-            disputeReason: (a as any).disputeReason,
-            isSystemFilled: (a as any).isSystemFilled ?? false,
-          })),
-          // 系统填充项：根据确认/申诉状态构建 payload
-          ...(factsData?.items ?? []).map((fi) => ({
-            itemId: fi.itemId,
-            selected: fi.facts.map((f, index) => ({ index, label: `${f.defectLevel || f.role} ${f.defectRef}`, score: f.score })),
-            isSystemFilled: true as any,
-            confirmationStatus: factsConfirmations[fi.itemId] || undefined,
-            disputeReason: factsDisputes[fi.itemId] || undefined,
-          })),
-        ],
+        ...(opts?.submitMode ? { submitMode: opts.submitMode } : {}),
+        items: buildItemsPayload(),
       }),
     });
     setBusy(false);
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert('保存失败：' + (e.error || r.status)); return; }
     const d = await r.json().catch(() => ({}));
+    if (submit && d.finalized) {
+      const suffix = d.preReviewMessages?.length
+        ? '\n自动预审提示：\n' + d.preReviewMessages.join('\n')
+        : '';
+      alert(`已确认无异议，年度绩效档案已生成。${suffix}`);
+      router.push('/app');
+      return;
+    }
     if (submit && d.preReviewWarnings) {
       alert('已提交一级审核。\n自动预审提示：\n' + (d.preReviewMessages ?? []).join('\n'));
       router.push('/app');
@@ -408,7 +810,17 @@ export default function SubmissionPage() {
     }
     if (submit) { alert('已提交，等待审核'); router.push('/app'); return; }
     alert('草稿已保存');
-    location.reload();
+    await refreshSubmissionFromServer();
+  };
+
+  const submitAppealCentric = (mode: 'AFFIRM' | 'APPEAL') => {
+    if (mode === 'AFFIRM' && savedAppeals.length > 0) return;
+    if (mode === 'APPEAL' && savedAppeals.length === 0) return;
+    const message = mode === 'AFFIRM'
+      ? '确认对系统得分无异议并报名？确认后将直接生成年度绩效档案，不可再修改或申诉。'
+      : '确认提交审核？仅已保存的申诉项将进入一级审核队列。';
+    if (!confirm(message)) return;
+    void save(true, { submitMode: mode });
   };
 
   if (loading) return (
@@ -432,11 +844,155 @@ export default function SubmissionPage() {
     </main>
   );
 
-  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED' || sub.status === 'PRE_REVIEW_REJECTED';
-  const itemEditable = editable && !isPreReviewRejected;
+  const editable = !sub?.status || sub.status === 'DRAFT' || sub.status === 'REJECTED';
+  const itemEditable = editable;
   const statusMap: Record<string, string> = {
     SUBMITTED: '待审核', L1_APPROVED: '一审通过', L2_APPROVED: '终审通过',
-    PRE_REVIEW_REJECTED: '自动预审未通过',
+  };
+
+  type FactItem = NonNullable<typeof factsData>['items'][number];
+  type FactRecord = NonNullable<FactItem['facts'][number]['record']>;
+
+  const formatFactScore = (score: number) =>
+    Number.isInteger(score * 10) ? score.toFixed(1) : score.toFixed(2);
+
+  const renderFactRecord = (record: FactRecord) => {
+    const sourceLocation = [
+      record.source.file,
+      record.source.sheet ? `工作表：${record.source.sheet}` : '',
+      record.source.rowNo ? `第 ${record.source.rowNo} 行` : '',
+    ].filter(Boolean).join(' · ');
+    return (
+      <div className="min-w-0">
+        <p className="font-medium text-slate-700">{record.title}</p>
+        {(record.roleLabel || record.occurredAt) && (
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {[record.roleLabel, record.occurredAt?.slice(0, 10)].filter(Boolean).join(' · ')}
+          </p>
+        )}
+        {record.details.length > 0 && (
+          <dl className="mt-1 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+            {record.details.map((detail, index) => (
+              <div key={`${detail.label}-${index}`} className="flex min-w-0 gap-1 text-[11px]">
+                <dt className="shrink-0 text-slate-400">{detail.label}：</dt>
+                <dd className="break-words text-slate-600">{detail.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {sourceLocation && (
+          <p className="mt-1 text-[10px] text-slate-400">来源：{sourceLocation}</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderDerivationCell = (fi: FactItem) => {
+    if (fi.factKind === 'profile' || !fi.derivation) {
+      return <span className="text-slate-400">—</span>;
+    }
+    const preview = truncateDerivationPreview(formatDerivationPreview(fi.derivation));
+    const expanded = expandedItems.has(fi.itemId);
+    return (
+      <div className="min-w-0">
+        <p className="break-words text-slate-600">{preview}</p>
+        <button
+          type="button"
+          onClick={() => toggleExpand(fi.itemId)}
+          className="mt-1 text-xs font-medium text-primary-600 transition-colors hover:text-primary-700"
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
+        {expanded && (
+          <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            {fi.derivation.steps.filter((s) => s.kind === 'note').map((s, i) => (
+              <p key={`note-${i}`} className="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-800">
+                ⚠ {s.label}
+              </p>
+            ))}
+            <div>
+              <p className="text-xs font-semibold text-slate-600">原始台账明细</p>
+              <div className="mt-1 space-y-0.5">
+                {fi.derivation.rawFactFields.length === 0 ? (
+                  <p className="text-xs text-slate-400">暂无导入事实</p>
+                ) : (
+                  fi.derivation.rawFactFields.map((rf) => (
+                    <div key={rf.id} className="border-b border-slate-200 py-2 last:border-b-0">
+                      {rf.record ? renderFactRecord(rf.record) : (
+                        <p className="text-xs text-slate-500">
+                          {rf.thirdLevelTitle && <span className="font-medium">{rf.thirdLevelTitle}</span>}
+                          {rf.defectLevel && ` · ${rf.defectLevel}`}
+                          {rf.defectRef && ` · ${rf.defectRef}`}
+                          {rf.role && ` · ${rf.role}`}
+                          {rf.tierValue && ` · 档位 ${rf.tierValue}`}
+                          {rf.eventDate && ` · ${String(rf.eventDate).slice(0, 10)}`}
+                          {' → '}<b>{rf.score} 分</b>
+                          {rf.sourceFile && <span className="text-slate-400"> · 来源：{rf.sourceFile}</span>}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="border-t border-slate-200 pt-2">
+              <p className="text-xs font-semibold text-slate-600">计分规则</p>
+              <p className="mt-0.5 text-xs text-slate-500">{fi.derivation.ruleSummary}</p>
+              {fi.derivation.referenceFile && (
+                <p className="mt-0.5 text-xs text-slate-400">参考台账：{fi.derivation.referenceFile}</p>
+              )}
+              {fi.derivation.notes && (
+                <p className="mt-0.5 text-xs text-amber-700">备注：{fi.derivation.notes}</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-2">
+              <p className="text-xs font-semibold text-slate-600">积分过程</p>
+              <ol className="mt-1 space-y-1">
+                {fi.derivation.steps.filter((s) => s.kind !== 'note').map((s, i) => (
+                  <li key={i} className={`flex items-start gap-2 text-xs ${
+                    s.kind === 'final' ? 'font-semibold text-emerald-700' :
+                    s.kind === 'cap' ? 'text-slate-600' :
+                    s.kind === 'subtotal' ? 'text-slate-600' :
+                    'text-slate-500'
+                  }`}>
+                    <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-medium text-slate-600">
+                      {i + 1}
+                    </span>
+                    <span>
+                      {s.label}
+                      {s.detail && <span className="ml-1 text-slate-400">（{s.detail}）</span>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderLeafCriterion = (fi: FactItem, fact?: FactItem['facts'][number]) => {
+    if (!fact) return fi.ruleSummary ?? fi.itemTitle;
+    if (fact.record) return renderFactRecord(fact.record);
+    if (fi.factKind === 'basic') {
+      const tier = fact.tierValue ? `档位 ${fact.tierValue}` : '';
+      return [fact.thirdLevelTitle ?? fact.label ?? fi.itemTitle, tier].filter(Boolean).join(' · ');
+    }
+    if (fi.factKind === 'profile') {
+      return fact.thirdLevelTitle ?? '参加工作时间';
+    }
+    const parts = [
+      fact.thirdLevelTitle ?? fact.label,
+      fact.defectLevel,
+      fact.role === 'FIRST_DISCOVERER' ? '第一发现人'
+        : fact.role === 'CO_DISCOVERER' ? '共同发现人'
+          : fact.role === 'FIRST_HANDLER' ? '第一处理人'
+            : fact.role === 'CO_HANDLER' ? '共同处理人'
+              : fact.role,
+      fact.defectRef,
+    ].filter(Boolean);
+    return parts.join(' · ') || fi.itemTitle;
   };
 
   return (
@@ -446,8 +1002,22 @@ export default function SubmissionPage() {
           <Link href="/app" className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-700 cursor-pointer">
             ← 返回
           </Link>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight">{tpl.title}</h1>
-          <p className="mt-1 text-sm text-slate-500">{tpl.description}</p>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight">
+            {tpl.year === 2026 ? FORM_2026_TITLE : tpl.title}
+          </h1>
+          {tpl.year === 2026 ? (
+            <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-relaxed text-blue-900">
+              {FORM_2026_DESCRIPTION}
+            </div>
+          ) : tpl.description ? (
+            <p className="mt-1 text-sm text-slate-500">{tpl.description}</p>
+          ) : null}
+          <Link
+            href="/app/scoring-guide"
+            className="mt-2 inline-block text-sm font-medium text-primary-600 transition-colors hover:text-primary-700"
+          >
+            查看 2026 评分规则说明 →
+          </Link>
         </div>
         <LogoutButton />
       </div>
@@ -461,14 +1031,9 @@ export default function SubmissionPage() {
         </div>
       )}
 
-      {isPreReviewRejected && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <p className="font-medium">自动预审未通过，请修改固定表头后重新提交。</p>
-          {(sub?.preReviewMessages ?? []).length > 0 && (
-            <ul className="mt-1 list-inside list-disc text-xs">
-              {sub!.preReviewMessages!.map((msg, idx) => <li key={`${msg}-${idx}`}>{msg}</li>)}
-            </ul>
-          )}
+      {saveNotice && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          {saveNotice}
         </div>
       )}
 
@@ -483,12 +1048,91 @@ export default function SubmissionPage() {
           <span className="text-sm font-medium text-slate-500">累计分数</span>
           <span className="text-2xl font-bold tracking-tight tabular-nums">{total.toFixed(1)}</span>
         </div>
+        {factsData?.scoreSheet?.sections && factsData.scoreSheet.sections.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+            {factsData.scoreSheet.sections
+              .filter((section) => section.code !== 'special')
+              .map((section) => (
+                <span key={section.code} className="rounded-full bg-slate-100 px-2.5 py-0.5 tabular-nums text-slate-600">
+                  {section.title} {section.score.toFixed(1)}/{section.maxScore}
+                </span>
+              ))}
+            {(factsData.scoreSheet.deductionScore ?? 0) > 0 && (
+              <span className="rounded-full bg-red-50 px-2.5 py-0.5 tabular-nums text-red-700">
+                扣分 −{factsData.scoreSheet.deductionScore!.toFixed(1)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {headerFields.filter((f) => f.enabled).length > 0 && (
+      {is2026AppealView && (
+        <section className="mt-5 rounded-xl border border-primary-200 bg-primary-50/40 p-5">
+          <h2 className="font-semibold text-slate-900">申报专业与参评能级</h2>
+          <p className="mt-1 text-xs text-slate-600">
+            请先选择本人申报专业；参加工作时间由员工花名册导入（只读）。系统按年度评价截止日（当年 7 月 31 日）自动计算工龄与能级评价等级。
+          </p>
+          <label className="mt-4 block text-sm">
+            <span className="font-medium text-slate-700">
+              申报专业
+              <span className="ml-1 text-red-500">*</span>
+            </span>
+            <select
+              value={header.declarationSpecialtyId}
+              disabled={!editable || options.declarationSpecialties.length === 0}
+              onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50 sm:max-w-md"
+            >
+              <option value="">请选择申报专业</option>
+              {options.declarationSpecialties.map((sp) => (
+                <option key={sp.id} value={sp.id}>{sp.name}</option>
+              ))}
+            </select>
+            {options.declarationSpecialties.length === 0 && (
+              <p className="mt-1 text-xs text-amber-700">尚未配置申报专业，请联系管理员在组织架构中维护。</p>
+            )}
+          </label>
+          <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
+              <dt className="text-xs font-medium text-slate-500">参加工作时间</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">{displayHireDate}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
+              <dt className="text-xs font-medium text-slate-500">工作年限（整年）</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">
+                {participationWorkYears != null ? `${participationWorkYears} 年` : '—'}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 sm:col-span-1">
+              <dt className="text-xs font-medium text-emerald-800">自动计算的能级评价等级</dt>
+              <dd className="mt-1 text-lg font-bold tabular-nums text-emerald-900">
+                {displayParticipationLevel}
+              </dd>
+              <p className="mt-1 text-[11px] text-emerald-700/80">由参加工作时间自动得出，不可手工修改</p>
+            </div>
+          </dl>
+        </section>
+      )}
+
+      {!is2026AppealView && headerFields.filter((f) => f.enabled).length > 0 && (
         <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="font-semibold">能级评价申报信息</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {showHeader('declarationSpecialty') && (
+              <label className="text-sm sm:col-span-2">
+                <span className="font-medium text-slate-600">
+                  申报专业
+                  {requireHeader('declarationSpecialty') && <span className="ml-1 text-red-500">*</span>}
+                </span>
+                <select value={header.declarationSpecialtyId}
+                  disabled={!editable || options.declarationSpecialties.length === 0}
+                  onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
+                  <option value="">请选择申报专业</option>
+                  {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+                </select>
+              </label>
+            )}
             {showHeader('workArea') && (
               <label className="text-sm">
                 <span className="font-medium text-slate-600">
@@ -508,7 +1152,7 @@ export default function SubmissionPage() {
               <>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">
-                    入职时间
+                    参加工作时间
                     {requireHeader('hireDate') && <span className="ml-1 text-red-500">*</span>}
                   </span>
                   <input type="date" value={header.hireDate}
@@ -519,15 +1163,15 @@ export default function SubmissionPage() {
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">工作年限（年）</span>
                   <input type="text" value={workYears ?? ''} readOnly
-                    placeholder="填写入职时间后自动计算"
+                    placeholder="填写参加工作时间后自动计算"
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600" />
                 </label>
                 <label className="text-sm">
                   <span className="font-medium text-slate-600">自动计算的能级评价等级</span>
-                  <input type="text" value={calculatedDeclarationLevel ?? ''} readOnly
-                    placeholder="填写入职时间后自动计算"
+                  <input type="text" value={displayCalculatedLevel} readOnly
+                    placeholder="填写参加工作时间后自动计算"
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm font-medium text-slate-700" />
-                  <p className="mt-0.5 text-xs text-slate-400">系统按入职时间自动计算，不能手工选择。</p>
+                  <p className="mt-0.5 text-xs text-slate-400">系统按参加工作时间自动计算（展示为 1/2/3 级），不能手工选择。</p>
                 </label>
               </>
             )}
@@ -546,155 +1190,167 @@ export default function SubmissionPage() {
                 </select>
               </label>
             )}
-            {showHeader('declarationSpecialty') && (
-              <label className="text-sm sm:col-span-2">
-                <span className="font-medium text-slate-600">
-                  能级评价专业
-                  {requireHeader('declarationSpecialty') && <span className="ml-1 text-red-500">*</span>}
-                </span>
-                <select value={header.declarationSpecialtyId}
-                  disabled={!editable || options.declarationSpecialties.length === 0}
-                  onChange={(e) => setHeader((h) => ({ ...h, declarationSpecialtyId: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-slate-50">
-                  {options.declarationSpecialties.length === 0 && <option value="">请先配置专业</option>}
-                  {options.declarationSpecialties.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
-                </select>
-              </label>
-            )}
           </div>
         </section>
       )}
 
-      {/* 系统自动填充项 */}
-      {factsData && factsData.items.length > 0 && (
-        <div className="mt-5 space-y-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-700">部门导入事实 · 系统自动计分</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              以下维度由外部台账导入，系统已按《评分标准 对应表》计算得分。请逐项「确认」或「申诉」；确认后锁定且无需审核员重复审核该项内容。
-            </p>
-          </div>
-          {factsData.items.map((fi) => {
-            const confirmed = factsConfirmations[fi.itemId] === 'CONFIRMED';
-            const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
-            return (
-              <section key={fi.itemId} className={`rounded-xl border p-5 ${
-                confirmed ? 'border-emerald-200 bg-emerald-50' :
-                disputed ? 'border-amber-200 bg-amber-50' :
-                'border-slate-200 bg-white'
-              }`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-sm">{fi.itemTitle}</p>
-                    <p className="mt-0.5 text-xs font-medium text-slate-600">
-                      一级：{fi.sectionTitle ?? '系统导入基础信息'} · 二级：{fi.itemTitle}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      系统计算得分：<b className="text-emerald-700">{fi.totalScore.toFixed(1)} 分</b>
-                      {fi.factKind === 'profile' && factsData.scoreSheet?.declarationTier && (
-                        <> · 自动参评能级：<b className="text-emerald-700">{factsData.scoreSheet.declarationTier}</b></>
-                      )}
-                    </p>
-                    <div className="mt-2 space-y-1">
-                      {fi.facts.length === 0 && (
-                        <p className="text-xs text-amber-700">三级事实：暂无系统导入事实（当前按 0 分计入，可提交申诉补正）</p>
-                      )}
-                      {fi.facts.map((f) => (
-                        <p key={f.id} className="text-xs text-slate-500">
-                          {fi.factKind === 'basic' ? (
-                            <>
-                              <span className="font-medium">三级：{f.thirdLevelTitle ?? f.label ?? '基本素质'}</span>
-                              {' · 档位 '}{f.tierValue}
-                              {' → '}<b>{f.score} 分</b>
-                            </>
-                          ) : fi.factKind === 'profile' ? (
-                            <>
-                              <span className="font-medium">三级：{f.thirdLevelTitle ?? '参加工作时间'}</span>
-                              {' · '}{f.label ?? '暂无导入时间'}
-                              {f.sourceFile && <span className="text-slate-400"> · 来源：{f.sourceFile}</span>}
-                            </>
-                          ) : (
-                            <>
-                              <span className="font-medium">三级：{f.thirdLevelTitle ?? f.label ?? '导入事实'}</span>
-                              {f.label && <>{' · '}{f.label}</>}
-                              {f.defectLevel && <span className="font-medium">{f.defectLevel}</span>}
-                              {f.role && (
-                                <>
-                                  {' · '}{f.role === 'FIRST_DISCOVERER' ? '第一发现人' : f.role === 'CO_DISCOVERER' ? '共同发现人' : f.role === 'FIRST_HANDLER' ? '第一处理人' : '共同处理人'}
-                                </>
-                              )}
-                              {f.defectRef && <> {' · '}{f.defectRef}</>}
-                              {f.eventDate && ` · ${String(f.eventDate).slice(0, 10)}`}
-                              {' → '}<b>{f.score} 分</b>
-                              {f.sourceFile && <span className="text-slate-400"> · 来源：{f.sourceFile}</span>}
-                            </>
-                          )}
-                        </p>
-                      ))}
-                    </div>
+      {/* 系统自动填充项：评价维度 → 评分项 → 基础事实与计算过程 */}
+      {appealCentric && groupedFactSections.length > 0 && (
+        <div className="mt-5 space-y-5">
+          <p className="text-xs text-slate-500">
+            按量化积分表层级展示：评价维度 → 评分项 → 完整基础事实与计算过程。
+          </p>
+          {groupedFactSections.map((section) => (
+            <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-100/90 px-5 py-3.5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                      评价维度
+                    </span>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      {section.excelOrder}. {section.title}
+                    </h2>
                   </div>
-                  {!confirmed && !disputed && (
-                    <div className="flex shrink-0 gap-2">
-                      <button type="button"
-                        onClick={() => setFactsConfirmations((p) => ({ ...p, [fi.itemId]: 'CONFIRMED' }))}
-                        className="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 cursor-pointer">
-                        确认
-                      </button>
-                      <button type="button"
-                        onClick={() => setFactsConfirmations((p) => ({ ...p, [fi.itemId]: 'DISPUTED' }))}
-                        className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 cursor-pointer">
-                        申诉
-                      </button>
-                    </div>
-                  )}
-                  {confirmed && (
-                    <span className="shrink-0 rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">
-                      已确认（锁定）
-                    </span>
-                  )}
-                  {disputed && (
-                    <span className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
-                      申诉中
-                    </span>
-                  )}
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    下含 {section.items.length} 个评分项
+                  </p>
                 </div>
-                {disputed && (
-                  <div className="mt-3 space-y-3">
-                    <textarea
-                      value={factsDisputes[fi.itemId] ?? ''}
-                      onChange={(e) => setFactsDisputes((p) => ({ ...p, [fi.itemId]: e.target.value }))}
-                      placeholder="请说明申诉原因（必填，审核员可见）"
-                      rows={3}
-                      disabled={!itemEditable}
-                      className="w-full rounded-lg border border-amber-300 px-3 py-2 text-xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 disabled:bg-slate-50" />
-                    <div>
-                      <p className="text-xs font-semibold text-amber-800">申诉证明材料（提交前必传）</p>
-                      <ul className="mt-1 space-y-0.5">
-                        {(factsAttachments[fi.itemId] ?? []).map((at) => (
-                          <li key={at.id} className="text-xs text-slate-600">{at.filename}</li>
-                        ))}
-                        {!(factsAttachments[fi.itemId]?.length) && (
-                          <li className="text-xs text-slate-400">尚未上传</li>
-                        )}
-                      </ul>
-                      {itemEditable && (
-                        <input
-                          type="file"
-                          multiple
-                          accept={UPLOAD_ACCEPT}
-                          onChange={(e) => upload(fi.itemId, e.target.files, { isFact: true })}
-                          className="mt-2 block text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-100 file:px-3 file:py-1 file:text-xs cursor-pointer"
-                        />
-                      )}
+                <div className="shrink-0 text-right">
+                  <p className="text-[10px] font-medium tracking-wide text-slate-500">维度得分</p>
+                  <p className="text-sm font-bold tabular-nums text-slate-900">
+                    {section.score.toFixed(1)}
+                    {section.maxScore > 0 && (
+                      <span className="font-normal text-slate-500"> / {section.maxScore}</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 bg-slate-50/60 p-3 sm:p-4">
+                {section.items.map((fi) => {
+                  const disputed = factsConfirmations[fi.itemId] === 'DISPUTED';
+                  const leafRows = fi.facts.length > 0
+                    ? fi.facts
+                    : [{ id: `${fi.itemId}-empty`, score: fi.totalScore }];
+                  const standard = fi.dimensionCode
+                    ? SCORING_STANDARDS.find((row) => row.code === fi.dimensionCode)
+                    : undefined;
+                  return (
+                    <div
+                      key={fi.itemId}
+                      className={`rounded-lg border bg-white ${
+                        disputed ? 'border-amber-300 shadow-sm shadow-amber-100' : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded bg-primary-700 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                              评分项
+                            </span>
+                            <h3 className="text-sm font-semibold text-slate-800">{fi.itemTitle}</h3>
+                            {disputed && (
+                              <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                申诉中
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            {formatEvaluationDimensionLabel(section.title, fi.itemTitle)}
+                            {standard?.maxScore != null && standard.maxScore > 0 && (
+                              <>
+                                <span className="mx-1 text-slate-300">·</span>
+                                满分 {standard.maxScore}
+                              </>
+                            )}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-[10px] font-medium text-slate-500">评分项得分</p>
+                          <p className={`text-sm font-bold tabular-nums ${disputed ? 'text-amber-700' : 'text-emerald-700'}`}>
+                            {fi.totalScore.toFixed(1)} 分
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="px-4 py-3">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="text-[11px] font-medium text-slate-600">基础事实与计算过程</span>
+                        </div>
+                        <div className="overflow-x-auto rounded-md border border-slate-100">
+                          <table className="w-full min-w-[28rem] text-left text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 text-slate-500">
+                                <th className="px-3 py-2 font-medium">事实记录</th>
+                                <th className="w-16 px-3 py-2 font-medium">得分</th>
+                                <th className="px-3 py-2 font-medium">计算过程</th>
+                              </tr>
+                            </thead>
+                            <tbody className="text-slate-600">
+                              {leafRows.map((fact, index) => (
+                                <tr key={fact.id} className="border-t border-slate-100 align-top">
+                                  <td className="px-3 py-2">
+                                    {fi.facts.length === 0 && index === 0 ? (
+                                      <span className="text-amber-700">暂无部门台账导入记录（当前按 0 分计入）</span>
+                                    ) : (
+                                      renderLeafCriterion(fi, fi.facts.length > 0 ? fact : undefined)
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2 font-medium tabular-nums">{formatFactScore(Number(fact.score))}</td>
+                                  <td className="px-3 py-2">{index === 0 ? renderDerivationCell(fi) : null}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </section>
-            );
-          })}
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       )}
 
+      {appealCentric && savedAppeals.length > 0 && itemEditable && (
+        <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50/60 p-5">
+          <h2 className="text-sm font-semibold text-amber-900">已保存的申诉（{savedAppeals.length}）</h2>
+          <ul className="mt-3 space-y-2">
+            {savedAppeals.map((fi) => (
+              <li key={fi.itemId} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-800">{fi.itemTitle}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {formatEvaluationDimensionLabel(fi.sectionTitle, fi.itemTitle)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    系统分 {fi.totalScore.toFixed(1)} → 主张分 {factsClaimedScores[fi.itemId]?.toFixed(1) ?? '—'}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-xs text-slate-600">{factsDisputes[fi.itemId]}</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openAppealModal(fi.itemId)}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteAppeal(fi.itemId)}
+                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 cursor-pointer"
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <div className="mt-5 space-y-6">
         {tpl.sections.map((sec) => {
           const manualItems = sec.items.filter((it) => !systemFilledItemIds.has(it.id));
@@ -787,7 +1443,10 @@ export default function SubmissionPage() {
                         <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
                           <span>本项得分</span>
                           <span className="text-sm font-bold tabular-nums text-slate-900">
-                            {computeItemScore(it, a?.selected ?? []).toFixed(1)} 分
+                            {computeItemScore(
+                              { scoreMode: it.scoreMode ?? 'TIERS', maxScore: it.maxScore ?? null },
+                              a?.selected ?? [],
+                            ).toFixed(1)} 分
                           </span>
                           <span>（上限 {it.maxScore ?? 0} 分）</span>
                         </div>
@@ -874,24 +1533,195 @@ export default function SubmissionPage() {
 
       {editable && (
         <div className="sticky bottom-0 -mx-4 mt-6 border-t border-slate-200 bg-white px-4 py-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={() => save(false)}
-              disabled={busy}
-              className="rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-            >
-              {busy ? '保存中…' : '保存草稿'}
-            </button>
-            <button
-              onClick={() => save(true)}
-              disabled={busy}
-              className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-            >
-              {busy ? '提交中…' : '提交审核'}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              {appealCentric && itemEditable && (
+                <button
+                  type="button"
+                  onClick={() => openAppealModal()}
+                  disabled={busy || availableAppealItems.length === 0}
+                  className="rounded-lg border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                >
+                  申诉
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => save(false)}
+                disabled={busy}
+                className="rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+              >
+                {busy ? '保存中…' : '保存草稿'}
+              </button>
+              {appealCentric ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => submitAppealCentric('AFFIRM')}
+                    disabled={busy || savedAppeals.length > 0}
+                    title={savedAppeals.length > 0 ? '存在已保存申诉时不可确认报名' : undefined}
+                    className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    {busy ? '提交中…' : '确认报名'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => submitAppealCentric('APPEAL')}
+                    disabled={busy || savedAppeals.length === 0}
+                    title={savedAppeals.length === 0 ? '请先保存至少一项申诉' : undefined}
+                    className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    {busy ? '提交中…' : '提交审核'}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => save(true)}
+                  disabled={busy}
+                  className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                >
+                  {busy ? '提交中…' : '提交审核'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {appealModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="appeal-modal-title"
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h2 id="appeal-modal-title" className="text-lg font-semibold">
+                {editingAppealItemId ? '编辑申诉' : '新增申诉'}
+              </h2>
+              <button
+                type="button"
+                onClick={closeAppealModal}
+                className="rounded-lg px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-4 space-y-4">
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">评价维度</span>
+                <select
+                  value={modalSectionTitle}
+                  disabled={!!editingAppealItemId}
+                  onChange={(e) => {
+                    const sectionTitle = e.target.value;
+                    setModalSectionTitle(sectionTitle);
+                    const pool = editingAppealItemId
+                      ? (factsData?.items ?? []).filter((fi) => isAppealableDimensionCode(fi.dimensionCode))
+                      : availableAppealItems;
+                    const first = pool.find((fi) => (fi.sectionTitle ?? '系统导入') === sectionTitle);
+                    setModalItemId(first?.itemId ?? '');
+                    setModalClaimedScore(first != null ? String(first.totalScore) : '');
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
+                >
+                  {appealCascadeGroups.map((g) => (
+                    <option key={g.sectionTitle} value={g.sectionTitle}>{g.sectionTitle}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">评分项</span>
+                <select
+                  value={modalItemId}
+                  disabled={!!editingAppealItemId}
+                  onChange={(e) => {
+                    const itemId = e.target.value;
+                    setModalItemId(itemId);
+                    const fi = factsData?.items.find((row) => row.itemId === itemId);
+                    if (fi) setModalClaimedScore(String(fi.totalScore));
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
+                >
+                  {modalSectionItems.map((fi) => (
+                    <option key={fi.itemId} value={fi.itemId}>{fi.itemTitle}</option>
+                  ))}
+                </select>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  先选评价维度（如工作现场），再选其下评分项（如两票执行）；共 11 项，参加工作时间不可申诉。
+                </p>
+              </label>
+              {modalFactItem && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                  <p className="text-slate-600">系统得分（只读）</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-700">
+                    {modalFactItem.totalScore.toFixed(1)} 分
+                  </p>
+                </div>
+              )}
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">申诉分值（主张分）</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={modalClaimedScore}
+                  onChange={(e) => setModalClaimedScore(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">申诉说明</span>
+                <textarea
+                  value={modalReason}
+                  onChange={(e) => setModalReason(e.target.value)}
+                  rows={4}
+                  placeholder="请说明申诉理由（审核员可见）"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <div>
+                <p className="text-sm font-medium text-slate-700">证明材料</p>
+                <ul className="mt-1 space-y-0.5">
+                  {(factsAttachments[modalItemId] ?? []).map((at) => (
+                    <li key={at.id} className="text-xs text-slate-600">{at.filename}</li>
+                  ))}
+                </ul>
+                <input
+                  type="file"
+                  multiple
+                  accept={UPLOAD_ACCEPT}
+                  onChange={(e) => setModalPendingFiles(e.target.files ? Array.from(e.target.files) : [])}
+                  className="mt-2 block w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-100 file:px-3 file:py-1 file:text-xs cursor-pointer"
+                />
+                {modalPendingFiles.length > 0 && (
+                  <p className="mt-1 text-xs text-slate-500">待上传 {modalPendingFiles.length} 个文件</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeAppealModal}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={saveAppealFromModal}
+                disabled={busy}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
+              >
+                {busy ? '保存中…' : '保存申诉'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SupportPhoneFooter className="mt-8 pb-4" />
     </main>
   );
 }

@@ -1,5 +1,7 @@
 /** 申报项计分与章节聚合（与模板预览、归档雷达图共用） */
 
+import { round1, round4 } from '@/lib/rounding';
+
 export type ScoreMode = 'TIERS' | 'COUNTED';
 
 export interface ScoreOptionLike {
@@ -104,12 +106,4 @@ export function computeSectionScores(
       gap: round1(gap),
     };
   });
-}
-
-function round1(n: number) {
-  return Math.round(n * 10) / 10;
-}
-
-function round4(n: number) {
-  return Math.round(n * 10000) / 10000;
 }

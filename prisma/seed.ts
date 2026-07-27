@@ -1,5 +1,6 @@
 import { PrismaClient, AppRole, TemplateStatus, NotifyChannel } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { DECLARATION_SPECIALTY_NAMES } from '../src/lib/declaration-specialties';
 
 const prisma = new PrismaClient();
 
@@ -38,6 +39,7 @@ async function main() {
   await prisma.verifyCode.deleteMany();
   await prisma.notifyConfig.deleteMany();
   await prisma.authConfig.deleteMany();
+  await prisma.appConfig.deleteMany();
   console.log('✅ 清理完成\n');
 
   // ============================================================
@@ -60,6 +62,17 @@ async function main() {
       loginRequiresVerification: false,
       resetRequiresVerification: false,
       enforceStrongPassword: false,        // 开发测试环境允许简单密码
+      updatedBy: 'seed',
+    },
+  });
+
+  const { DEFAULT_DECLARATION_NOTICE_TEXT, DEFAULT_NOTICE_SECONDS } = await import('../src/lib/app-config');
+  await prisma.appConfig.create({
+    data: {
+      id: 1,
+      supportPhone: '0351-1234567',
+      noticeText: DEFAULT_DECLARATION_NOTICE_TEXT,
+      noticeSeconds: DEFAULT_NOTICE_SECONDS,
       updatedBy: 'seed',
     },
   });
@@ -191,11 +204,10 @@ async function main() {
   }
   console.log(`  ✓ ${declarationLevelNames.length} 个能级评价申报等级`);
 
-  const declarationSpecialtyNames = ['输电运检', '变电运检', '继电保护', '调度运行', '营销服务'];
-  for (const [idx, name] of declarationSpecialtyNames.entries()) {
+  for (const [idx, name] of DECLARATION_SPECIALTY_NAMES.entries()) {
     await prisma.declarationSpecialty.create({ data: { name, sortOrder: idx } });
   }
-  console.log(`  ✓ ${declarationSpecialtyNames.length} 个能级评价申报专业`);
+  console.log(`  ✓ ${DECLARATION_SPECIALTY_NAMES.length} 个能级评价申报专业`);
 
   await prisma.autoReviewRule.create({
     data: {

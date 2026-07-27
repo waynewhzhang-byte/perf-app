@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { aggregateTicketsForImport, TICKET_SHEET_NAMES } from '@/lib/ticket-import-api';
-import { persistTicketAggregates, loadUserIdByEmployeeNo } from '@/lib/fact-import-persistence';
+import { persistTicketRecords, loadUserIdByEmployeeNo } from '@/lib/fact-import-persistence';
+import { factImportErrorResponse } from '@/lib/fact-import-http';
 
 const BodySchema = z.object({
   year: z.number().int().min(2000).max(2100),
@@ -53,14 +54,15 @@ export async function POST(req: Request) {
 
     const userIdByNo = await loadUserIdByEmployeeNo(
       prisma,
-      ticketResult.aggregates.map((a) => a.employeeNo),
+      ticketResult.records.map((record) => record.employeeNo),
     );
-    const persisted = await persistTicketAggregates(
+    const persisted = await persistTicketRecords(
       prisma,
       year,
       sourceFile,
-      ticketResult.aggregates,
+      ticketResult.records,
       userIdByNo,
+      { preserveEmployeeScoreTotals: true, createdBy: session.userId },
     );
 
     return NextResponse.json({
@@ -75,8 +77,6 @@ export async function POST(req: Request) {
       unmatchedTotal: ticketResult.unmatchedNames.length,
     });
   } catch (e) {
-    console.error('POST /api/admin/import/tickets:', e);
-    const message = e instanceof Error ? e.message : '服务器内部错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return factImportErrorResponse(e, 'POST /api/admin/import/tickets:');
   }
 }

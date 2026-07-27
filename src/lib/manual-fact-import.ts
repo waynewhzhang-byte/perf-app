@@ -22,6 +22,7 @@ export interface FactFieldMapping {
 
 const ROLE_MAP: Record<string, FactRole> = {
   '第一发现人': 'FIRST_DISCOVERER', FIRST_DISCOVERER: 'FIRST_DISCOVERER',
+  '其他发现人': 'CO_DISCOVERER',
   '共同发现人': 'CO_DISCOVERER', CO_DISCOVERER: 'CO_DISCOVERER',
   '第一处理人': 'FIRST_HANDLER', FIRST_HANDLER: 'FIRST_HANDLER',
   '共同处理人': 'CO_HANDLER', CO_HANDLER: 'CO_HANDLER',
@@ -47,7 +48,7 @@ export function rowsToFactInputs(
     return v || undefined;
   };
   const inputs: FactInput[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const employeeNo = get(row, mapping.employeeNo);
     const employeeName = get(row, mapping.employeeName);
     if (!employeeNo) continue;
@@ -59,13 +60,19 @@ export function rowsToFactInputs(
       role: ROLE_MAP[get(row, mapping.role) ?? ''] ?? 'FIRST_DISCOVERER',
       eventType: EVENT_TYPE_MAP[get(row, mapping.eventType) ?? ''] ?? 'DISCOVERY',
       defectLevel: get(row, mapping.defectLevel) ?? '',
-      defectRef: get(row, mapping.defectRef) ?? employeeNo,
+      defectRef: get(row, mapping.defectRef)
+        ?? get(row, mapping.incidentId)
+        ?? `source-row:${rowIndex + 2}:${employeeNo}`,
       eventDate: get(row, mapping.eventDate),
       sourceFile,
       incidentId: get(row, mapping.incidentId),
       faultCount: get(row, mapping.faultCount) ? parseInt(get(row, mapping.faultCount)!, 10) || 1 : 1,
       rawScore: get(row, mapping.rawScore) ? parseFloat(get(row, mapping.rawScore)!) : undefined,
       declarationLevel: get(row, mapping.declarationLevel),
+      metadata: {
+        sourceData: row,
+        sourceRowNo: rowIndex + 2,
+      },
     });
   }
   return inputs;
@@ -80,7 +87,7 @@ import {
 import { loadUserIdByEmployeeNo } from './fact-import-persistence';
 
 /** 从 DB 读维度 ScoringRule（无配置报错） */
-async function loadScoringRule(
+export async function loadScoringRule(
   prisma: PrismaClient,
   dimensionCode: string,
 ): Promise<ScoringRule> {
@@ -115,7 +122,7 @@ export interface ScoreFactImportResult {
  * 会让后续归档分计算带上已清洗掉的记录）。
  *
  * @param dimensionCode worksite.defect-governance | performance.safety-contribution
- *   （两票单独走 persistTicketAggregates，因为它先把工作票/操作票聚合成每人一条）
+ *   （两票单独走 persistTicketRecords，因为它保留每张票、每名参与人的原始事实）
  */
 export async function importScoreFacts(
   prisma: PrismaClient,
@@ -125,6 +132,11 @@ export async function importScoreFacts(
   mapping: FactFieldMapping,
   rows: Record<string, string>[],
   sourceFile: string,
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<ScoreFactImportResult> {
   const rule = await loadScoringRule(prisma, dimensionCode);
   if (!rule.enabled) throw new Error('该维度评分规则已禁用');
@@ -152,12 +164,20 @@ export async function importScoreFacts(
     defectRef: f.defectRef || f.employeeNo,
     defectLevel: f.defectLevel ?? '',
     eventDate: f.eventDate ?? null,
+    recordKey: f.defectRef || f.employeeNo,
+    recordType: dimensionCode,
+    recordTitle: dimensionCode === 'worksite.defect-governance' && f.defectRef
+      ? `缺陷 ${f.defectRef}`
+      : dimensionCode === 'performance.safety-contribution' && (f.incidentId || f.defectRef)
+        ? `安全贡献 ${f.incidentId || f.defectRef}`
+        : f.defectRef || dimensionTitle,
+    sourceRowNo: Number(f.metadata?.sourceRowNo) || null,
     metadata: (f.metadata ?? {}) as Record<string, unknown>,
   }));
 
   const result = await replaceFactsBySource(
     prisma,
-    { year, dimensionCode, sourceFile },
+    { year, dimensionCode, sourceFile, ...options },
     seeds,
     userIdByNo,
   );

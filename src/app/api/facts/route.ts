@@ -12,7 +12,7 @@ import {
   BASIC_DIMENSION_LABELS,
   isBasicDimensionCode,
 } from '@/lib/basic-dimension-map';
-import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import { loadPerformanceScoreSheet, loadTicketSpecialtyMaxRaw } from '@/lib/performance-score-sheet';
 import { sourceDimensionCodes, sourceDimensionTitle } from '@/lib/scoring-standards';
 import { effectiveHireDate } from '@/lib/declaration-level';
 import {
@@ -21,6 +21,15 @@ import {
   isFactDataSourceDimension,
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
+import { buildDerivation, type DerivationInputFact } from '@/lib/fact-derivation';
+import { formatPerformanceFactRecord, type FactRecordView } from '@/lib/fact-record-view';
+
+function withoutRawMetadata<T extends { rawFactFields: DerivationInputFact[] }>(derivation: T): T {
+  return {
+    ...derivation,
+    rawFactFields: derivation.rawFactFields.map(({ metadata: _metadata, ...fact }) => fact),
+  };
+}
 
 export async function GET(req: Request) {
   const s = await getSession(false);
@@ -57,8 +66,11 @@ export async function GET(req: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: s.userId },
-    select: { employeeNo: true, hireDate: true, profile: true },
+    select: { employeeNo: true, hireDate: true, profile: true, branch: { select: { name: true } } },
   });
+
+  // 两票折算基准：同专业原始分最高值（仅两票维度需要，其他维度传入 undefined 忽略）
+  const ticketCohortMax = await loadTicketSpecialtyMaxRaw(prisma, template.year, user?.branch?.name);
 
   const factBoundItems = sections.flatMap((sec) =>
     sec.items
@@ -82,6 +94,13 @@ export async function GET(req: Request) {
             employeeNo: user.employeeNo,
             dimensionCode: { in: perfCodes },
           },
+          orderBy: [
+            { dimensionCode: 'asc' },
+            { eventDate: 'asc' },
+            { sourceFile: 'asc' },
+            { sourceRowNo: 'asc' },
+            { createdAt: 'asc' },
+          ],
         })
       : [],
     user?.employeeNo && basicCodes.length
@@ -108,6 +127,32 @@ export async function GET(req: Request) {
       if (isBasicDimensionCode(code)) {
         const dim = basicDimensionFromCode(code);
         const fact = basicFacts.find((f) => f.dimension === dim);
+        const basicRecord: FactRecordView | undefined = fact ? {
+          id: fact.id,
+          recordKey: `${template.year}:${fact.employeeNo}:${fact.dimension}`,
+          recordType: 'BASIC_FACT',
+          title: dim ? BASIC_DIMENSION_LABELS[dim] : code,
+          score: Number(fact.score),
+          details: [
+            { label: '认定档位', value: fact.tierValue },
+            ...Object.entries(
+              fact.yearBreakdown && typeof fact.yearBreakdown === 'object'
+                ? fact.yearBreakdown as Record<string, unknown>
+                : {},
+            ).map(([year, value]) => ({ label: `${year} 年考核`, value: String(value) })),
+          ],
+          source: { ...(fact.sourceFile ? { file: fact.sourceFile } : {}) },
+        } : undefined;
+        const basicDerivationFacts: DerivationInputFact[] = fact ? [{
+          id: fact.id,
+          tierValue: fact.tierValue ?? undefined,
+          score: Number(fact.score),
+          label: dim ? BASIC_DIMENSION_LABELS[dim] : code,
+          thirdLevelTitle: sourceDimensionTitle(code),
+          yearBreakdown: fact.yearBreakdown,
+          sourceFile: fact.sourceFile ?? undefined,
+          record: basicRecord,
+        } as DerivationInputFact] : [];
         return {
           itemId: item.id,
           itemTitle: item.title,
@@ -128,13 +173,33 @@ export async function GET(req: Request) {
               label: dim ? BASIC_DIMENSION_LABELS[dim] : code,
               yearBreakdown: fact.yearBreakdown,
               score: Number(fact.score),
+              record: basicRecord,
             },
           ] : [],
           totalScore: sys.score,
+          // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
+          derivation: buildDerivation(code, basicDerivationFacts, { finalScore: sys.score }) ?? undefined,
         };
       }
 
       const facts = perfFacts.filter((f) => sourceDimensionCodes(code).includes(f.dimensionCode));
+      const recordByFactId = new Map(facts.map((f) => [
+        f.id,
+        formatPerformanceFactRecord(f),
+      ]));
+      const perfDerivationFacts: DerivationInputFact[] = facts.map((f) => ({
+          id: f.id,
+          score: Number(f.score),
+          role: f.role ?? undefined,
+          defectRef: f.defectRef ?? undefined,
+          defectLevel: f.defectLevel ?? undefined,
+          eventDate: f.eventDate,
+          label: f.dimensionTitle || f.dimensionCode,
+          thirdLevelTitle: sourceDimensionTitle(f.dimensionCode),
+          metadata: f.metadata,
+          sourceFile: f.sourceFile ?? undefined,
+          record: recordByFactId.get(f.id),
+        } satisfies DerivationInputFact));
       return {
         itemId: item.id,
         itemTitle: item.title,
@@ -157,10 +222,19 @@ export async function GET(req: Request) {
           defectRef: f.defectRef,
           defectLevel: f.defectLevel,
           eventDate: f.eventDate,
-          metadata: f.metadata,
           sourceFile: f.sourceFile,
+          record: recordByFactId.get(f.id),
         })),
         totalScore: sys.score,
+        // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
+        derivation: (() => {
+          const derivation = buildDerivation(
+            code,
+            perfDerivationFacts,
+            { finalScore: sys.score, ticketCohortMax },
+          );
+          return derivation ? withoutRawMetadata(derivation) : undefined;
+        })(),
       };
     })
     .filter((row): row is NonNullable<typeof row> => row != null);
@@ -177,14 +251,23 @@ export async function GET(req: Request) {
     dimensionCode: HIRE_DATE_CONFIRMATION_CODE,
     factKind: 'profile' as const,
     source: 'FACT' as const,
-    ruleSummary: '参加工作时间来自员工花名册；系统据此按年度截止日计算工龄和参评能级。',
-    requiresConfirmation: true,
+    ruleSummary: '参加工作时间来自员工花名册；系统据此按年度截止日计算工龄和参评能级（不可申诉）。',
+    requiresConfirmation: false,
     facts: hireDate ? [{
       id: 'profile-hire-date',
       thirdLevelTitle: '参加工作时间',
       label: hireDate.toISOString().slice(0, 10),
       score: 0,
       sourceFile: '1.能级评价员工花名册.xlsx',
+      record: {
+        id: 'profile-hire-date',
+        recordKey: `profile:${template.year}:hire-date`,
+        recordType: 'PROFILE_FACT',
+        title: '参加工作时间',
+        score: 0,
+        details: [{ label: '参加工作时间', value: hireDate.toISOString().slice(0, 10) }],
+        source: { file: '1.能级评价员工花名册.xlsx' },
+      } satisfies FactRecordView,
     }] : [],
     totalScore: 0,
   }] : [];
@@ -198,6 +281,12 @@ export async function GET(req: Request) {
       deductionScore: sheet.deductionScore,
       positiveMaxScore: sheet.positiveMaxScore,
       declarationTier: sheet.declarationTier,
+      sections: sheet.sections.map((section) => ({
+        code: section.code,
+        title: section.title,
+        score: section.score,
+        maxScore: section.maxScore,
+      })),
     },
   });
 }

@@ -6,7 +6,8 @@ import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import { normalizePersonName } from '@/lib/employee-resolver';
 import { parsePersonList } from '@/lib/defect-governance';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/scoring-standards';
+import { round2 } from '@/lib/rounding';
 
 export interface TicketScoreBreakdown {
   /** 操作票角色项数（每行每角色每人计 1 项） */
@@ -24,6 +25,32 @@ export interface TicketExecutionAggregate {
   employeeName: string;
   rawScore: number;
   breakdown: TicketScoreBreakdown;
+}
+
+export type TicketRecordType = 'OPERATION_TICKET' | 'WORK_TICKET' | 'WORK_MEMBER';
+export type TicketScoreCategory =
+  | 'operationPoints'
+  | 'workLeaderPoints'
+  | 'workPermitterPoints'
+  | 'workMemberPoints';
+
+/** 一名员工在一张票（或工作班成员源表一行）上的可核对原始事实。 */
+export interface TicketExecutionRecord {
+  employeeNo: string;
+  employeeName: string;
+  recordKey: string;
+  recordType: TicketRecordType;
+  recordTitle: string;
+  participationRole: string;
+  scoreCategory: TicketScoreCategory;
+  score: number;
+  eventDate: string | null;
+  sourceSheet: string;
+  /** Excel 数据行号（首行表头，因此第一条数据为第 2 行）。 */
+  sourceRowNo: number;
+  sourceData: Record<string, string>;
+  /** 多文件批量导入时记录所属的真实物理源文件。 */
+  sourceFile?: string;
 }
 
 export interface TicketExecutionImportOptions {
@@ -144,13 +171,10 @@ function addPoints(bucket: AggBucket, field: keyof TicketScoreBreakdown, points:
   bucket.rawScore = round2(bucket.rawScore + points);
 }
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
-}
-
 export interface TicketExecutionParseResult {
   sourceFile: string;
   aggregates: TicketExecutionAggregate[];
+  records: TicketExecutionRecord[];
   byEmployeeNo: Map<string, TicketExecutionAggregate>;
   byName: Map<string, TicketExecutionAggregate>;
   unmatchedNames: string[];
@@ -178,10 +202,11 @@ export function aggregateTicketExecutionRows(
 
   const map = new Map<string, AggBucket>();
   const unmatched = new Set<string>();
+  const records: TicketExecutionRecord[] = [];
 
   const itemPrice = priceConfig.operationStepPrice;
 
-  for (const row of opRows) {
+  for (const [rowIndex, row] of opRows.entries()) {
     if (unitFilter && cellString(row['单位']) !== unitFilter) continue;
     if (archivedOnly && !isOperationTicketEligible(cellString(row['票状态']))) continue;
 
@@ -189,7 +214,10 @@ export function aggregateTicketExecutionRows(
     //   操作票中同一票号「操作人、监护人、值班负责人、现场配合人员」四列按人计数，
     //   且每条数据中每人只计一次分。
     // `touched` 同时承担两件事：① 保证同一员工在同一行只加一次分；② 统计唯一参与票数。
-    const touched = new Set<string>();
+    const touched = new Map<
+      string,
+      { employeeNo: string; employeeName: string; roles: Set<string> }
+    >();
     for (const col of OP_ROLE_COLUMNS) {
       for (const name of parsePersonList(row[col])) {
         const hit = resolveNo.resolve(name, cellString(row[OP_ROLE_EMPLOYEE_NO_COLUMNS[col]]));
@@ -198,37 +226,81 @@ export function aggregateTicketExecutionRows(
           continue;
         }
         const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
-        if (!touched.has(hit.employeeNo)) {
+        const participation = touched.get(hit.employeeNo);
+        if (!participation) {
           addPoints(bucket, 'operationPoints', itemPrice);
           bucket.breakdown.operationItems += 1;
           bucket.breakdown.operationTicketCount += 1;
-          touched.add(hit.employeeNo);
+          touched.set(hit.employeeNo, { ...hit, roles: new Set([col]) });
+        } else {
+          participation.roles.add(col);
         }
       }
     }
+    const ticketNo = cellString(row['票号']) || `第${rowIndex + 2}行`;
+    const task = cellString(row['操作任务']);
+    for (const participation of touched.values()) {
+      records.push({
+        employeeNo: participation.employeeNo,
+        employeeName: participation.employeeName,
+        recordKey: `operation:${ticketNo}:row${rowIndex + 2}:${participation.employeeNo}`,
+        recordType: 'OPERATION_TICKET',
+        recordTitle: `操作票 ${ticketNo}${task ? ` · ${task}` : ''}`,
+        participationRole: [...participation.roles].join('、'),
+        scoreCategory: 'operationPoints',
+        score: itemPrice,
+        eventDate: cellString(row['操作开始时间']) || null,
+        sourceSheet: '操作票',
+        sourceRowNo: rowIndex + 2,
+        sourceData: row,
+      });
+    }
   }
 
-  for (const row of workRows) {
+  for (const [rowIndex, row] of workRows.entries()) {
     if (unitFilter && cellString(row['单位']) !== unitFilter) continue;
 
     const ticketType = cellString(row['票种类']);
+    const ticketNo = cellString(row['票号']) || `第${rowIndex + 2}行`;
+    const recordTitle = `工作票 ${ticketNo}${ticketType ? ` · ${ticketType}` : ''}`;
+    const eventDate = cellString(row['许可工作时间']) || null;
     const leaderScore = resolveWorkTicketPrice('workLeader', ticketType, priceConfig);
     const permitScore = resolveWorkTicketPrice('workPermitter', ticketType, priceConfig);
 
     if (leaderScore > 0 && cellString(row['工作负责人'])) {
+      const leaders = new Set<string>();
       for (const name of parsePersonList(row['工作负责人'])) {
         const hit = resolveNo.resolve(name, cellString(row['人员编号']));
         if (!hit) {
           unmatched.add(name);
           continue;
         }
+        if (leaders.has(hit.employeeNo)) continue;
+        leaders.add(hit.employeeNo);
         const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
         addPoints(bucket, 'workLeaderPoints', leaderScore);
+        records.push({
+          employeeNo: hit.employeeNo,
+          employeeName: hit.employeeName,
+          recordKey: `work:${ticketNo}:row${rowIndex + 2}:leader:${hit.employeeNo}`,
+          recordType: 'WORK_TICKET',
+          recordTitle,
+          participationRole: '工作负责人',
+          scoreCategory: 'workLeaderPoints',
+          score: leaderScore,
+          eventDate,
+          sourceSheet: '工作票',
+          sourceRowNo: rowIndex + 2,
+          sourceData: row,
+        });
       }
     }
 
     // 开工、完工许可人为同一人时整张票计一次；不是同一人时按评分表均分。
-    const permitters = new Map<string, { employeeNo: string; employeeName: string }>();
+    const permitters = new Map<
+      string,
+      { employeeNo: string; employeeName: string; roles: Set<string> }
+    >();
     for (const col of ['开工许可人', '完工许可人'] as const) {
       if (permitScore <= 0 || !cellString(row[col])) continue;
       const employeeNoColumn = col === '开工许可人' ? '人员编号_1' : '人员编号_2';
@@ -238,13 +310,29 @@ export function aggregateTicketExecutionRows(
           unmatched.add(name);
           continue;
         }
-        permitters.set(hit.employeeNo, hit);
+        const permitter = permitters.get(hit.employeeNo);
+        if (permitter) permitter.roles.add(col);
+        else permitters.set(hit.employeeNo, { ...hit, roles: new Set([col]) });
       }
     }
     const permitterScore = permitters.size ? permitScore / permitters.size : 0;
     for (const hit of permitters.values()) {
       const bucket = getBucket(map, hit.employeeNo, hit.employeeName);
       addPoints(bucket, 'workPermitterPoints', permitterScore);
+      records.push({
+        employeeNo: hit.employeeNo,
+        employeeName: hit.employeeName,
+        recordKey: `work:${ticketNo}:row${rowIndex + 2}:permitter:${hit.employeeNo}`,
+        recordType: 'WORK_TICKET',
+        recordTitle,
+        participationRole: [...hit.roles].join('、'),
+        scoreCategory: 'workPermitterPoints',
+        score: permitterScore,
+        eventDate,
+        sourceSheet: '工作票',
+        sourceRowNo: rowIndex + 2,
+        sourceData: row,
+      });
     }
 
     if (leaderScore > 0 || permitScore > 0) {
@@ -278,6 +366,7 @@ export function aggregateTicketExecutionRows(
   return {
     sourceFile: '',
     aggregates,
+    records,
     byEmployeeNo,
     byName,
     unmatchedNames: [...unmatched].sort((a, b) => a.localeCompare(b, 'zh-CN')),
@@ -310,6 +399,7 @@ export interface WorkMemberRow {
   票类型: string;
   姓名: string;
   人员编号: string | number;
+  [key: string]: string | number;
 }
 
 export interface WorkMemberAggregate {
@@ -317,6 +407,44 @@ export interface WorkMemberAggregate {
   employeeName: string;
   type1Count: number;  // 一种票 count
   type2Count: number;  // 二种票 count
+}
+
+/** 将工作班成员表逐行转换为可持久化事实；总分仍由同一单价表计算。 */
+export function buildWorkMemberTicketRecords(
+  rows: WorkMemberRow[],
+  prices: TicketPriceConfig = DEFAULT_TICKET_PRICES,
+  sourceSheet = '工作班成员',
+): TicketExecutionRecord[] {
+  const records: TicketExecutionRecord[] = [];
+  for (const [rowIndex, row] of rows.entries()) {
+    const employeeNo = String(row.人员编号 ?? '').trim();
+    const employeeName = String(row.姓名 ?? '').trim();
+    const ticketType = String(row.票类型 ?? '').trim();
+    if (!employeeNo || !employeeName) continue;
+    const normalizedType = ticketType.includes('一种') ? '单班组一种票'
+      : ticketType.includes('二种') ? '二种票'
+        : ticketType;
+    const score = resolveWorkTicketPrice('workMember', normalizedType, prices);
+    if (score === 0) continue;
+    const sourceData = Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [key, String(value ?? '').trim()]),
+    );
+    records.push({
+      employeeNo,
+      employeeName,
+      recordKey: `work-member:${sourceSheet}:${rowIndex + 2}:${employeeNo}`,
+      recordType: 'WORK_MEMBER',
+      recordTitle: ticketType || normalizedType,
+      participationRole: '工作班成员',
+      scoreCategory: 'workMemberPoints',
+      score,
+      eventDate: null,
+      sourceSheet,
+      sourceRowNo: rowIndex + 2,
+      sourceData,
+    });
+  }
+  return records;
 }
 
 /** Group rows from 二种票 (file 12) and 一种票 (file 13) by employeeNo and count ticket types. */

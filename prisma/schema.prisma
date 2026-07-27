@@ -38,6 +38,20 @@ model AuthConfig {
   updatedBy                    String?
 }
 
+// ========== 申报合规与运维（系统级单例） ==========
+model AppConfig {
+  id               Int      @id @default(1)
+  supportPhone     String   @default("")
+  noticeText       String   @db.Text
+  noticeSeconds    Int      @default(30)
+  /// 员工首页底部提示标题（可空；仅正文非空时展示）
+  homeNoticeTitle  String   @default("")
+  /// 员工首页底部提示正文（空则不展示该区域）
+  homeNoticeBody   String   @default("") @db.Text
+  updatedAt        DateTime @updatedAt
+  updatedBy        String?
+}
+
 // ========== 验证码 ==========
 enum CodePurpose {
   REGISTER
@@ -325,7 +339,6 @@ model DimensionReviewRoute {
 // ========== 申报 ==========
 enum SubmissionStatus {
   DRAFT
-  PRE_REVIEW_REJECTED // 自动预审未通过，员工修改固定表头后重提
   SUBMITTED
   L1_APPROVED
   L2_APPROVED // 终审通过 → 生成 PerformanceRecord
@@ -414,6 +427,8 @@ model SubmissionItem {
   // 系统填充项：员工确认/申诉状态；null 表示手工填写项
   confirmationStatus  ConfirmationStatus?
   disputeReason       String?             @db.Text
+  // 申诉主张分（仅供参考，不写入 score / override）
+  disputeClaimedScore Decimal?            @db.Decimal(10, 2)
   // 标记该项为系统自动填充（来自 PerformanceFact），不可编辑分值
   isSystemFilled      Boolean             @default(false)
   // 申诉一级审核：L1 对员工申诉的判断
@@ -537,27 +552,35 @@ enum PerformanceFactEventType {
 }
 
 model PerformanceFact {
-  id             String                   @id @default(cuid())
-  year           Int
-  employeeNo     String
-  employeeName   String
-  userId         String?
-  dimensionCode  String
-  dimensionTitle String
-  role           PerformanceFactRole
-  eventType      PerformanceFactEventType
-  score          Decimal                  @db.Decimal(10, 2)
-  defectRef      String
-  defectLevel    String
-  eventDate      String?
-  sourceFile     String
-  metadata       Json                     @default("{}")
-  createdAt      DateTime                 @default(now())
+  id                String                   @id @default(cuid())
+  year              Int
+  employeeNo        String
+  employeeName      String
+  userId            String?
+  dimensionCode     String
+  dimensionTitle    String
+  role              PerformanceFactRole
+  eventType         PerformanceFactEventType
+  score             Decimal                  @db.Decimal(10, 2)
+  defectRef         String
+  defectLevel       String
+  eventDate         String?
+  sourceFile        String
+  // 原始业务记录身份与来源定位；旧事实允许为空，展示层兼容 metadata/历史字段。
+  recordKey         String?
+  recordType        String?
+  recordTitle       String?
+  participationRole String?
+  sourceSheet       String?
+  sourceRowNo       Int?
+  metadata          Json                     @default("{}")
+  createdAt         DateTime                 @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([year, employeeNo, dimensionCode, defectRef, role, eventType])
   @@index([year, employeeNo, dimensionCode])
+  @@index([year, employeeNo, dimensionCode, recordKey])
   @@index([userId, year])
 }
 

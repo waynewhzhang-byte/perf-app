@@ -3,14 +3,14 @@
  *
  * 真正的批量写入 seam 在 src/lib/performance-fact-repository.ts（事务 + createMany 分块）。
  * 本文件只保留两类东西：
- *   - 维度专属适配器：把业务对象（TicketExecutionAggregate 等）转换成 PerformanceFactSeed
+ *   - 维度专属适配器：把业务对象（TicketExecutionRecord 等）转换成 PerformanceFactSeed
  *   - Excel 读取工具（与 XLSX 库耦合，不属于 repository 的职责）
  */
 import { readFileSync } from 'fs';
 import * as XLSX from 'xlsx';
 import type { PrismaClient, PerformanceFactRole } from '@prisma/client';
-import type { TicketExecutionAggregate } from '@/lib/ticket-execution-import';
-import { TICKET_EXECUTION_DIMENSION } from '@/lib/performance-dimension-registry';
+import type { TicketExecutionRecord } from '@/lib/ticket-execution-import';
+import { TICKET_EXECUTION_DIMENSION } from '@/lib/scoring-standards';
 import {
   replaceFactsBySource,
   type PerformanceFactSeed,
@@ -39,42 +39,52 @@ export async function loadUserIdByEmployeeNo(
 }
 
 /**
- * 两票：每人一条汇总事实，score = 原始分（折算在申报层完成）。
- *
- * 历史上此函数自己实现 deleteMany + upsert 循环；现在转为构造 PerformanceFactSeed[]
- * 后委托给 replaceFactsBySource。defectRef 用 `ticket-aggregate-{employeeNo}` 占位
- * （两票在事实层是一人一条，没有缺陷编号概念）。
+ * 两票：每次员工参与一张票形成一条事实，score = 本次参与原始分。
+ * 员工原始总分由这些事实求和，专业折算仍在申报层完成。
  */
-export async function persistTicketAggregates(
+export async function persistTicketRecords(
   prisma: Parameters<typeof replaceFactsBySource>[0],
   year: number,
   sourceFile: string,
-  aggregates: TicketExecutionAggregate[],
+  records: TicketExecutionRecord[],
   userIdByNo: Map<string, string>,
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    refreshSubmissions?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<ReplaceFactsResult> {
   const dimensionCode = TICKET_EXECUTION_DIMENSION.code;
-  const seeds: PerformanceFactSeed[] = aggregates.map((agg) => ({
+  const seeds: PerformanceFactSeed[] = records.map((record) => ({
     year,
-    employeeNo: agg.employeeNo,
-    employeeName: agg.employeeName,
+    employeeNo: record.employeeNo,
+    employeeName: record.employeeName,
     dimensionCode,
     dimensionTitle: TICKET_EXECUTION_DIMENSION.title,
     role: 'FIRST_HANDLER' satisfies PerformanceFactRole,
     eventType: 'REMEDIATION',
-    score: agg.rawScore,
-    defectRef: `ticket-aggregate-${agg.employeeNo}`,
+    score: record.score,
+    defectRef: record.recordKey,
     defectLevel: '',
-    eventDate: null,
+    eventDate: record.eventDate,
+    sourceFile: record.sourceFile,
+    recordKey: record.recordKey,
+    recordType: record.recordType,
+    recordTitle: record.recordTitle,
+    participationRole: record.participationRole,
+    sourceSheet: record.sourceSheet,
+    sourceRowNo: record.sourceRowNo,
     metadata: {
-      rawScore: agg.rawScore,
       isRawScore: true,
-      breakdown: agg.breakdown,
+      scoreCategory: record.scoreCategory,
+      sourceData: record.sourceData,
     },
   }));
 
   return replaceFactsBySource(
     prisma,
-    { year, dimensionCode, sourceFile },
+    { year, dimensionCode, sourceFile, ...options },
     seeds,
     userIdByNo,
   );

@@ -3,6 +3,8 @@ import https from 'https';
 import { Client as MinioClient } from 'minio';
 
 const CONNECT_TIMEOUT_MS = 10_000;
+/** 固定 region，避免 presign 时 getBucketRegion 去连公网/自签名 HTTPS 失败 */
+const MINIO_REGION = process.env.MINIO_REGION || 'us-east-1';
 
 type MinioConn = {
   endPoint: string;
@@ -52,13 +54,23 @@ function readPublicConn(): MinioConn {
 function createClient(conn: MinioConn): MinioClient {
   const { accessKey, secretKey } = readCredentials();
   const Agent = conn.useSSL ? https.Agent : http.Agent;
+  // 公网自签名反代：SDK 偶发探测时放宽 TLS；正式 CA 可设 MINIO_TLS_INSECURE=false
+  const tlsInsecure =
+    process.env.MINIO_TLS_INSECURE === 'true' ||
+    (conn.useSSL && process.env.MINIO_TLS_INSECURE !== 'false');
+
   return new MinioClient({
     endPoint: conn.endPoint,
     port: conn.port,
     useSSL: conn.useSSL,
     accessKey,
     secretKey,
-    transportAgent: new Agent({ timeout: CONNECT_TIMEOUT_MS }),
+    region: MINIO_REGION,
+    pathStyle: true,
+    transportAgent: new Agent({
+      timeout: CONNECT_TIMEOUT_MS,
+      ...(conn.useSSL ? { rejectUnauthorized: !tlsInsecure } : {}),
+    }),
   });
 }
 
@@ -106,6 +118,10 @@ export async function getObjectStream(key: string) {
   return getInternalClient().getObject(BUCKET, key);
 }
 
+/**
+ * 生成浏览器可访问的预签名 URL。
+ * 使用 PUBLIC 端点参与签名（Host 与浏览器请求一致）；固定 region 避免去连公网探测。
+ */
 export async function presignedGetUrl(
   key: string,
   expirySec = 600,
@@ -131,15 +147,24 @@ export function isMinioConnectivityError(err: unknown): boolean {
     code === 'ECONNREFUSED' ||
     code === 'ENOTFOUND' ||
     code === 'EHOSTUNREACH' ||
+    code === 'CERT_HAS_EXPIRED' ||
+    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+    code === 'ERR_TLS_CERT_ALTNAME_INVALID' ||
     /connect.*timed out/i.test(msg) ||
-    /ECONNREFUSED/i.test(msg)
+    /ECONNREFUSED/i.test(msg) ||
+    /self.?signed/i.test(msg) ||
+    /certificate/i.test(msg)
   );
 }
 
 export class MinioUnavailableError extends Error {
   constructor(cause?: unknown) {
+    const pub = process.env.MINIO_PUBLIC_ENDPOINT
+      ? ` PUBLIC=${process.env.MINIO_PUBLIC_ENDPOINT}:${process.env.MINIO_PUBLIC_PORT || '9000'}`
+      : '';
     super(
-      'MinIO 不可达，请检查 MINIO_ENDPOINT（同机部署请用 127.0.0.1）及 MINIO_PUBLIC_* 配置',
+      `MinIO 不可达，请检查 MINIO_ENDPOINT（同机部署请用 127.0.0.1）及 MINIO_PUBLIC_* 配置${pub}`,
     );
     this.name = 'MinioUnavailableError';
     if (cause instanceof Error) this.cause = cause;

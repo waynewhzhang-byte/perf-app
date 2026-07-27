@@ -65,6 +65,70 @@ export interface AnnualPerformanceFactSource {
   score: unknown;
 }
 
+export const QUANTITATIVE_DIMENSIONS = [
+  { key: 'skillLevel', label: '技能等级', group: '基本素质' },
+  { key: 'titleLevel', label: '职称等级', group: '基本素质' },
+  { key: 'performanceLevel', label: '绩效等级', group: '基本素质' },
+  { key: 'safetyContribution', label: '安全贡献', group: '工作业绩' },
+  { key: 'technicalStandard', label: '国标、行标、企标', group: '工作业绩' },
+  { key: 'technicalResource', label: '规范标准、资源库', group: '工作业绩' },
+  { key: 'competitionEvent', label: '生产类竞赛', group: '工作业绩' },
+  { key: 'competitionExam', label: '生产类调考', group: '工作业绩' },
+  { key: 'innovationAward', label: '创新奖项', group: '工作业绩' },
+  { key: 'innovationPaper', label: '论文专利', group: '工作业绩' },
+  { key: 'ticketExecution', label: '两票执行', group: '工作现场' },
+  { key: 'defectGovernance', label: '缺陷治理', group: '工作现场' },
+  { key: 'violationSevere', label: '严重违章', group: '扣分项' },
+  { key: 'violationGeneral', label: '一般违章', group: '扣分项' },
+] as const satisfies ReadonlyArray<{
+  key: keyof Pick<
+    QuantitativeReportRow,
+    | 'skillLevel'
+    | 'titleLevel'
+    | 'performanceLevel'
+    | 'safetyContribution'
+    | 'technicalStandard'
+    | 'technicalResource'
+    | 'competitionEvent'
+    | 'competitionExam'
+    | 'innovationAward'
+    | 'innovationPaper'
+    | 'ticketExecution'
+    | 'defectGovernance'
+    | 'violationSevere'
+    | 'violationGeneral'
+  >;
+  label: string;
+  group: '基本素质' | '工作业绩' | '工作现场' | '扣分项';
+}>;
+
+export interface QuantitativeAnalysisRecord extends QuantitativeReportRow {
+  basicScore: number;
+  performanceScore: number;
+  worksiteScore: number;
+  deductionScore: number;
+  totalScore: number;
+  rank: number;
+}
+
+export interface QuantitativeBranchBreakdown {
+  unit: string;
+  employeeCount: number;
+  averageTotalScore: number;
+  tierCounts: Record<DeclarationLevel, number>;
+}
+
+export interface AnnualQuantitativeReportAnalysis {
+  employeeCount: number;
+  averageTotalScore: number;
+  maxTotalScore: number;
+  minTotalScore: number;
+  tierCounts: Record<DeclarationLevel, number>;
+  dimensionAverages: Array<(typeof QUANTITATIVE_DIMENSIONS)[number] & { average: number }>;
+  branchBreakdown: QuantitativeBranchBreakdown[];
+  records: QuantitativeAnalysisRecord[];
+}
+
 type Profile = Record<string, unknown>;
 
 function profileText(profile: unknown, key: string): string {
@@ -91,6 +155,73 @@ export function workYearsAsOf(startDate: string | Date, asOf: Date): number | nu
   let years = end.year - start.year;
   if (end.month < start.month || (end.month === start.month && end.day < start.day)) years -= 1;
   return Math.max(0, years);
+}
+
+/** 为管理员分析页构建与量化积分报送表相同口径的汇总和员工明细。 */
+export function buildAnnualQuantitativeReportAnalysis(
+  rows: QuantitativeReportRow[],
+): AnnualQuantitativeReportAnalysis {
+  const records = rows
+    .map((row) => {
+      const basicScore = round1(row.skillLevel + row.titleLevel + row.performanceLevel);
+      const performanceScore = round1(
+        row.safetyContribution + row.technicalStandard + row.technicalResource
+        + row.competitionEvent + row.competitionExam + row.innovationAward + row.innovationPaper,
+      );
+      const worksiteScore = round1(row.ticketExecution + row.defectGovernance);
+      const deductionScore = round1(row.violationSevere + row.violationGeneral);
+      return {
+        ...row,
+        basicScore,
+        performanceScore,
+        worksiteScore,
+        deductionScore,
+        totalScore: round1(basicScore + performanceScore + worksiteScore + deductionScore),
+      };
+    })
+    .sort((a, b) => b.totalScore - a.totalScore || a.employeeNo.localeCompare(b.employeeNo))
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+  const employeeCount = records.length;
+  const totals = records.map((row) => row.totalScore);
+  const tierCounts = Object.fromEntries(
+    DECLARATION_LEVELS.map((tier) => [tier, records.filter((row) => row.tier === tier).length]),
+  ) as Record<DeclarationLevel, number>;
+
+  const branchMap = new Map<string, QuantitativeAnalysisRecord[]>();
+  for (const record of records) {
+    const list = branchMap.get(record.unit) ?? [];
+    list.push(record);
+    branchMap.set(record.unit, list);
+  }
+  const branchBreakdown = [...branchMap.entries()]
+    .map(([unit, branchRecords]) => {
+      const branchTotals = branchRecords.map((row) => row.totalScore);
+      return {
+        unit,
+        employeeCount: branchRecords.length,
+        averageTotalScore: round1(branchTotals.reduce((sum, score) => sum + score, 0) / branchRecords.length),
+        tierCounts: Object.fromEntries(
+          DECLARATION_LEVELS.map((level) => [level, branchRecords.filter((row) => row.tier === level).length]),
+        ) as Record<DeclarationLevel, number>,
+      };
+    })
+    .sort((a, b) => b.employeeCount - a.employeeCount || a.unit.localeCompare(b.unit, 'zh-CN'));
+
+  return {
+    employeeCount,
+    averageTotalScore: employeeCount === 0 ? 0 : round1(totals.reduce((sum, score) => sum + score, 0) / employeeCount),
+    maxTotalScore: employeeCount === 0 ? 0 : Math.max(...totals),
+    minTotalScore: employeeCount === 0 ? 0 : Math.min(...totals),
+    tierCounts,
+    dimensionAverages: QUANTITATIVE_DIMENSIONS.map((dimension) => ({
+      ...dimension,
+      average: employeeCount === 0
+        ? 0
+        : round1(records.reduce((sum, row) => sum + row[dimension.key], 0) / employeeCount),
+    })),
+    branchBreakdown,
+    records,
+  };
 }
 
 export function buildAnnualQuantitativeReportRows(

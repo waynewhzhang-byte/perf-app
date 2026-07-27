@@ -33,9 +33,10 @@ export default function ImportCenterPage() {
       <section className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-4">
         <h2 className="text-xs font-semibold text-slate-600">查看导入结果</h2>
         <p className="mt-1 text-xs text-slate-400">
-          导入完成后，可在原
-          <Link href="/admin" className="ml-1 text-primary-600 underline">管理后台</Link>
-          查看绩效分表与未匹配记录（查询 API 未变更）。
+          <Link href="/admin/import/reconciliation" className="font-medium text-primary-600 underline">
+            查看 435 人事实明细与现有得分核对记录
+          </Link>
+          。存在差异的批次不会覆盖现有分数，需先完成人工复核。
         </p>
       </section>
     </main>

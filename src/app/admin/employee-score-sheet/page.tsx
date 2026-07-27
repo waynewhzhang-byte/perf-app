@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
+import { formatDeclarationLevelDisplay } from '@/lib/declaration-level';
 
 interface Employee {
   id: string;
@@ -103,6 +104,11 @@ export default function EmployeeScoreSheetPage() {
 
   useEffect(() => {
     loadEmployees();
+    const params = new URLSearchParams(window.location.search);
+    const linkedEmployeeNo = params.get('employeeNo');
+    const linkedYear = Number(params.get('year'));
+    if (linkedEmployeeNo) setEmployeeNo(linkedEmployeeNo);
+    if (linkedYear >= 2000 && linkedYear <= 2100) setYear(linkedYear);
   }, [loadEmployees]);
 
   const filteredEmployees = useMemo(() => {
@@ -227,7 +233,13 @@ export default function EmployeeScoreSheetPage() {
               <div>
                 <h2 className="text-lg font-semibold">{result.employeeName} · {result.employeeNo}</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {[result.branchName, result.departmentName, result.declarationTier ? `${result.declarationTier}能级` : null]
+                  {[
+                    result.branchName,
+                    result.departmentName,
+                    result.declarationTier
+                      ? `${formatDeclarationLevelDisplay(result.declarationTier) ?? result.declarationTier}能级`
+                      : null,
+                  ]
                     .filter(Boolean)
                     .join(' · ') || '暂无组织信息'}
                 </p>

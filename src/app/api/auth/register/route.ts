@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     const ip = extractIP(req);
 
   // Per-IP: max 5 registrations per hour
-  if (isRateLimited(`register:ip:${ip}`, 5, 60 * 60_000)) {
+  if (await isRateLimited(`register:ip:${ip}`, 5, 60 * 60_000)) {
     return NextResponse.json({ error: '注册请求过于频繁，请稍后再试' }, { status: 429 });
   }
 
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   }
 
   // Per-contact: max 3 verification-code attempts per hour
-  if (isRateLimited(`register:contact:${contact}`, 3, 60 * 60_000)) {
+  if (await isRateLimited(`register:contact:${contact}`, 3, 60 * 60_000)) {
     return NextResponse.json({ error: '该联系方式注册尝试过多，请稍后再试' }, { status: 429 });
   }
 
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
       orderBy: { createdAt: 'desc' },
     });
     if (!row || row.expiresAt < new Date()) {
-      recordAttempt(`register:contact:${contact}`, 60 * 60_000);
+      await recordAttempt(`register:contact:${contact}`, 60 * 60_000);
       return NextResponse.json({ error: '验证码无效或已过期' }, { status: 400 });
     }
     vc = row;

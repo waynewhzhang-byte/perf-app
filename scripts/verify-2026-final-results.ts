@@ -11,12 +11,17 @@ import { prisma } from '@/lib/prisma';
 import { loadMatrix, loadSheet } from '@/lib/verify/source-loader';
 import { checkPerformanceLevel, checkSkillLevel, checkTitleLevel, summarize, type BasicFactRow } from '@/lib/verify/dimension-checks';
 import { createRosterResolverFromUsers } from '@/lib/roster-resolver';
-import { aggregateTicketExecutionRows, mergeWorkMemberTicketScores, type WorkMemberRow } from '@/lib/ticket-execution-import';
+import {
+  aggregateTicketExecutionRows,
+  buildWorkMemberTicketRecords,
+  type WorkMemberRow,
+} from '@/lib/ticket-execution-import';
 import { buildFactsFromDefectRows, type DefectRow } from '@/lib/defect-governance';
 import { buildCompetitionSeeds } from '@/lib/competition-import';
 import { buildPatentSeeds, parsePatentRows } from '@/lib/patent-import';
 import { buildViolationSeeds } from '@/lib/violation-import';
 import { batchComputeImportedScores } from '@/lib/imported-score-batch';
+import { loadScoringRule } from '@/lib/manual-fact-import';
 
 const YEAR = 2026;
 const DATA_DIR = '20260716超高压人员信息表';
@@ -100,8 +105,14 @@ async function main() {
     ...loadSheet(`${DATA_DIR}/13.工作班成员工作票一种表（720人）.xlsx`).rows,
   ].map((row) => ({ 票类型: row['票类型'], 姓名: row['姓名'], 人员编号: row['人员编号'] }));
   const ticket = aggregateTicketExecutionRows(operationRows, workRows, resolveWithNo);
-  const ticketExpected = mergeWorkMemberTicketScores(ticket.aggregates, memberRows).filter((row) => byEmployeeNo.has(row.employeeNo));
-  add('worksite.ticket-execution', ticketExpected.map((row) => ({ employeeNo: row.employeeNo, score: row.rawScore })));
+  const ticketRecords = [
+    ...ticket.records,
+    ...buildWorkMemberTicketRecords(memberRows),
+  ].filter((row) => byEmployeeNo.has(row.employeeNo));
+  add(
+    'worksite.ticket-execution',
+    ticketRecords.map((row) => ({ employeeNo: row.employeeNo, score: row.score })),
+  );
 
   // 缺陷和安全：直接复用与生产导入相同的源表解析与评分规则；
   // 仅核验 435 人评价花名册，源表里的名册外参与人不属于本年度评价范围。
@@ -111,7 +122,13 @@ async function main() {
     消缺人: [row['员工编号_2'] || row['第一消缺人员'], row['员工编号_3'] || row['其他共同消缺人员']].filter(Boolean).join('、'),
   }));
   // 源表为 2025 年度发生记录，评价年度 2026 使用该完整年度事实。
-  const defects = buildFactsFromDefectRows(defectRows as DefectRow[], 2025, resolverWithSourceNo);
+  const defects = buildFactsFromDefectRows(
+    defectRows as DefectRow[],
+    2025,
+    resolverWithSourceNo,
+    {},
+    await loadScoringRule(prisma, 'worksite.defect-governance'),
+  );
   add('worksite.defect-governance', defects.facts
     .filter((row) => rosterEmployeeNos.has(row.employeeNo))
     .map((row) => ({ employeeNo: row.employeeNo, score: row.score })));

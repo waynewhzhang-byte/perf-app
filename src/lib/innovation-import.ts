@@ -11,7 +11,12 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import type { PerformanceFactSeed } from '@/lib/performance-fact-repository';
-import { persistSeedsBySource, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
+import {
+  persistSeedsBySource,
+  cellStr,
+  sourceRowNoOf,
+  type SeedBasedImportResult,
+} from '@/lib/fact-import-common';
 
 export type InnovationCategory = 'management-tech' | 'qc-wuxiao';
 
@@ -63,7 +68,7 @@ export function buildInnovationSeeds(
   year: number,
 ): PerformanceFactSeed[] {
   const seeds: PerformanceFactSeed[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const employeeNo = cellStr(row[mapping.employeeNo]);
     if (!employeeNo) continue;
     const employeeName = mapping.employeeName ? cellStr(row[mapping.employeeName]) : employeeNo;
@@ -76,8 +81,12 @@ export function buildInnovationSeeds(
     const levelKey = inferInnovationLevel(level, award);
     const score = rule.scores[levelKey];
 
-    // defectRef 必须包含 award（+ project 若有），避免同员工不同奖项被合并
-    const refKey = project ? `${award}:${project}:${employeeNo}` : `${award}:${employeeNo}`;
+    // 源行号放在稳定键前部，保证内容相同但确属两次获奖的源行不会被合并。
+    const sourceRowNo = sourceRowNoOf(row, rowIndex + 2);
+    const refKey = project
+      ? `row${sourceRowNo}:${employeeNo}:${award}:${project}`
+      : `row${sourceRowNo}:${employeeNo}:${award}`;
+    const recordKey = `innovation:${refKey}`.slice(0, 200);
     seeds.push({
       year,
       employeeNo,
@@ -87,15 +96,20 @@ export function buildInnovationSeeds(
       role: 'FIRST_HANDLER',
       eventType: 'REMEDIATION',
       score,
-      defectRef: `innovation:${refKey}`.slice(0, 200),
+      defectRef: recordKey,
       defectLevel: '',
       eventDate: null,
+      recordKey,
+      recordType: 'INNOVATION_AWARD',
+      recordTitle: [award, project].filter(Boolean).join(' · ') || '创新奖项',
+      sourceRowNo,
       metadata: {
         award,
         level,
         project: project || null,
         category,
         levelKey,
+        sourceData: row,
       },
     });
   }
@@ -108,11 +122,16 @@ export async function importInnovationFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: InnovationFieldMapping,
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<SeedBasedImportResult> {
   const seeds = buildInnovationSeeds(rows, mapping, year);
   return persistSeedsBySource(
     prisma,
-    { year, dimensionCode: 'performance.innovation.award', sourceFile },
+    { year, dimensionCode: 'performance.innovation.award', sourceFile, ...options },
     seeds,
   );
 }

@@ -7,10 +7,14 @@ import {
   buildPerformanceScoreSheet,
   type PerformanceScoreSheet,
 } from '@/lib/performance-score-sheet';
-import { applyTicketCohortNormalization } from '@/lib/dimension-aggregation';
+import {
+  applyTicketCohortNormalization,
+  sumTicketFactsByEmployee,
+} from '@/lib/dimension-aggregation';
 import { effectiveHireDate, evaluationCutoffDate, levelFromHireDate, parseMockDeclarationTier, type DeclarationTier } from '@/lib/declaration-level';
 import { SCORING_STANDARDS, sourceDimensionCodes } from '@/lib/scoring-standards';
 import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
+import { round2 } from '@/lib/rounding';
 
 // 导入事实既包含正向事实，也包含由台账导入的违章扣分事实。
 // 两者都必须进入分表，才能使“特殊事项（扣分）”和最终积分一致。
@@ -223,13 +227,14 @@ export async function batchComputeImportedScores(
   const specialtyByNo = new Map(
     ticketUsers.map((user) => [user.employeeNo!, ticketSpecialtyFromWorkArea(user.branch?.name)]),
   );
+  const ticketRawRows = sumTicketFactsByEmployee(
+    perfFacts.filter((fact) => fact.dimensionCode === 'worksite.ticket-execution'),
+  );
   const ticketNormalized = applyTicketCohortNormalization(
-    perfFacts
-      .filter((fact) => fact.dimensionCode === 'worksite.ticket-execution')
-      .map((fact) => ({
-        employeeNo: fact.employeeNo,
-        cohortKey: specialtyByNo.get(fact.employeeNo) ?? '未分类专业',
-        rawTicketScore: Number(fact.score),
+    ticketRawRows.map((row) => ({
+        employeeNo: row.employeeNo,
+        cohortKey: specialtyByNo.get(row.employeeNo) ?? '未分类专业',
+        rawTicketScore: row.rawTicketScore,
       })),
     'specialty',
   );
@@ -242,12 +247,11 @@ export async function batchComputeImportedScores(
   );
   const ticketTierMaxRaw: Partial<Record<DeclarationTier, number>> = {};
   const ticketUserByNo = new Map(ticketUsers.map((user) => [user.employeeNo!, user]));
-  for (const fact of perfFacts) {
-    if (fact.dimensionCode !== 'worksite.ticket-execution') continue;
-    const user = ticketUserByNo.get(fact.employeeNo);
+  for (const row of ticketRawRows) {
+    const user = ticketUserByNo.get(row.employeeNo);
     const hireDate = user ? effectiveHireDate(user.hireDate, user.profile) : null;
     const tier = hireDate ? levelFromHireDate(hireDate, evaluationCutoffDate(year)) : '一级';
-    ticketTierMaxRaw[tier] = Math.max(ticketTierMaxRaw[tier] ?? 0, Number(fact.score));
+    ticketTierMaxRaw[tier] = Math.max(ticketTierMaxRaw[tier] ?? 0, row.rawTicketScore);
   }
 
   const basicByNo = new Map<string, typeof basicFacts>();
@@ -293,13 +297,16 @@ export async function batchComputeImportedScores(
         eventType: f.eventType,
         metadata: f.metadata,
         sourceFile: f.sourceFile,
+        recordKey: f.recordKey,
+        recordType: f.recordType,
+        recordTitle: f.recordTitle,
+        participationRole: f.participationRole,
+        sourceSheet: f.sourceSheet,
+        sourceRowNo: f.sourceRowNo,
       })),
       ticketCohortMax: ticketByNo.get(no)?.ticketCohortMax,
     });
 
-    const ticketFact = (perfByNo.get(no) ?? []).find(
-      (f) => f.dimensionCode === 'worksite.ticket-execution',
-    );
     const defectFacts = (perfByNo.get(no) ?? []).filter(
       (f) => f.dimensionCode === 'worksite.defect-governance',
     );
@@ -315,7 +322,7 @@ export async function batchComputeImportedScores(
       user.department?.name ?? null,
       effectiveHireDate(user.hireDate, user.profile),
       sheet,
-      ticketFact ? Number(ticketFact.score) : null,
+      ticketByNo.get(no)?.rawTicketScore ?? null,
       defectRaw,
     );
     if (includeSheet) {
@@ -338,10 +345,6 @@ export interface ImportedScoreGroupSummary {
   maxImportedTotal: number;
   withTicketCount: number;
   withDefectCount: number;
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }
 
 /** 按分公司 / 部门汇总导入维度得分 */

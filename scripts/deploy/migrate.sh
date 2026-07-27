@@ -77,7 +77,9 @@ if [[ -z "$REMOTE" ]]; then
   log "  scp ${ARCHIVE}* user@ubuntu:/tmp/"
   log "  ssh user@ubuntu"
   log "  cd /tmp && tar -xzf $(basename "$ARCHIVE") && cd perf-app-deploy-*"
-  log "  sudo ./deploy.sh --server-name <服务器IP>"
+  log "  sudo ./deploy.sh --server-name <服务器公网IP>"
+  log "  # 若附件打不开（ERR_SSL_PROTOCOL_ERROR）:"
+  log "  sudo ./fix-attachments.sh --server-name <服务器公网IP>"
   exit 0
 fi
 

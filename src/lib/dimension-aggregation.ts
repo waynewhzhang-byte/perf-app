@@ -11,14 +11,17 @@ import {
   sourceDimensionCodes,
   type EvaluationDimensionCode,
 } from '@/lib/scoring-standards';
+import { round1 } from '@/lib/rounding';
 
 export type TicketCohortKind = 'declarationLevel' | 'specialty';
 
 const TICKET_CODE = 'worksite.ticket-execution';
 
-export function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
+/**
+ * `round1` 曾经在本模块定义并被多处使用；现已集中到 `@/lib/rounding`。
+ * 此处 re-export 以保持对外签名不变（其他模块可能已从本模块 import）。
+ */
+export { round1 };
 
 /** 按评分标准封顶；无标准或 maxScore≤0 时只做 round1（扣分等） */
 export function capToStandard(dimensionCode: string, rawScore: number): number {
@@ -214,6 +217,22 @@ export interface TicketCohortRow {
   employeeNo: string;
   cohortKey: string;
   rawTicketScore: number;
+}
+
+/** 逐票落库后，归一化前必须先恢复为“每名员工原始总分”。 */
+export function sumTicketFactsByEmployee(
+  facts: Array<{ employeeNo: string; score: unknown }>,
+): Array<{ employeeNo: string; rawTicketScore: number }> {
+  const rawByEmployee = new Map<string, number>();
+  for (const fact of facts) {
+    rawByEmployee.set(
+      fact.employeeNo,
+      Math.round(((rawByEmployee.get(fact.employeeNo) ?? 0) + Number(fact.score)) * 100) / 100,
+    );
+  }
+  return [...rawByEmployee.entries()]
+    .map(([employeeNo, rawTicketScore]) => ({ employeeNo, rawTicketScore }))
+    .sort((a, b) => a.employeeNo.localeCompare(b.employeeNo));
 }
 
 export interface TicketNormalizedRow extends TicketCohortRow {

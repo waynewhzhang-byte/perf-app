@@ -2,7 +2,7 @@
  * 评分规则引擎测试
  *
  * 覆盖三种规则类型：MATRIX（矩阵映射）、SHARE（聚合均分）、NORMALIZE（折算归一）
- * 参考：docs/superpowers/specs/2026-06-13-architecture-decisions.md 原则 7
+ * 参考：docs/adr/README.md（评分与架构决策）
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,6 +67,7 @@ function fact(overrides: Partial<FactInput> = {}): FactInput {
     role: 'FIRST_DISCOVERER',
     eventType: 'DISCOVERY',
     defectLevel: '严重',
+    defectRef: 'D-1',
     sourceFile: 'test.xlsx',
     ...overrides,
   };
@@ -105,12 +106,28 @@ describe('MATRIX (缺陷治理)', () => {
 
   it('同人兼任发现和处理，取高分（tieBreak: MAX_PER_PERSON）', () => {
     const facts = [
-      fact({ employeeNo: 'EMP-001', defectLevel: '危急', role: 'FIRST_DISCOVERER' }),
-      fact({ employeeNo: 'EMP-001', defectLevel: '危急', role: 'CO_HANDLER', eventType: 'REMEDIATION' }),
+      fact({ employeeNo: 'EMP-001', defectRef: 'D-1', defectLevel: '危急', role: 'FIRST_DISCOVERER' }),
+      fact({
+        employeeNo: 'EMP-001',
+        defectRef: 'D-1',
+        defectLevel: '危急',
+        role: 'CO_HANDLER',
+        eventType: 'REMEDIATION',
+      }),
     ];
     const results = computeFactScores(facts, [defRule()]);
     assert.equal(results.length, 1);
     assert.equal(results[0].score, 3);
+  });
+
+  it('同人同等级两条缺陷各自计分（分组含 defectRef）', () => {
+    const facts = [
+      fact({ employeeNo: 'EMP-001', defectRef: 'D-1', defectLevel: '危急', role: 'FIRST_DISCOVERER' }),
+      fact({ employeeNo: 'EMP-001', defectRef: 'D-2', defectLevel: '危急', role: 'FIRST_DISCOVERER' }),
+    ];
+    const results = computeFactScores(facts, [defRule()]);
+    assert.equal(results.length, 2);
+    assert.equal(results.reduce((s, r) => s + r.score, 0), 6);
   });
 
   it('封顶 12 分', () => {

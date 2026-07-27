@@ -2,20 +2,24 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getAppConfig } from '@/lib/app-config';
 import { LogoutButton } from '@/components/logout-button';
+import { HomeNotice } from '@/components/home-notice';
 
 export default async function EmployeeHome() {
   const s = await getSession(false);
   if (!s) redirect('/login');
-  const templates = await prisma.formTemplate.findMany({ where: { status: 'PUBLISHED' } });
-  const subs = await prisma.submission.findMany({
-    where: { userId: s.userId }, include: { template: true },
-  });
-
-  const records = await prisma.performanceRecord.findMany({
-    where: { userId: s.userId },
-    orderBy: { year: 'desc' },
-  });
+  const [templates, subs, records, appConfig] = await Promise.all([
+    prisma.formTemplate.findMany({ where: { status: 'PUBLISHED' } }),
+    prisma.submission.findMany({
+      where: { userId: s.userId }, include: { template: true },
+    }),
+    prisma.performanceRecord.findMany({
+      where: { userId: s.userId },
+      orderBy: { year: 'desc' },
+    }),
+    getAppConfig(),
+  ]);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
@@ -25,6 +29,7 @@ export default async function EmployeeHome() {
           <p className="mt-1.5 text-sm text-slate-500">欢迎，{s.fullName}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Link href="/app/scoring-guide" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">评分规则</Link>
           <Link href="/app/profile" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">个人资料</Link>
           {records.length > 0 && (
             <Link href="/app/records" className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium transition-colors hover:bg-slate-50 cursor-pointer">绩效档案</Link>
@@ -32,6 +37,23 @@ export default async function EmployeeHome() {
           <LogoutButton />
         </div>
       </header>
+
+      <section className="mt-6 rounded-xl border border-primary-200 bg-primary-50 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-primary-900">2026 年绩效计分规则</h2>
+            <p className="mt-1 text-sm leading-6 text-primary-800">
+              申报前请先了解量化积分构成、11 项计分规则及数据来源。填报页可展开查看您的个人积分过程。
+            </p>
+          </div>
+          <Link
+            href="/app/scoring-guide"
+            className="shrink-0 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 cursor-pointer"
+          >
+            查看规则说明
+          </Link>
+        </div>
+      </section>
 
       {records.length > 0 && (
         <section className="mt-6">
@@ -89,11 +111,10 @@ export default async function EmployeeHome() {
               SUBMITTED: { label: '待审核', className: 'bg-blue-50 text-blue-700' },
               L1_APPROVED: { label: '一审通过', className: 'bg-emerald-50 text-emerald-700' },
               L2_APPROVED: { label: '终审通过', className: 'bg-emerald-100 text-emerald-800' },
-              PRE_REVIEW_REJECTED: { label: '预审未通过', className: 'bg-red-50 text-red-700' },
               REJECTED: { label: '已驳回', className: 'bg-amber-50 text-amber-700' },
             };
             const sc = statusConfig[s.status] ?? { label: s.status, className: 'bg-slate-100 text-slate-600' };
-            const isRejected = s.status === 'REJECTED' || s.status === 'PRE_REVIEW_REJECTED';
+            const isRejected = s.status === 'REJECTED';
             return (
               <li key={s.id} className="flex items-center justify-between gap-4 px-5 py-4">
                 <div className="min-w-0">
@@ -120,6 +141,8 @@ export default async function EmployeeHome() {
           })}
         </ul>
       </section>
+
+      <HomeNotice title={appConfig.homeNoticeTitle} body={appConfig.homeNoticeBody} />
     </main>
   );
 }

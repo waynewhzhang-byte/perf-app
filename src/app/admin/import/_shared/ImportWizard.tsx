@@ -13,6 +13,7 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<{ total: number; created: number; updated: number; skipped: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -32,6 +33,7 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
       setRows(parsed.rows);
       setResult(null);
       setPreview(null);
+      setErrorMessage(null);
       setMapping(resolveHeaderMapping(parsed.headers, config.fields));
     };
     if (ext === 'xlsx' || ext === 'xls') {
@@ -47,6 +49,7 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
 
   const runPreview = async () => {
     setBusy(true);
+    setErrorMessage(null);
     try {
       const r = await fetch('/api/admin/import/preview', {
         method: 'POST',
@@ -54,16 +57,22 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
         body: JSON.stringify({ itemCode: config.code, mapping, rows: rows.slice(0, 20) }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { alert('试算失败：' + (d.error || r.status)); setPreview(null); }
-      else setPreview(d.rows ?? []);
+      if (!r.ok) {
+        setErrorMessage('试算失败：' + (d.error || r.status));
+        setPreview(null);
+      } else setPreview(d.rows ?? []);
     } finally {
       setBusy(false);
     }
   };
 
   const doImport = async () => {
-    if (rows.length === 0) { alert('请先选择文件'); return; }
+    if (rows.length === 0) {
+      setErrorMessage('请先选择文件');
+      return;
+    }
     setBusy(true);
+    setErrorMessage(null);
     try {
       const endpoint = config.apiEndpointParams
         && Object.keys(config.apiEndpointParams).length > 0
@@ -78,7 +87,10 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
         }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { alert('导入失败：' + (d.error || r.status)); return; }
+      if (!r.ok) {
+        setErrorMessage('导入失败：' + (d.error || r.status));
+        return;
+      }
       setResult(d);
     } finally {
       setBusy(false);
@@ -86,7 +98,7 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
   };
 
   const reset = () => {
-    setHeaders([]); setRows([]); setResult(null); setPreview(null);
+    setHeaders([]); setRows([]); setResult(null); setPreview(null); setErrorMessage(null);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -96,6 +108,12 @@ export default function ImportWizard({ config, year }: { config: ImportItemConfi
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{config.title}</h1>
       <p className="mt-1 text-sm text-slate-500">{config.description}</p>
       <p className="mt-1 text-xs text-slate-400">{config.dependsOn}</p>
+
+      {errorMessage && (
+        <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </p>
+      )}
 
       {/* 步骤1：上传 */}
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">

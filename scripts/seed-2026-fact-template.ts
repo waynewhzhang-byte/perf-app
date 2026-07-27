@@ -2,18 +2,20 @@
  * 基于《20260716评分标准 对应表.xlsx》生成唯一的 2026 年能级绩效申报模板。
  *
  * 一级维度、二级评分项、满分、事实来源与计分说明均来自
- * performance-dimension-registry.ts；不要在这里另行维护一套维度树。
+ * scoring-standards.ts；不要在这里另行维护一套维度树。
  */
 import { PrismaClient, ScoreMode, TemplateStatus } from '@prisma/client';
 import {
   PERFORMANCE_SECTIONS,
   subDimensionsForSection,
-} from '../src/lib/performance-dimension-registry';
+} from '../src/lib/scoring-standards';
 
 const prisma = new PrismaClient();
 
 const YEAR = 2026;
-const TITLE = '2026年度能级评价申报表（评分标准对应表）';
+const TITLE = '2026 年能级评价量化积分申报表';
+const DESCRIPTION =
+  '国网山西超高压变电公司 2026 年能级评价量化积分申报表全部维度由外部台账导入并按相关评价标准核算计分。请逐项查看系统分值与计算过程；如有异议，请通过页面底部「申诉」提交理由与证明材料；对系统分值无异议请使用「确认报名」。';
 
 type ScoreOption = { optionId: string; label: string; score: number; description?: string };
 
@@ -86,12 +88,12 @@ async function main() {
     data: {
       year: YEAR,
       title: TITLE,
-      description: '本模板严格对应《0.20260716评分标准 对应表.xlsx》。全部绩效维度均由系统带出事实及自动计算分数；员工仅可确认，或提交申诉理由和证明材料。',
+      description: DESCRIPTION,
       headerFields: [
         { key: 'workArea', enabled: false, required: false },
         { key: 'hireDate', enabled: false, required: false },
         { key: 'declarationLevel', enabled: false, required: false },
-        { key: 'declarationSpecialty', enabled: false, required: false },
+        { key: 'declarationSpecialty', enabled: true, required: true },
       ],
       status: TemplateStatus.PUBLISHED,
       publishedAt: new Date(),

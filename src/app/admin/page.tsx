@@ -45,6 +45,7 @@ export default async function AdminHome() {
 
       <nav className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <NavCard href="/admin/notify" title="通知渠道" desc="短信 / 邮件 切换与配置" />
+        <NavCard href="/admin/app-config" title="员工端文案与支持" desc="必读弹窗、填报页电话与首页提示" />
         <NavCard href="/admin/auth" title="登录验证策略" desc="验证码开关与强密码规则" />
         <NavCard href="/admin/organization" title="组织架构" desc="工区 / 部门 / 申报字典" />
         <NavCard href="/admin/scoring" title="绩效算法配置" desc="评分规则与导入维度算法设置" />

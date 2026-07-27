@@ -86,13 +86,18 @@ label vocabulary in `docs/agents/triage-labels.md`.
 
 ## Agent Tooling (CodeGraph)
 
+**Project execution memory:** when you need to read or explore source code,
+prefer CodeGraph (`user-codegraph` → `codegraph_explore` with this repo’s
+`projectPath`) over Grep/Read loops. Native search is for literal text
+(strings, logs, error messages) or after you already have an exact path.
+
 This repo is indexed under `.codegraph/`. Use codegraph for structural
 questions — definitions, callers, callees, impact analysis, and flow tracing.
 Query with concrete symbols: `persistSubmissionDimensionFacts`,
 `SubmissionOptionReview`, `prisma/schema.prisma`.
 
 For whole-project orientation, read `CLAUDE.md`, `GEMINI.md`, and `README.md`
-first. For literal text, logs, or error messages, use native grep (`rg`).
+first. Detailed always-on guidance lives in `.cursor/rules/codegraph.mdc`.
 
 <!-- OPENWIKI:START -->
 

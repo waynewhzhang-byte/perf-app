@@ -40,6 +40,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,7 +48,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
     if (!file) return;
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext !== 'xlsx' && ext !== 'xls') {
-      alert('请上传 Excel 文件（.xlsx / .xls）');
+      setErrorMessage('请上传 Excel 文件（.xlsx / .xls）');
       return;
     }
     const reader = new FileReader();
@@ -59,6 +60,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
       setWork(sheets[WORK_SHEET] ?? { headers: [], rows: [] });
       setPreview(null);
       setResult(null);
+      setErrorMessage(null);
     };
     reader.readAsArrayBuffer(file);
   };
@@ -70,6 +72,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
     setWork(null);
     setPreview(null);
     setResult(null);
+    setErrorMessage(null);
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -79,6 +82,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
   const runPreview = async () => {
     if (!canProceed) return;
     setBusy(true);
+    setErrorMessage(null);
     try {
       const r = await fetch('/api/admin/import/preview', {
         method: 'POST',
@@ -92,7 +96,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        alert('试算失败：' + (d.error || r.status));
+        setErrorMessage('试算失败：' + (d.error || r.status));
         setPreview(null);
         return;
       }
@@ -110,6 +114,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
   const doImport = async () => {
     if (!canProceed) return;
     setBusy(true);
+    setErrorMessage(null);
     try {
       const r = await fetch('/api/admin/import/tickets', {
         method: 'POST',
@@ -123,7 +128,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        alert('导入失败：' + (d.error || r.status));
+        setErrorMessage('导入失败：' + (d.error || r.status));
         return;
       }
       setResult({
@@ -145,9 +150,15 @@ export default function TicketImportWizard({ year }: { year: number }) {
       </Link>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">两票执行</h1>
       <p className="mt-1 text-sm text-slate-500">
-        上传《工作现场-两票执行》.xlsx，分别读取「操作票」「工作票」两个工作表，按积分表 3.1 规则聚合每人<strong>原始分</strong>并入库；折算为维度得分在最终汇总阶段完成。
+        上传《工作现场-两票执行》.xlsx，分别读取「操作票」「工作票」两个工作表，按积分表 3.1 规则逐票保留员工参与事实并汇总<strong>原始分</strong>；折算为维度得分在最终汇总阶段完成。
       </p>
       <p className="mt-1 text-xs text-slate-400">依赖员工档案名册 · 能级可先在 profile 中写入 mockDeclarationTier 模拟</p>
+
+      {errorMessage && (
+        <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </p>
+      )}
 
       {/* 计分规则对照 */}
       <section className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-5">
@@ -284,7 +295,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
           </button>
           {result && (
             <p className="mt-3 text-sm text-emerald-700">
-              聚合 {result.total} 人 · 写入 {result.created} 条 · 替换旧记录 {result.deleted} 条
+              聚合 {result.total} 人 · 写入逐票事实 {result.created} 条 · 替换旧记录 {result.deleted} 条
               {result.unmatchedTotal > 0 && ` · 未匹配姓名 ${result.unmatchedTotal} 个`}
             </p>
           )}

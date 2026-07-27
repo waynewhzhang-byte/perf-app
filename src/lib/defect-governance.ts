@@ -1,5 +1,13 @@
-import { DEFECT_LIBRARY_DIMENSION } from '@/lib/performance-dimension-registry';
-import { type EvaluationDimensionCode } from '@/lib/scoring-standards';
+import {
+  DEFECT_LIBRARY_DIMENSION,
+  type EvaluationDimensionCode,
+} from '@/lib/scoring-standards';
+import {
+  computeFactScores,
+  type FactInput,
+  type ScoringRule,
+} from '@/lib/scoring-engine';
+import { round2 } from '@/lib/rounding';
 
 export type DefectLevel = '危急' | '严重' | '一般';
 
@@ -83,22 +91,38 @@ export interface DefectImportResult {
   unmatchedNames: { name: string; occurrences: number; sampleDefectRefs: string[] }[];
 }
 
-/** 角色 × 缺陷等级 → 单价（来自 ScoringRule.config.matrix，默认值与《2025量化积分表》一致） */
-export type DefectScoreMatrix = Record<
+const DIMENSION_CODE = DEFECT_LIBRARY_DIMENSION.code;
+const DIMENSION_TITLE = DEFECT_LIBRARY_DIMENSION.title;
+const DIMENSION_CAP = DEFECT_LIBRARY_DIMENSION.maxScore;
+
+/**
+ * 测试用默认矩阵（与 defaultScoringRuleConfigs 的 defect 配置一致）。
+ * 生产 / scripts 一律从 DB `ScoringRule` 传入；勿在运行时当回退源。
+ */
+export const DEFAULT_DEFECT_SCORE_MATRIX: Record<
   DefectLevel,
   Partial<Record<DefectFactRole, number>>
->;
-
-/** 默认矩阵（DB 无规则时回退；与 defaultScoringRuleConfigs 的 defect 配置一致） */
-export const DEFAULT_DEFECT_SCORE_MATRIX: DefectScoreMatrix = {
+> = {
   危急: { FIRST_DISCOVERER: 3, CO_DISCOVERER: 1, FIRST_HANDLER: 3, CO_HANDLER: 1 },
   严重: { FIRST_DISCOVERER: 1, CO_DISCOVERER: 0.5, FIRST_HANDLER: 1, CO_HANDLER: 0.5 },
   一般: { FIRST_DISCOVERER: 0.5, FIRST_HANDLER: 0.5 },
 };
 
-const DIMENSION_CODE = DEFECT_LIBRARY_DIMENSION.code;
-const DIMENSION_TITLE = DEFECT_LIBRARY_DIMENSION.title;
-const DIMENSION_CAP = DEFECT_LIBRARY_DIMENSION.maxScore;
+/** 测试用 ScoringRule fixture（生产请 load DB） */
+export function defectScoringRuleFixture(
+  overrides: Partial<ScoringRule> = {},
+): ScoringRule {
+  return {
+    id: 'fixture-defect',
+    dimensionCode: DIMENSION_CODE,
+    ruleType: 'MATRIX',
+    cap: DIMENSION_CAP,
+    enabled: true,
+    matrix: DEFAULT_DEFECT_SCORE_MATRIX as Record<string, Record<string, number>>,
+    tieBreak: 'MAX_PER_PERSON',
+    ...overrides,
+  };
+}
 
 export function parsePersonList(raw: string | number | null | undefined): string[] {
   if (raw == null) return [];
@@ -127,17 +151,12 @@ function normalizeLevel(raw: string | number | null | undefined): DefectLevel | 
   return null;
 }
 
+/** 角色分拆（不计分；共同人是否得分由引擎按矩阵决定） */
 function roleLines(
   people: string[],
-  level: DefectLevel,
   kind: 'discover' | 'handle',
-  matrix: DefectScoreMatrix,
-): { role: DefectFactRole; name: string; score: number; personIndex: number; isCollaborative: boolean }[] {
+): { role: DefectFactRole; name: string; personIndex: number; isCollaborative: boolean }[] {
   if (people.length === 0) return [];
-  const levelMatrix = matrix[level] ?? {};
-  // 共同人是否计分：该等级为共同发现/处理人配置了正分才产出
-  const coDiscovererScore = levelMatrix.CO_DISCOVERER ?? 0;
-  const coHandlerScore = levelMatrix.CO_HANDLER ?? 0;
   const [first, ...rest] = people;
   const lines: ReturnType<typeof roleLines> = [];
 
@@ -145,15 +164,13 @@ function roleLines(
     lines.push({
       role: 'FIRST_DISCOVERER',
       name: first,
-      score: levelMatrix.FIRST_DISCOVERER ?? 0,
       personIndex: 0,
       isCollaborative: false,
     });
-    if (coDiscovererScore > 0 && rest[0]) {
+    if (rest[0]) {
       lines.push({
         role: 'CO_DISCOVERER',
         name: rest[0],
-        score: coDiscovererScore,
         personIndex: 1,
         isCollaborative: true,
       });
@@ -162,15 +179,13 @@ function roleLines(
     lines.push({
       role: 'FIRST_HANDLER',
       name: first,
-      score: levelMatrix.FIRST_HANDLER ?? 0,
       personIndex: 0,
       isCollaborative: false,
     });
-    if (coHandlerScore > 0 && rest[0]) {
+    if (rest[0]) {
       lines.push({
         role: 'CO_HANDLER',
         name: rest[0],
-        score: coHandlerScore,
         personIndex: 1,
         isCollaborative: true,
       });
@@ -197,7 +212,6 @@ function isRemediated(status: string | number | null | undefined, allowed: strin
 type ProvisionalDefectLine = {
   role: DefectFactRole;
   name: string;
-  score: number;
   eventType: 'DISCOVERY' | 'REMEDIATION';
   eventDate: string | null;
   personIndex: number;
@@ -205,26 +219,20 @@ type ProvisionalDefectLine = {
   rawPersonField: string;
 };
 
-/** 同一缺陷、同一人兼发现与处理：只保留较高分的一条事实 */
-function dedupeSamePersonOnDefect(lines: ProvisionalDefectLine[]): ProvisionalDefectLine[] {
-  const byName = new Map<string, (typeof lines)[number]>();
-  for (const line of lines) {
-    const prev = byName.get(line.name);
-    if (!prev || line.score > prev.score) byName.set(line.name, line);
-  }
-  return [...byName.values()];
-}
-
 export interface NameResolver {
   resolve(name: string): { employeeNo: string; employeeName: string } | null;
 }
 
+/**
+ * Excel 问题清单 → 缺陷事实。
+ * 解析/姓名分拆在本模块；计分一律走 `computeFactScores`（MATRIX）。
+ */
 export function buildFactsFromDefectRows(
   rows: DefectRow[],
   year: number,
   resolveName: NameResolver,
   options: DefectImportOptions = {},
-  scoreMatrix: DefectScoreMatrix = DEFAULT_DEFECT_SCORE_MATRIX,
+  scoringRule: ScoringRule = defectScoringRuleFixture(),
 ): Omit<DefectImportResult, 'dimension' | 'filterNote' | 'unmatchedNames'> & {
   unmatchedNameMap: Map<string, { count: number; refs: Set<string> }>;
   rowsSkippedCategory: number;
@@ -232,11 +240,12 @@ export function buildFactsFromDefectRows(
   const requireDefectCategory = options.requireDefectCategory !== false;
   const remediatedStatuses = options.remediatedStatuses ?? ['已消除', '已闭环'];
 
-  const facts: DefectFactLine[] = [];
   const unmatchedNameMap = new Map<string, { count: number; refs: Set<string> }>();
   let rowsWithDiscoveryCredit = 0;
   let rowsWithRemediationCredit = 0;
   let rowsSkippedCategory = 0;
+
+  const inputs: FactInput[] = [];
 
   for (const row of rows) {
     if (!isDefectCategory(row, requireDefectCategory)) {
@@ -259,7 +268,7 @@ export function buildFactsFromDefectRows(
 
     if (discoveryYear === year && discoverers.length > 0) {
       rowsWithDiscoveryCredit += 1;
-      for (const line of roleLines(discoverers, level, 'discover', scoreMatrix)) {
+      for (const line of roleLines(discoverers, 'discover')) {
         provisional.push({
           ...line,
           eventType: 'DISCOVERY',
@@ -275,7 +284,7 @@ export function buildFactsFromDefectRows(
       isRemediated(row.问题状态, remediatedStatuses)
     ) {
       rowsWithRemediationCredit += 1;
-      for (const line of roleLines(handlers, level, 'handle', scoreMatrix)) {
+      for (const line of roleLines(handlers, 'handle')) {
         provisional.push({
           ...line,
           eventType: 'REMEDIATION',
@@ -285,8 +294,8 @@ export function buildFactsFromDefectRows(
       }
     }
 
-    const deduped = dedupeSamePersonOnDefect(provisional);
-    for (const line of deduped) {
+    // 同人兼发现/处理：不在此去重，交给 MATRIX 按 emp|defectRef|level 取高分
+    for (const line of provisional) {
       const resolved = resolveName.resolve(line.name);
       if (!resolved) {
         const bucket = unmatchedNameMap.get(line.name) ?? { count: 0, refs: new Set<string>() };
@@ -296,18 +305,16 @@ export function buildFactsFromDefectRows(
         continue;
       }
 
-      facts.push({
-        dimensionCode: DIMENSION_CODE,
-        dimensionTitle: DIMENSION_TITLE,
-        year,
+      inputs.push({
         employeeNo: resolved.employeeNo,
         employeeName: resolved.employeeName,
+        dimensionCode: DIMENSION_CODE,
         role: line.role,
-        score: line.score,
-        defectRef,
-        defectLevel: level,
         eventType: line.eventType,
-        eventDate: line.eventDate,
+        defectLevel: level,
+        defectRef,
+        eventDate: line.eventDate ?? undefined,
+        sourceFile: 'defect-governance',
         metadata: {
           substation: row.变电站 != null ? String(row.变电站) : null,
           description: row.问题描述 != null ? String(row.问题描述) : null,
@@ -317,10 +324,42 @@ export function buildFactsFromDefectRows(
           rawPersonField: line.rawPersonField || null,
           personIndex: line.personIndex,
           category: row.所属类别 != null ? String(row.所属类别) : null,
+          sourceData: Object.fromEntries(
+            Object.entries(row).map(([key, value]) => [key, value == null ? '' : String(value)]),
+          ),
         },
       });
     }
   }
+
+  const scored = computeFactScores(inputs, [scoringRule]);
+
+  const facts: DefectFactLine[] = scored.map((f) => {
+    const meta = (f.metadata ?? {}) as DefectFactLine['metadata'];
+    return {
+      dimensionCode: DIMENSION_CODE,
+      dimensionTitle: DIMENSION_TITLE,
+      year,
+      employeeNo: f.employeeNo,
+      employeeName: f.employeeName,
+      role: f.role as DefectFactRole,
+      score: f.score,
+      defectRef: f.defectRef ?? '',
+      defectLevel: (f.defectLevel ?? '') as DefectLevel,
+      eventType: f.eventType,
+      eventDate: f.eventDate ?? null,
+      metadata: {
+        substation: meta.substation ?? null,
+        description: meta.description ?? null,
+        responsibleUnit: meta.responsibleUnit ?? null,
+        status: meta.status ?? null,
+        isCollaborative: Boolean(meta.isCollaborative),
+        rawPersonField: meta.rawPersonField ?? null,
+        personIndex: typeof meta.personIndex === 'number' ? meta.personIndex : 0,
+        category: meta.category ?? null,
+      },
+    };
+  });
 
   const byEmployeeMap = new Map<string, EmployeeDimensionAggregate>();
   for (const fact of facts) {
@@ -370,9 +409,9 @@ export function importDefectGovernanceFacts(
   year: number,
   resolveName: NameResolver,
   options: DefectImportOptions = {},
-  scoreMatrix: DefectScoreMatrix = DEFAULT_DEFECT_SCORE_MATRIX,
+  scoringRule: ScoringRule = defectScoringRuleFixture(),
 ): DefectImportResult {
-  const partial = buildFactsFromDefectRows(rows, year, resolveName, options, scoreMatrix);
+  const partial = buildFactsFromDefectRows(rows, year, resolveName, options, scoringRule);
   const unmatchedNames = [...partial.unmatchedNameMap.entries()]
     .map(([name, v]) => ({
       name,
@@ -392,7 +431,8 @@ export function importDefectGovernanceFacts(
       `评价年度 ${year}：发现类按「发现时间」年份；处理类按「消除/消缺时间」年份且状态为已消除/已闭环。` +
       categoryNote +
       `发现 ${partial.rowsWithDiscoveryCredit} 条、处理 ${partial.rowsWithRemediationCredit} 条计入 ${year} 年。` +
-      `人员字段含多人时用逗号/顿号分拆，共同发现/处理限 1 人并标记 isCollaborative。`,
+      `人员字段含多人时用逗号/顿号分拆，共同发现/处理限 1 人并标记 isCollaborative。` +
+      `计分经 scoring-engine MATRIX（分组键含 defectRef）。`,
     totalDefectRows: partial.totalDefectRows,
     rowsWithDiscoveryCredit: partial.rowsWithDiscoveryCredit,
     rowsWithRemediationCredit: partial.rowsWithRemediationCredit,
@@ -400,8 +440,4 @@ export function importDefectGovernanceFacts(
     byEmployee: partial.byEmployee,
     unmatchedNames,
   };
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }

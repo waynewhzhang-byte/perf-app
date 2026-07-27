@@ -11,7 +11,12 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import type { PerformanceFactSeed } from '@/lib/performance-fact-repository';
-import { persistSeedsByDimension, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
+import {
+  persistSeedsBySource,
+  cellStr,
+  sourceRowNoOf,
+  type SeedBasedImportResult,
+} from '@/lib/fact-import-common';
 
 export type ViolationLevel = 'severe' | 'general';
 export type ViolationRole = 'direct' | 'joint';
@@ -57,7 +62,7 @@ export function buildViolationSeeds(
   year: number,
 ): PerformanceFactSeed[] {
   const seeds: PerformanceFactSeed[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const employeeNo = cellStr(row[mapping.employeeNo]);
     if (!employeeNo) continue;
     const employeeName = mapping.employeeName ? cellStr(row[mapping.employeeName]) : employeeNo;
@@ -70,6 +75,8 @@ export function buildViolationSeeds(
     const score = VIOLATION_SCORES[level][role];
     const dim = VIOLATION_DIMENSION[level];
 
+    const sourceRowNo = sourceRowNoOf(row, rowIndex + 2);
+    const recordKey = `violation:row${sourceRowNo}:${employeeNo}:${level}:${description || '未描述'}`.slice(0, 200);
     seeds.push({
       year,
       employeeNo,
@@ -80,15 +87,21 @@ export function buildViolationSeeds(
       eventType: 'REMEDIATION',
       score,
       // defectRef 含描述+工号 避免多次违章被合并
-      defectRef: `violation:${level}:${description || '未描述'}:${employeeNo}`.slice(0, 200),
+      defectRef: recordKey,
       defectLevel: level === 'severe' ? '危急' : '一般',
       eventDate: mapping.eventDate ? cellStr(row[mapping.eventDate]) || null : null,
+      recordKey,
+      recordType: 'VIOLATION',
+      recordTitle: description || dim.title,
+      participationRole: roleStr || (role === 'direct' ? '直接责任人' : '连带责任人'),
+      sourceRowNo,
       metadata: {
         level,
         levelRaw: levelStr || null,
         role,
         roleRaw: roleStr || null,
         description: description || null,
+        sourceData: row,
       },
     });
   }
@@ -102,7 +115,24 @@ export async function importViolationFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: ViolationFieldMapping,
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<{ byDimension: Record<string, SeedBasedImportResult>; total: number }> {
   const seeds = buildViolationSeeds(rows, mapping, year);
-  return persistSeedsByDimension(prisma, { year, sourceFile }, seeds);
+  const dimensions = ['special.violation-severe', 'special.violation-general'] as const;
+  const byDimension: Record<string, SeedBasedImportResult> = {};
+  let total = 0;
+  for (const dimensionCode of dimensions) {
+    const result = await persistSeedsBySource(
+      prisma,
+      { year, dimensionCode, sourceFile, ...options },
+      seeds.filter((seed) => seed.dimensionCode === dimensionCode),
+    );
+    byDimension[dimensionCode] = result;
+    total += result.total;
+  }
+  return { byDimension, total };
 }

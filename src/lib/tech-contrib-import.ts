@@ -21,7 +21,12 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import type { PerformanceFactSeed } from '@/lib/performance-fact-repository';
-import { persistSeedsBySource, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
+import {
+  persistSeedsBySource,
+  cellStr,
+  sourceRowNoOf,
+  type SeedBasedImportResult,
+} from '@/lib/fact-import-common';
 
 /** 三类技术贡献子维度配置 */
 export interface TechContribKind {
@@ -78,14 +83,15 @@ export function buildTechContribSeeds(
   year: number,
 ): PerformanceFactSeed[] {
   const seeds: PerformanceFactSeed[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const employeeNo = cellStr(row[mapping.employeeNo]);
     if (!employeeNo) continue;
     const employeeName = mapping.employeeName ? cellStr(row[mapping.employeeName]) : employeeNo;
     const projectName = mapping.projectName ? cellStr(row[mapping.projectName]) : '';
     const role = mapping.role ? cellStr(row[mapping.role]) : '';
-    // defectRef 包含项目名 + 工号，避免同一员工不同项目被 dedupeSeeds 合并（B1 根因）
-    const defectRef = `tech:${kind.dimensionCode}:${projectName || '未命名'}:${employeeNo}`.slice(0, 200);
+    // 源行号区分同一员工在同一项目中多次、不同批次的真实参与记录。
+    const sourceRowNo = sourceRowNoOf(row, rowIndex + 2);
+    const defectRef = `tech:row${sourceRowNo}:${employeeNo}:${kind.dimensionCode}:${projectName || '未命名'}`.slice(0, 200);
     seeds.push({
       year,
       employeeNo,
@@ -98,9 +104,15 @@ export function buildTechContribSeeds(
       defectRef,
       defectLevel: '',
       eventDate: null,
+      recordKey: defectRef,
+      recordType: 'TECHNICAL_CONTRIBUTION',
+      recordTitle: projectName || kind.dimensionTitle,
+      participationRole: role || null,
+      sourceRowNo,
       metadata: {
         projectName: projectName || null,
         role: role || null,
+        sourceData: row,
       },
     });
   }
@@ -115,7 +127,11 @@ export async function importTechContribFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: TechContribFieldMapping,
-  options: { replaceAcrossSourceFiles?: boolean } = {},
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<SeedBasedImportResult> {
   const kind = TECH_CONTRIB_KINDS[kindKey];
   if (!kind) throw new Error(`未知技术贡献类别: ${kindKey}`);

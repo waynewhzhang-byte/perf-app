@@ -287,7 +287,7 @@ export default function ExportPage() {
           </label>
 
           <label className="block text-sm">
-            <span className="font-medium text-slate-600">工区</span>
+            <span className="font-medium text-slate-600">单位</span>
             <select
               value={branchId}
               onChange={(e) => setBranchId(e.target.value)}
@@ -321,7 +321,7 @@ export default function ExportPage() {
           </label>
 
           <label className="block text-sm sm:col-span-2">
-            <span className="font-medium text-slate-600">能级评价专业</span>
+            <span className="font-medium text-slate-600">申报专业</span>
             <select
               value={declarationSpecialtyId}
               onChange={(e) => setDeclarationSpecialtyId(e.target.value)}

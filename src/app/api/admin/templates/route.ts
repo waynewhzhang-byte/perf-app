@@ -8,7 +8,7 @@ import { requireAdmin } from '@/lib/auth';
 import { ensureScoreOptionIds } from '@/lib/form-options';
 import {
   isSubDimensionInSection,
-} from '@/lib/performance-dimension-registry';
+} from '@/lib/scoring-standards';
 
 // ---- Validation schemas ----
 
@@ -214,6 +214,12 @@ export async function PUT(req: Request) {
     if (existing.status === 'ARCHIVED') {
       return NextResponse.json({ error: '已归档模板不可编辑' }, { status: 409 });
     }
+    if (existing.status === 'PUBLISHED') {
+      return NextResponse.json({
+        error: '已发布模板不可修改内容。如需调整，请「复制为草稿」创建新版本后再编辑。',
+        code: 'PUBLISHED_IMMUTABLE',
+      }, { status: 409 });
+    }
     if (existing._count.submissions > 0) {
       return NextResponse.json({
         error: '该模板已有员工申报，无法直接修改结构。请使用「复制为草稿」创建新版本后再编辑。',
@@ -250,8 +256,7 @@ export async function PUT(req: Request) {
 /**
  * Text-only revision: fix typos in titles/descriptions/hints/option labels
  * WITHOUT touching structure (no add/remove of sections/items/options) or scores.
- * Allowed on PUBLISHED templates even with submissions — archived snapshots in
- * PerformanceRecord are independent copies and remain unchanged.
+ * Only allowed on DRAFT templates — PUBLISHED/ARCHIVED content is immutable.
  */
 async function handleTextEdit(body: unknown) {
   const parsed = TextEditSchema.safeParse(body);
@@ -269,6 +274,12 @@ async function handleTextEdit(body: unknown) {
   }
   if (existing.status === 'ARCHIVED') {
     return NextResponse.json({ error: '已归档模板不可编辑' }, { status: 409 });
+  }
+  if (existing.status === 'PUBLISHED') {
+    return NextResponse.json({
+      error: '已发布模板不可修改内容（含文字修订）。如需调整，请「复制为草稿」创建新版本后再编辑。',
+      code: 'PUBLISHED_IMMUTABLE',
+    }, { status: 409 });
   }
 
   // 结构必须完全一致：章节、申报项、分值档次数量与 id 都不可变
@@ -423,6 +434,12 @@ export async function DELETE(req: Request) {
     });
     if (!existing) {
       return NextResponse.json({ error: '模板不存在' }, { status: 404 });
+    }
+    if (existing.status === 'PUBLISHED' || existing.status === 'ARCHIVED') {
+      return NextResponse.json({
+        error: '已发布/已归档模板不可删除。请先归档后保留历史，或「复制为草稿」创建新版本。',
+        code: 'PUBLISHED_IMMUTABLE',
+      }, { status: 409 });
     }
     if (existing._count.submissions > 0) {
       return NextResponse.json({

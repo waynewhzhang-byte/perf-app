@@ -33,3 +33,6 @@ openwiki/
 # Generated reports (regenerable via pnpm generate:quantitative-report)
 data/generated/*.xlsx
 data/generated/*.json
+
+# Local MinIO object store (dev only)
+minio-data/

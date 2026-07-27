@@ -1,240 +1,276 @@
 'use client';
-// 审核工作台
-import { useEffect, useMemo, useState } from 'react';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LogoutButton } from '@/components/logout-button';
 
-interface Att { id: string; filename: string; mimeType?: string | null }
-type ViewKind = 'image' | 'pdf' | 'other';
-interface AttachmentPreview {
+interface AppealAttachment {
+  id: string;
   filename: string;
-  viewUrl: string;
-  kind: ViewKind;
+  mimeType?: string | null;
 }
-interface SubItem {
+
+interface SelectOption {
   id: string;
-  item: { title: string; hint?: string; requireAttachment: boolean; sectionId?: string };
-  selected: { optionId?: string; label: string; score: number; count?: number }[];
-  content?: string;
-  score: string | number;
-  status: string;
-  attachments: Att[];
-  optionReviews: OptionReview[];
-  // 系统填充项 + 申诉
-  isSystemFilled?: boolean;
-  confirmationStatus?: 'CONFIRMED' | 'DISPUTED' | null;
-  disputeReason?: string | null;
-  disputeL1Result?: 'APPROVED' | 'REJECTED' | null;
-  disputeL1Note?: string | null;
-  disputeL2Result?: 'APPROVED' | 'REJECTED' | null;
-  disputeL2Note?: string | null;
-  overrideScore?: number | string | null;
-  overrideReason?: string | null;
+  name: string;
+  branchId?: string;
 }
-interface OptionReview {
-  id: string;
-  optionId: string;
-  label: string;
-  score: string | number;
-  count?: number | null;
-  status: string;
-  rejectReason?: string | null;
-  department?: { id: string; name: string } | null;
-}
-interface ReviewLogEntry {
-  id: string;
-  reviewerId: string;
-  level: number;
-  action: string;
-  note?: string | null;
-  createdAt: string;
-  submissionItemId?: string | null;
-}
-interface Submission {
-  id: string; totalScore: string | number; status: string; submittedAt?: string;
-  workAreaName?: string | null; hireDate?: string | null; workYears?: number | null;
-  declarationLevelName?: string | null; declarationSpecialtyName?: string | null;
-  preReviewPassed?: boolean | null; preReviewMessages?: string[] | null;
-  user: { fullName: string; contact: string; employeeNo?: string };
-  items: SubItem[];
-  logs?: ReviewLogEntry[];
+
+interface AppealReviewRow {
+  submissionItemId: string;
+  submissionId: string;
+  employeeNo: string;
+  employeeName: string;
+  contact: string;
+  unitName: string;
+  workAreaName: string | null;
+  departmentName: string | null;
+  declarationSpecialtyId: string | null;
+  declarationSpecialtyName: string | null;
+  itemTitle: string;
+  systemScore: number;
+  disputeReason: string | null;
+  disputeClaimedScore: number | null;
+  attachments: AppealAttachment[];
+  auditLabel?: '确认' | '驳回';
 }
 
 type Tab = 'pending' | 'completed';
+type ViewKind = 'image' | 'pdf' | 'other';
+
+interface RowDecision {
+  disputeAction: 'APPROVE' | 'REJECT';
+  disputeNote?: string;
+}
+
+const defaultDecision = (): RowDecision => ({ disputeAction: 'APPROVE' });
 
 export default function ReviewPage() {
   const [tab, setTab] = useState<Tab>('pending');
-  const [level, setLevel] = useState<number>(1);
-  const [list, setList] = useState<Submission[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [decisions, setDecisions] = useState<Record<string, { action: 'APPROVE' | 'REJECT'; note?: string; disputeAction?: 'APPROVE' | 'REJECT'; disputeNote?: string }>>({});
+  const [level, setLevel] = useState<1 | 2>(1);
+  const [availableLevels, setAvailableLevels] = useState<Array<1 | 2>>([1]);
+  const [rows, setRows] = useState<AppealReviewRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [itemTitle, setItemTitle] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [branchId, setBranchId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [declarationSpecialtyId, setDeclarationSpecialtyId] = useState('');
+  const [branches, setBranches] = useState<SelectOption[]>([]);
+  const [departments, setDepartments] = useState<SelectOption[]>([]);
+  const [declarationSpecialties, setDeclarationSpecialties] = useState<SelectOption[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [decisions, setDecisions] = useState<Record<string, RowDecision>>({});
+  const [batchRejectNote, setBatchRejectNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const [preview, setPreview] = useState<AttachmentPreview | null>(null);
+  const [preview, setPreview] = useState<{ filename: string; viewUrl: string; kind: ViewKind } | null>(null);
   const [openingAttId, setOpeningAttId] = useState<string | null>(null);
+
+  const load = useCallback(async (nextTab: Tab = tab, nextLevel: 1 | 2 = level) => {
+    const params = new URLSearchParams();
+    params.set('level', String(nextLevel));
+    if (nextTab === 'completed') params.set('filter', 'completed');
+    if (itemTitle.trim()) params.set('itemTitle', itemTitle.trim());
+    if (keyword.trim()) params.set('keyword', keyword.trim());
+    if (branchId) params.set('branchId', branchId);
+    if (departmentId) params.set('departmentId', departmentId);
+    if (declarationSpecialtyId) params.set('declarationSpecialtyId', declarationSpecialtyId);
+    const r = await fetch(`/api/review?${params}`);
+    const d = await r.json();
+    setRows(d.appealRows ?? []);
+    setTotal(d.total ?? 0);
+    setLevel(d.level ?? nextLevel);
+    setAvailableLevels(d.availableLevels ?? [d.level ?? nextLevel]);
+    setBranches(d.branches ?? []);
+    setDepartments(d.departments ?? []);
+    setDeclarationSpecialties(d.declarationSpecialties ?? []);
+    setSelected(new Set());
+    setDecisions({});
+    setBatchRejectNote('');
+  }, [tab, level, itemTitle, keyword, branchId, departmentId, declarationSpecialtyId]);
+
+  // 仅 tab 切换时自动拉取；关键字/申诉项筛选由「筛选」按钮触发，避免输入时清空勾选。
+  useEffect(() => {
+    void load(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: do not reload on every keyword keystroke
+  }, [tab]);
+
+  const itemTitleOptions = useMemo(
+    () => Array.from(new Set(rows.map((row) => row.itemTitle))).sort(),
+    [rows],
+  );
+
+  const filteredDepartments = useMemo(
+    () => (branchId ? departments.filter((d) => d.branchId === branchId) : departments),
+    [departments, branchId],
+  );
+
+  const setDec = (id: string, patch: Partial<RowDecision>) => {
+    setDecisions((prev) => {
+      const current = prev[id] ?? defaultDecision();
+      return { ...prev, [id]: { ...current, ...patch } };
+    });
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === rows.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(rows.map((row) => row.submissionItemId)));
+    }
+  };
 
   const openAttachment = async (attId: string) => {
     setOpeningAttId(attId);
     try {
-      const r = await fetch(`/api/attachments/${attId}/view`);
+      const r = await fetch(`/api/attachments/${attId}/view`, { credentials: 'include' });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { alert(d.error || '无法打开附件'); return; }
       if (!d.viewUrl) { alert('无法获取附件地址'); return; }
-      // 非图片/PDF：新窗口打开预签名 URL（与弹窗预览同源，避免 redirect 二次跳转）
       if (d.kind === 'other') {
         window.open(d.viewUrl, '_blank', 'noopener,noreferrer');
         return;
       }
-      setPreview({
-        filename: d.filename ?? '附件',
-        viewUrl: d.viewUrl,
-        kind: d.kind as ViewKind,
-      });
-    } finally { setOpeningAttId(null); }
-  };
-
-  const load = async (filter?: string) => {
-    const url = filter ? `/api/review?filter=${filter}` : '/api/review';
-    const r = await fetch(url); const d = await r.json();
-    setList(d.submissions ?? []); setLevel(d.level ?? 1);
-    if (d.submissions?.[0]) setActiveId(d.submissions[0].id); else setActiveId(null);
-  };
-
-  useEffect(() => { load(); }, []);
-
-  const switchTab = (t: Tab) => {
-    setTab(t);
-    setDecisions({});
-    if (t === 'completed') load('completed'); else load();
-  };
-
-  const active = list.find((s) => s.id === activeId) || null;
-
-  const setDec = (key: string, patch: Partial<{ action: 'APPROVE' | 'REJECT'; note: string; disputeAction: 'APPROVE' | 'REJECT'; disputeNote: string }>) =>
-    setDecisions((prev) => ({ ...prev, [key]: { ...(prev[key] ?? { action: 'APPROVE' }), ...patch } }));
-
-  const pendingOptionReviews = (submission: Submission) =>
-    submission.items.flatMap((item) =>
-      (item.optionReviews ?? [])
-        .filter((review) => review.status === 'PENDING_L2')
-        .map((review) => ({ ...review, submissionItemId: item.id, item })),
-    );
-
-  const submit = async () => {
-    if (!active) return;
-    const pendingItems = active.items.filter((it) => it.status === 'PENDING_L1');
-    const pendingOptions = pendingOptionReviews(active);
-    const pendingDisputes = active.items.filter(
-      (it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED' && !it.disputeL2Result,
-    );
-    if (level === 2 && pendingOptions.length === 0 && pendingDisputes.length === 0) {
-      alert('当前没有待处理的二审子项或申诉');
-      return;
+      setPreview({ filename: d.filename ?? '附件', viewUrl: d.viewUrl, kind: d.kind as ViewKind });
+    } finally {
+      setOpeningAttId(null);
     }
-    const decs = level === 1
-      ? pendingItems.map((it) => {
-          const d = decisions[it.id];
-          const base = {
-            submissionItemId: it.id,
-            action: d?.action ?? 'APPROVE',
-            note: d?.note,
-          };
-          // 申诉判断：对系统填充+申诉中的项附加 disputeAction
-          if (it.isSystemFilled && it.confirmationStatus === 'DISPUTED') {
-            return { ...base, disputeAction: d?.disputeAction ?? 'APPROVE', disputeNote: d?.disputeNote };
-          }
-          return base;
-        })
-      : [
-          // L2 普通审核：按 optionReviewId
-          ...pendingOptions.map((review) => ({
-            optionReviewId: review.id,
-            action: decisions[review.id]?.action ?? 'APPROVE',
-            note: decisions[review.id]?.note,
-          })),
-          // L2 申诉确认：按 submissionItemId
-          ...active.items
-            .filter((it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED' && !it.disputeL2Result)
-            .map((it) => ({
-              submissionItemId: it.id,
-              action: 'APPROVE' as const,
-              disputeAction: decisions[it.id]?.disputeAction ?? 'APPROVE',
-              disputeNote: decisions[it.id]?.disputeNote,
-            })),
-        ];
-    const missingNote = decs.find((d) => d.action === 'REJECT' && !d.note?.trim());
-    if (missingNote) { alert('驳回的项必须填写原因'); return; }
+  };
+
+  /** UI 只暴露申诉「确认/驳回」；L1 的项级 action 与之同步，以兼容现有后端。 */
+  const buildDecisionForRow = (row: AppealReviewRow, dec: RowDecision) => {
+    const disputeAction = dec.disputeAction ?? 'APPROVE';
+    const disputeNote = disputeAction === 'REJECT' ? dec.disputeNote : undefined;
+    if (level === 1) {
+      return {
+        submissionItemId: row.submissionItemId,
+        action: disputeAction,
+        note: disputeNote,
+        disputeAction,
+        disputeNote,
+      };
+    }
+    return {
+      submissionItemId: row.submissionItemId,
+      action: 'APPROVE' as const,
+      disputeAction,
+      disputeNote,
+    };
+  };
+
+  const submitBatches = async (
+    targetRows: AppealReviewRow[],
+    decisionOverride?: Record<string, RowDecision>,
+  ) => {
+    if (targetRows.length === 0) return;
+    const decisionMap = decisionOverride ?? decisions;
+    for (const row of targetRows) {
+      const dec = decisionMap[row.submissionItemId] ?? defaultDecision();
+      if (dec.disputeAction === 'REJECT' && !dec.disputeNote?.trim()) {
+        alert(`请填写「${row.itemTitle}」的申诉驳回原因`);
+        return;
+      }
+    }
+
+    const bySubmission = new Map<string, AppealReviewRow[]>();
+    for (const row of targetRows) {
+      const list = bySubmission.get(row.submissionId) ?? [];
+      list.push(row);
+      bySubmission.set(row.submissionId, list);
+    }
+
+    const batches = Array.from(bySubmission.entries()).map(([submissionId, submissionRows]) => ({
+      submissionId,
+      decisions: submissionRows.map((row) =>
+        buildDecisionForRow(
+          row,
+          decisionMap[row.submissionItemId] ?? defaultDecision(),
+        ),
+      ),
+    }));
+
     setBusy(true);
     try {
       const r = await fetch('/api/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissionId: active.id, decisions: decs }),
+        body: JSON.stringify({ batches }),
       });
-      if (!r.ok) { const e = await r.json().catch(() => ({})); alert('提交失败：' + (e.error || r.status)); return; }
-      setDecisions({});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(d.error || '提交失败');
+        return;
+      }
       await load();
     } finally {
       setBusy(false);
     }
   };
 
-  const reviewTimeline = useMemo(() => {
-    if (!active?.logs) return [];
-    const grouped: { level: number; action: string; note?: string | null; createdAt: string; itemTitles: string[] }[] = [];
-    const byTime = new Map<string, ReviewLogEntry[]>();
-    for (const log of active.logs) {
-      const t = new Date(log.createdAt).toISOString();
-      const existing = byTime.get(t) ?? [];
-      existing.push(log);
-      byTime.set(t, existing);
+  const batchApprove = () => {
+    const targets = rows.filter((row) => selected.has(row.submissionItemId));
+    if (targets.length === 0) { alert('请先勾选申诉行'); return; }
+    if (!confirm(`确认批量通过 ${targets.length} 条申诉？`)) return;
+    const next: Record<string, RowDecision> = { ...decisions };
+    for (const row of targets) {
+      next[row.submissionItemId] = { disputeAction: 'APPROVE' };
     }
-    for (const [time, logs] of byTime) {
-      const titles = logs
-        .map((l) => active.items.find((it) => it.id === l.submissionItemId)?.item.title)
-        .filter(Boolean) as string[];
-      grouped.push({
-        level: logs[0].level,
-        action: logs[0].action,
-        note: logs.map((l) => l.note).filter(Boolean).join('；') || null,
-        createdAt: time,
-        itemTitles: titles,
-      });
-    }
-    return grouped.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [active]);
+    setDecisions(next);
+    void submitBatches(targets, next);
+  };
 
-  const statusBadge = (s: string) => {
-    const map: Record<string, { label: string; cls: string }> = {
-      DRAFT: { label: '草稿', cls: 'bg-slate-100 text-slate-600' },
-      SUBMITTED: { label: '待审核', cls: 'bg-amber-50 text-amber-700' },
-      L1_APPROVED: { label: '一审通过', cls: 'bg-blue-50 text-blue-700' },
-      L2_APPROVED: { label: '终审通过', cls: 'bg-emerald-50 text-emerald-700' },
-      PRE_REVIEW_REJECTED: { label: '预审未通过', cls: 'bg-red-50 text-red-700' },
-      REJECTED: { label: '已驳回', cls: 'bg-red-50 text-red-700' },
-    };
-    const m = map[s] ?? { label: s, cls: 'bg-slate-100 text-slate-600' };
-    return (
-      <span className={`inline-block rounded-full px-2 py-px text-xs font-medium ${m.cls}`}>
-        {m.label}
-      </span>
-    );
+  const batchReject = () => {
+    const targets = rows.filter((row) => selected.has(row.submissionItemId));
+    if (targets.length === 0) { alert('请先勾选申诉行'); return; }
+    if (!batchRejectNote.trim()) { alert('批量驳回须填写原因'); return; }
+    if (!confirm(`确认批量驳回 ${targets.length} 条申诉？相关申报将整单退回。`)) return;
+    const next: Record<string, RowDecision> = { ...decisions };
+    for (const row of targets) {
+      next[row.submissionItemId] = {
+        disputeAction: 'REJECT',
+        disputeNote: batchRejectNote.trim(),
+      };
+    }
+    setDecisions(next);
+    void submitBatches(targets, next);
+  };
+
+  const switchTab = (next: Tab) => {
+    setTab(next);
+    void load(next, level);
+  };
+
+  const switchLevel = (next: 1 | 2) => {
+    setLevel(next);
+    void load(tab, next);
   };
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            审核工作台
+            申诉审核工作台
             <span className="ml-2 text-sm font-normal text-slate-400">
-              （{level === 2 ? '二级 / 总公司' : '一级 / 工区'}）
+              （{level === 2 ? '二级 / 总部部门' : '一级 / 工区'}）
             </span>
           </h1>
+          <p className="mt-1 text-sm text-slate-500">每行一条申诉；同一员工在本 scope 内的全部申诉均显示在列表中。</p>
         </div>
         <LogoutButton isAdmin />
       </div>
 
       <div className="mt-4 inline-flex gap-1 rounded-lg bg-slate-100 p-1">
         <button
+          type="button"
           onClick={() => switchTab('pending')}
           className={`rounded-md px-4 py-1.5 text-sm font-medium transition-all cursor-pointer ${
             tab === 'pending' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -243,6 +279,7 @@ export default function ReviewPage() {
           待审核
         </button>
         <button
+          type="button"
           onClick={() => switchTab('completed')}
           className={`rounded-md px-4 py-1.5 text-sm font-medium transition-all cursor-pointer ${
             tab === 'completed' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -252,485 +289,291 @@ export default function ReviewPage() {
         </button>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr]">
-        <aside className="rounded-xl border border-slate-200 bg-white">
-          <p className="border-b border-slate-100 px-4 py-3 text-xs font-semibold text-slate-500">
-            {tab === 'pending' ? `待审列表（${list.length}）` : `已审列表（${list.length}）`}
-          </p>
-          <ul className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
-            {list.length === 0 && (
-              <li className="px-4 py-8 text-center text-sm text-slate-400">
-                {tab === 'pending' ? '暂无待审核' : '暂无已审核记录'}
-              </li>
-            )}
-            {list.map((s) => (
-              <li key={s.id}>
-                <button
-                  onClick={() => { setActiveId(s.id); setDecisions({}); }}
-                  className={`block w-full px-4 py-3 text-left text-sm transition-colors cursor-pointer ${
-                    activeId === s.id ? 'bg-slate-50' : 'hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium truncate">{s.user.fullName}</p>
-                    {statusBadge(s.status)}
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-400">
-                    {s.user.employeeNo && <span>{s.user.employeeNo} · </span>}
-                    总分 {String(s.totalScore)}
-                  </p>
-                </button>
-              </li>
+      {availableLevels.length > 1 && (
+        <div className="mt-3 inline-flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => switchLevel(1)}
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-all cursor-pointer ${
+              level === 1 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            一级审核
+          </button>
+          <button
+            type="button"
+            onClick={() => switchLevel(2)}
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-all cursor-pointer ${
+              level === 2 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            二级审核
+          </button>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">单位</span>
+          <select
+            value={branchId}
+            onChange={(e) => {
+              setBranchId(e.target.value);
+              setDepartmentId('');
+            }}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部工区</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
             ))}
-          </ul>
-        </aside>
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">部门</span>
+          <select
+            value={departmentId}
+            onChange={(e) => setDepartmentId(e.target.value)}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部部门</option>
+            {filteredDepartments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">申报专业</span>
+          <select
+            value={declarationSpecialtyId}
+            onChange={(e) => setDeclarationSpecialtyId(e.target.value)}
+            className="mt-1 block min-w-[10rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部</option>
+            {declarationSpecialties.map((sp) => (
+              <option key={sp.id} value={sp.id}>{sp.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-slate-600">申诉项</span>
+          <select
+            value={itemTitle}
+            onChange={(e) => setItemTitle(e.target.value)}
+            className="mt-1 block min-w-[12rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">全部</option>
+            {itemTitleOptions.map((title) => (
+              <option key={title} value={title}>{title}</option>
+            ))}
+          </select>
+        </label>
+        <label className="min-w-[14rem] flex-1 text-sm">
+          <span className="font-medium text-slate-600">关键字</span>
+          <input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="工号、姓名、申诉内容…"
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 cursor-pointer"
+        >
+          筛选
+        </button>
+        <p className="w-full text-xs text-slate-400">共 {total} 条</p>
+      </div>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-5">
-          {!active && <p className="text-sm text-slate-400">请选择左侧申报。</p>}
+      {tab === 'pending' && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={batchApprove}
+            disabled={busy || selected.size === 0}
+            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 cursor-pointer"
+          >
+            批量确认
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={batchRejectNote}
+              onChange={(e) => setBatchRejectNote(e.target.value)}
+              placeholder="批量驳回原因（必填）"
+              className="min-w-[16rem] rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={batchReject}
+              disabled={busy || selected.size === 0}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 cursor-pointer"
+            >
+              批量驳回
+            </button>
+          </div>
+        </div>
+      )}
 
-          {/* ===== 待审核模式 ===== */}
-          {active && tab === 'pending' && (
-            <>
-              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                <div>
-	                  <h2 className="font-semibold">{active.user.fullName}（{active.user.contact}）</h2>
-	                  <p className="mt-0.5 text-xs text-slate-400">总分 {String(active.totalScore)}</p>
-	                </div>
-	              </div>
-
-	              <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-5">
-	                <span>工区：{active.workAreaName || '—'}</span>
-	                <span>入职时间：{active.hireDate ? String(active.hireDate).slice(0, 10) : '—'}</span>
-	                <span>工作年限：{active.workYears ?? '—'}</span>
-	                <span>申报等级：{active.declarationLevelName || '—'}</span>
-	                <span>申报专业：{active.declarationSpecialtyName || '—'}</span>
-	              </div>
-
-                {level === 1 && active.preReviewPassed === false && (
-                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    <p className="font-semibold">自动预审未通过，需一级审核员人工兜底判断。</p>
-                    {(active.preReviewMessages ?? []).length > 0 && (
-                      <ul className="mt-1 list-inside list-disc">
-                        {active.preReviewMessages!.map((msg, idx) => <li key={`${msg}-${idx}`}>{msg}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-
-	              <ul className="mt-3 space-y-3">
-                {level === 2 ? <>
-                  {pendingOptionReviews(active).map((review) => {
-                  const d = decisions[review.id] ?? { action: 'APPROVE' as const };
-                  const it = review.item;
-                  return (
-                    <li key={review.id} className={`rounded-lg border p-4 ${
-                      d.action === 'REJECT' ? 'border-red-300 bg-red-50' : 'border-slate-200'
-                    }`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-sm">{it.item.title}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            待审子项：<b>{review.label}</b>
-                            {review.count != null ? ` × ${review.count} 次` : ''}
-                            {' · '}分值 {String(review.score)}
-                            {review.department?.name ? ` · ${review.department.name}` : ''}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            申报项选择：{it.selected.map((sel) => sel.count != null ? `${sel.label}×${sel.count}次` : `${sel.label}(${sel.score}分)`).join('、') || '—'}
-                          </p>
-                          {it.content && <p className="mt-1 text-xs text-slate-500">备注：{it.content}</p>}
-                          {it.attachments.length > 0 ? (
-                            <ul className="mt-1 space-y-0.5">
-                              {it.attachments.map((a) => (
-                                <li key={a.id}>
-                                  <button
-                                    type="button"
-                                    onClick={() => openAttachment(a.id)}
-                                    disabled={openingAttId === a.id}
-                                    className="flex items-center gap-1 text-xs font-medium text-primary-600 transition-colors hover:text-primary-700 disabled:opacity-50 cursor-pointer"
-                                  >
-                                    {openingAttId === a.id ? '打开中…' : a.filename}
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : it.item.requireAttachment && (
-                            <p className="mt-1 text-xs text-red-600">未上传证明材料</p>
-                          )}
-                        </div>
-                        <div className="flex shrink-0 gap-3">
-                          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                            <input type="radio" checked={d.action === 'APPROVE'} onChange={() => setDec(review.id, { action: 'APPROVE' })} className="text-primary-600" />
-                            通过
+      <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold text-slate-500">
+            <tr>
+              {tab === 'pending' && (
+                <th className="px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={rows.length > 0 && selected.size === rows.length}
+                    onChange={toggleSelectAll}
+                    aria-label="全选"
+                  />
+                </th>
+              )}
+              <th className="px-3 py-3">序号</th>
+              <th className="px-3 py-3">工号</th>
+              <th className="px-3 py-3">申诉人</th>
+              <th className="px-3 py-3">单位</th>
+              <th className="px-3 py-3">申报专业</th>
+              <th className="px-3 py-3">申诉项</th>
+              <th className="px-3 py-3">系统分值</th>
+              <th className="px-3 py-3">申诉内容</th>
+              <th className="px-3 py-3">附件</th>
+              <th className="px-3 py-3">申诉分值</th>
+              <th className="px-3 py-3">审核</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={tab === 'pending' ? 12 : 11} className="px-4 py-10 text-center text-slate-400">
+                  {tab === 'pending' ? '暂无待审核申诉' : '暂无已审核申诉'}
+                </td>
+              </tr>
+            )}
+            {rows.map((row, index) => {
+              const dec = decisions[row.submissionItemId] ?? defaultDecision();
+              return (
+                <tr key={row.submissionItemId} className="border-b border-slate-50 align-top">
+                  {tab === 'pending' && (
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(row.submissionItemId)}
+                        onChange={() => toggleSelect(row.submissionItemId)}
+                        aria-label={`选择 ${row.itemTitle}`}
+                      />
+                    </td>
+                  )}
+                  <td className="px-3 py-3 tabular-nums text-slate-500">{index + 1}</td>
+                  <td className="px-3 py-3 tabular-nums">{row.employeeNo || '—'}</td>
+                  <td className="px-3 py-3">{row.employeeName}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.unitName || '—'}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.declarationSpecialtyName || '—'}</td>
+                  <td className="px-3 py-3 font-medium">{row.itemTitle}</td>
+                  <td className="px-3 py-3 tabular-nums">{row.systemScore.toFixed(1)}</td>
+                  <td className="max-w-xs px-3 py-3 text-slate-600">{row.disputeReason || '—'}</td>
+                  <td className="px-3 py-3">
+                    <ul className="space-y-1">
+                      {row.attachments.map((att) => (
+                        <li key={att.id}>
+                          <button
+                            type="button"
+                            onClick={() => openAttachment(att.id)}
+                            disabled={openingAttId === att.id}
+                            className="text-left text-xs font-medium text-primary-600 hover:text-primary-700 disabled:opacity-50 cursor-pointer"
+                          >
+                            {openingAttId === att.id ? '打开中…' : att.filename}
+                          </button>
+                        </li>
+                      ))}
+                      {row.attachments.length === 0 && <span className="text-xs text-slate-400">—</span>}
+                    </ul>
+                  </td>
+                  <td className="px-3 py-3 tabular-nums font-medium text-amber-700">
+                    {row.disputeClaimedScore != null ? row.disputeClaimedScore.toFixed(1) : '—'}
+                  </td>
+                  <td className="px-3 py-3">
+                    {tab === 'completed' ? (
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                        row.auditLabel === '确认' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+                      }`}>
+                        {row.auditLabel ?? '—'}
+                      </span>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex gap-3 text-xs">
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              checked={dec.disputeAction === 'APPROVE'}
+                              onChange={() => setDec(row.submissionItemId, { disputeAction: 'APPROVE' })}
+                            />
+                            确认
                           </label>
-                          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                            <input type="radio" checked={d.action === 'REJECT'} onChange={() => setDec(review.id, { action: 'REJECT' })} className="text-red-600" />
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              checked={dec.disputeAction === 'REJECT'}
+                              onChange={() => setDec(row.submissionItemId, { disputeAction: 'REJECT' })}
+                            />
                             驳回
                           </label>
                         </div>
-                      </div>
-                      {d.action === 'REJECT' && (
-                        <input
-                          value={d.note ?? ''}
-                          onChange={(e) => setDec(review.id, { note: e.target.value })}
-                          placeholder="请填写驳回原因（员工可见）"
-                          className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                        />
-                      )}
-                    </li>
-                  );
-                  })}
-                  {/* L2 申诉确认：对 L1 已认定合理的申诉项 */}
-                  {active.items
-                    .filter((it) => it.isSystemFilled && it.confirmationStatus === 'DISPUTED' && it.disputeL1Result === 'APPROVED')
-                    .map((it) => {
-                      const d = decisions[it.id];
-                      return (
-                        <li key={`dispute-${it.id}`} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <p className="font-medium text-sm">申诉：{it.item.title}</p>
-                                <span className="shrink-0 rounded-full bg-amber-500 px-2 py-px text-[10px] font-semibold text-white">待确认</span>
-                              </div>
-                              {it.disputeReason && (
-                                <p className="mt-1 text-xs text-amber-700">员工申诉理由：{it.disputeReason}</p>
-                              )}
-                              <p className="mt-1 text-xs text-amber-700">
-                                L1 判断：已认定合理{it.disputeL1Note ? ` — ${it.disputeL1Note}` : ''}
-                              </p>
-                              {it.attachments.length > 0 && (
-                                <ul className="mt-1 space-y-0.5">
-                                  {it.attachments.map((attachment) => (
-                                    <li key={attachment.id}>
-                                      <button
-                                        type="button"
-                                        onClick={() => openAttachment(attachment.id)}
-                                        disabled={openingAttId === attachment.id}
-                                        className="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:opacity-50"
-                                      >
-                                        {openingAttId === attachment.id ? '打开中…' : attachment.filename}
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                              {it.disputeL2Result ? (
-                                <p className="mt-1 text-xs font-medium text-amber-700">
-                                  申诉确认：{it.disputeL2Result === 'APPROVED' ? '已确认有效' : '已认定无效'}
-                                  {it.disputeL2Note ? ` — ${it.disputeL2Note}` : ''}
-                                </p>
-                              ) : (
-                                <div className="mt-2">
-                                  <p className="text-xs font-medium text-amber-700 mb-1">对申诉做出确认：</p>
-                                  <div className="flex gap-3 mb-1">
-                                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        checked={(d?.disputeAction ?? 'APPROVE') === 'APPROVE'}
-                                        onChange={() => setDec(it.id, { disputeAction: 'APPROVE' })}
-                                        className="text-amber-600"
-                                      />
-                                      确认有效
-                                    </label>
-                                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        checked={d?.disputeAction === 'REJECT'}
-                                        onChange={() => setDec(it.id, { disputeAction: 'REJECT' })}
-                                        className="text-red-600"
-                                      />
-                                      认定无效
-                                    </label>
-                                  </div>
-                                  {d?.disputeAction === 'REJECT' && (
-                                    <input
-                                      value={d.disputeNote ?? ''}
-                                      onChange={(e) => setDec(it.id, { disputeNote: e.target.value })}
-                                      placeholder="请填写驳回申诉原因"
-                                      className="w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                                    />
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                </> : active.items.map((it) => {
-                  const d = decisions[it.id] ?? { action: 'APPROVE' as const };
-                  const isPreviouslyApproved =
-                    it.status === 'L1_APPROVED' || it.status === 'L2_APPROVED';
-                  const statusLabel =
-                    it.status === 'L1_APPROVED' ? '已通过（一级）' :
-                    it.status === 'L2_APPROVED' ? '已通过（终审）' : '';
-                  return (
-                    <li key={it.id} className={`rounded-lg border p-4 ${
-                      d.action === 'REJECT'
-                        ? 'border-red-300 bg-red-50'
-                        : isPreviouslyApproved
-                          ? 'border-emerald-200 bg-emerald-50'
-                          : 'border-slate-200'
-                    }`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-medium text-sm">{it.item.title}</p>
-                            {isPreviouslyApproved && (
-                              <span className="shrink-0 rounded-full bg-emerald-600 px-2 py-px text-[10px] font-semibold text-white">
-                                {statusLabel}
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 text-xs text-slate-500">
-                            选中：{it.selected.map((sel) => sel.count != null ? `${sel.label}×${sel.count}次` : `${sel.label}(${sel.score}分)`).join('、') || '—'}
-                            {' · '}得分 <b>{String(it.score)}</b>
-                          </p>
-                          {it.content && <p className="mt-1 text-xs text-slate-500">备注：{it.content}</p>}
-                          {it.attachments.length > 0 ? (
-                            <ul className="mt-1 space-y-0.5">
-                              {it.attachments.map((a) => (
-                                <li key={a.id}>
-                                  <button
-                                    type="button"
-                                    onClick={() => openAttachment(a.id)}
-                                    disabled={openingAttId === a.id}
-                                    className="flex items-center gap-1 text-xs font-medium text-primary-600 transition-colors hover:text-primary-700 disabled:opacity-50 cursor-pointer"
-                                  >
-                                    <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 0119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-                                    </svg>
-                                    {openingAttId === a.id ? '打开中…' : a.filename}
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : it.item.requireAttachment && (
-                            <p className="mt-1 text-xs text-red-600">未上传证明材料</p>
-                          )}
-                        </div>
-                        {isPreviouslyApproved ? (
-                          <span className="shrink-0 text-xs font-medium text-emerald-600">无需重复审核</span>
-                        ) : (
-                          <div className="flex shrink-0 gap-3">
-                            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                              <input
-                                type="radio"
-                                checked={d.action === 'APPROVE'}
-                                onChange={() => setDec(it.id, { action: 'APPROVE' })}
-                                className="text-primary-600"
-                              />
-                              通过
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                              <input
-                                type="radio"
-                                checked={d.action === 'REJECT'}
-                                onChange={() => setDec(it.id, { action: 'REJECT' })}
-                                className="text-red-600"
-                              />
-                              驳回
-                            </label>
-                          </div>
+                        {dec.disputeAction === 'REJECT' && (
+                          <input
+                            value={dec.disputeNote ?? ''}
+                            onChange={(e) => setDec(row.submissionItemId, { disputeNote: e.target.value })}
+                            placeholder="申诉驳回原因"
+                            className="w-full rounded border border-red-200 px-2 py-1 text-xs"
+                          />
                         )}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void submitBatches([row])}
+                          className="rounded bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50 cursor-pointer"
+                        >
+                          提交
+                        </button>
                       </div>
-                      {!isPreviouslyApproved && d.action === 'REJECT' && (
-                        <input
-                          value={d.note ?? ''}
-                          onChange={(e) => setDec(it.id, { note: e.target.value })}
-                          placeholder="请填写驳回原因（员工可见）"
-                          className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                        />
-                      )}
-
-                      {/* 申诉判断：员工申诉的系统填充项 */}
-                      {(it as SubItem).isSystemFilled && (it as SubItem).confirmationStatus === 'DISPUTED' && (
-                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                          <p className="text-xs font-semibold text-amber-800">员工申诉中</p>
-                          {(it as SubItem).disputeReason && (
-                            <p className="mt-1 text-xs text-amber-700">申诉理由：{(it as SubItem).disputeReason}</p>
-                          )}
-                          {(it as SubItem).disputeL1Result ? (
-                            <p className="mt-1 text-xs font-medium text-amber-700">
-                              申诉判断：{(it as SubItem).disputeL1Result === 'APPROVED' ? '已认定合理' : '已驳回'}
-                              {(it as SubItem).disputeL1Note && ` — ${(it as SubItem).disputeL1Note}`}
-                            </p>
-                          ) : (
-                            <div className="mt-2">
-                              <p className="text-xs font-medium text-amber-700 mb-1">对申诉做出判断：</p>
-                              <div className="flex gap-3 mb-1">
-                                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    checked={(d.disputeAction ?? 'APPROVE') === 'APPROVE'}
-                                    onChange={() => setDec(it.id, { disputeAction: 'APPROVE' })}
-                                    className="text-amber-600"
-                                  />
-                                  申诉合理
-                                </label>
-                                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    checked={d.disputeAction === 'REJECT'}
-                                    onChange={() => setDec(it.id, { disputeAction: 'REJECT' })}
-                                    className="text-red-600"
-                                  />
-                                  申诉驳回
-                                </label>
-                              </div>
-                              {d.disputeAction === 'REJECT' && (
-                                <input
-                                  value={d.disputeNote ?? ''}
-                                  onChange={(e) => setDec(it.id, { disputeNote: e.target.value })}
-                                  placeholder="请填写驳回申诉原因"
-                                  className="w-full rounded-lg border border-red-300 px-3 py-2 text-xs transition-colors placeholder:text-slate-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                                />
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-              <div className="mt-4 flex justify-end">
-                <button
-                  onClick={submit}
-                  disabled={busy}
-                  className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-                >
-                  {busy ? '提交中…' : '提交审核结论'}
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* ===== 已审核模式 ===== */}
-          {active && tab === 'completed' && (
-            <>
-              <div className="border-b border-slate-100 pb-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="font-semibold">{active.user.fullName}（{active.user.contact}）</h2>
-                    <p className="mt-0.5 text-xs text-slate-400">工号 {active.user.employeeNo || '—'}</p>
-                  </div>
-                  <div className="text-right">
-                    {statusBadge(active.status)}
-                    <p className="mt-1 text-3xl font-bold tracking-tight tabular-nums">{Number(active.totalScore).toFixed(1)}</p>
-                    <p className="text-xs text-slate-400">总分</p>
-                  </div>
-                </div>
-              </div>
-
-              <ul className="mt-3 space-y-2">
-                {active.items.map((it) => (
-                  <li key={it.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 p-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium">{it.item.title}</p>
-                        {it.status === 'REJECTED'
-                          ? <span className="shrink-0 rounded-full bg-red-50 px-2 py-px text-[10px] font-medium text-red-700">已驳回</span>
-                          : <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-px text-[10px] font-medium text-emerald-700">已通过</span>}
-                      </div>
-                      <p className="mt-1 text-xs text-slate-500">
-                        选择：{it.selected.map((s) => `${s.label}(${s.score}分)`).join('、') || '—'}
-                      </p>
-                      {it.content && <p className="mt-1 text-xs text-slate-500">备注：{it.content}</p>}
-                      {it.attachments.length > 0 && (
-                        <ul className="mt-1 space-y-0.5">
-                          {it.attachments.map((a) => (
-                            <li key={a.id}>
-                              <button
-                                type="button"
-                                onClick={() => openAttachment(a.id)}
-                                disabled={openingAttId === a.id}
-                                className="flex items-center gap-1 text-xs font-medium text-primary-600 transition-colors hover:text-primary-700 disabled:opacity-50 cursor-pointer"
-                              >
-                                <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 0119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-                                </svg>
-                                {openingAttId === a.id ? '打开中…' : a.filename}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                    <span className="shrink-0 rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white tabular-nums">
-                      {Number(it.score).toFixed(1)} 分
-                    </span>
-                  </li>
-                ))}
-              </ul>
-
-              {reviewTimeline.length > 0 && (
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold">审核记录</h3>
-                  <div className="mt-3 space-y-2">
-                    {reviewTimeline.map((entry, i) => (
-                      <div key={i} className="flex gap-3 text-sm">
-                        <div className="flex flex-col items-center">
-                          <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${
-                            entry.level === 3 ? 'bg-amber-500' :
-                            entry.action === 'APPROVE' ? 'bg-emerald-500' : 'bg-red-500'
-                          }`} />
-                          {i < reviewTimeline.length - 1 && <div className="w-px flex-1 bg-slate-200" />}
-                        </div>
-                        <div className="pb-2">
-                          <p className="font-medium">
-                            {entry.level === 0 ? '提交/预审' : entry.level === 1 ? '一级审核' : entry.level === 2 ? '二级终审' : '管理员覆盖分'}
-                            <span className={`ml-2 text-xs font-medium ${
-                              entry.level === 3 ? 'text-amber-600' :
-                              entry.action === 'APPROVE' ? 'text-emerald-600' : 'text-red-600'
-                            }`}>
-                              {entry.level === 3 ? '已覆盖' : entry.action === 'APPROVE' ? '通过' : '驳回'}
-                            </span>
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {entry.itemTitles.length > 0 && `${entry.itemTitles.length} 项：${entry.itemTitles.join('、')}`}
-                          </p>
-                          {entry.note && <p className="mt-0.5 text-xs text-slate-500">备注：{entry.note}</p>}
-                          <p className="mt-0.5 text-xs text-slate-400">{new Date(entry.createdAt).toLocaleString('zh-CN')}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </section>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
-      {/* 附件预览弹窗 */}
+      <p className="mt-2 text-xs text-slate-400">共 {total} 条申诉记录</p>
+
       {preview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label={`预览：${preview.filename}`}
-          onClick={() => setPreview(null)}>
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`预览：${preview.filename}`}
+          onClick={() => setPreview(null)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <p className="truncate text-sm font-medium">{preview.filename}</p>
-              <button
-                type="button"
-                onClick={() => setPreview(null)}
-                className="rounded-lg px-3 py-1.5 text-sm text-slate-600 transition-colors hover:bg-slate-100 cursor-pointer"
-              >
+              <button type="button" onClick={() => setPreview(null)} className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 cursor-pointer">
                 关闭
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-2">
-              {/* 直接用 MinIO 预签名 URL；勿走 redirect=1 + next/image（会空白） */}
               {preview.kind === 'image' && (
-                // eslint-disable-next-line @next/next/no-img-element -- 预签名跨域 URL，不走 next/image 优化
-                <img
-                  src={preview.viewUrl}
-                  alt={preview.filename}
-                  className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
-                />
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={preview.viewUrl} alt={preview.filename} className="mx-auto max-h-[75vh] w-auto max-w-full object-contain" />
               )}
-              {preview.kind === 'pdf' && <iframe title={preview.filename} src={preview.viewUrl} className="h-[75vh] w-full rounded border-0 bg-white" />}
+              {preview.kind === 'pdf' && (
+                <iframe title={preview.filename} src={preview.viewUrl} className="h-[75vh] w-full rounded border-0 bg-white" />
+              )}
             </div>
           </div>
         </div>

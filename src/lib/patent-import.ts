@@ -27,7 +27,10 @@ const PATENT_ORDER_SCORE: Record<number, number> = { 1: 4, 2: 3, 3: 2, 4: 1 };
 const MAX_INVENTORS = 4;
 
 export interface PatentFieldMapping {
-  /** 专利名称/标题列（用于生成唯一 defectRef） */
+  /**
+   * 历史 API 字段名。2026 源表该列实际是“原始申请(专利权)人”，
+   * 仅作为业务记录描述，不再当成专利名称展示。
+   */
   patentName: string;
   /** 发明人姓名 + 工号交替列：[name1, no1, name2, no2, ...] */
   inventorCols: string[];
@@ -38,6 +41,8 @@ export interface PatentRow {
   rowIndex: number;
   patentName: string;
   inventors: Array<{ name: string; employeeNo: string; order: number }>;
+  /** 原始 Excel 行，供员工核对与后续明细导出。 */
+  sourceData?: Record<string, string>;
 }
 
 export const DEFAULT_PATENT_MAPPING: PatentFieldMapping = {
@@ -79,7 +84,9 @@ export function parsePatentRows(
       seenNos.add(employeeNo);
       inventors.push({ name: name || employeeNo, employeeNo, order: i + 1 });
     }
-    if (inventors.length > 0) out.push({ rowIndex: idx + 1, patentName, inventors });
+    if (inventors.length > 0) {
+      out.push({ rowIndex: idx + 1, patentName, inventors, sourceData: row });
+    }
   });
   return out;
 }
@@ -101,6 +108,13 @@ export function buildPatentSeeds(
     for (const inv of row.inventors) {
       const score = PATENT_ORDER_SCORE[inv.order] ?? 0;
       if (score <= 0) continue;
+      const patentType = cellStr(row.sourceData?.['专利类型']);
+      const applicationDate = cellStr(row.sourceData?.['申请日']);
+      const grantDate = cellStr(row.sourceData?.['授权日']);
+      const legalStatus = cellStr(
+        row.sourceData?.['简单法律状态'] || row.sourceData?.['法律状态/事件'],
+      );
+      const recordKey = `patent:row${row.rowIndex}:order${inv.order}:${row.patentName}`.slice(0, 200);
       seeds.push({
         year,
         employeeNo: inv.employeeNo,
@@ -110,13 +124,27 @@ export function buildPatentSeeds(
         role: 'FIRST_HANDLER',
         eventType: 'REMEDIATION',
         score,
-        defectRef: `patent:row${row.rowIndex}:order${inv.order}:${row.patentName}`.slice(0, 200),
+        defectRef: recordKey,
         defectLevel: '',
         eventDate: null,
+        recordKey,
+        recordType: 'PATENT',
+        recordTitle: [
+          '专利记录',
+          patentType,
+          grantDate ? `授权日 ${grantDate}` : applicationDate ? `申请日 ${applicationDate}` : '',
+        ].filter(Boolean).join(' · '),
+        participationRole: `第 ${inv.order} 发明人`,
+        sourceRowNo: row.rowIndex + 1,
         metadata: {
-          patentName: row.patentName,
+          patentApplicant: row.patentName,
+          patentType: patentType || null,
+          applicationDate: applicationDate || null,
+          grantDate: grantDate || null,
+          legalStatus: legalStatus || null,
           rowIndex: row.rowIndex,
           order: inv.order,
+          sourceData: row.sourceData ?? {},
         },
       });
     }
@@ -131,7 +159,11 @@ export async function importPatentFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: PatentFieldMapping = DEFAULT_PATENT_MAPPING,
-  options: { replaceAcrossSourceFiles?: boolean } = {},
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<SeedBasedImportResult> {
   const parsed = parsePatentRows(rows, mapping);
   const seeds = buildPatentSeeds(parsed, year, sourceFile);

@@ -31,6 +31,9 @@ PM2_APP_NAME="perf-app"
 APP_PORT="${APP_PORT:-3000}"
 PM2_INSTANCES="${PM2_INSTANCES:-max}"
 USE_PM="${USE_PM:-npm}"
+ATTACHMENT_MODE="${ATTACHMENT_MODE:-proxy}"
+MINIO_PUBLIC_PORT="${MINIO_PUBLIC_PORT:-8443}"
+SETUP_MINIO_NGINX=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -50,6 +53,9 @@ usage() {
   --server-name NAME    Nginx/证书名（IP 或域名，推荐）
   --port PORT           Next.js 端口（默认 3000）
   --instances N|max     PM2 集群实例数（默认 max）
+  --attachment-mode M   proxy（默认，推荐）| minio-https
+  --minio-public-port N minio-https 对外端口（默认 8443）
+  --setup-minio-nginx   minio-https 时配置 Nginx→MinIO 反代
   --skip-db-import      不导入 database.dump
   --migrate-only        等同 --skip-db-import
   --skip-build          跳过 npm run build
@@ -71,6 +77,9 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=true; shift ;;
     --skip-pm2) SKIP_PM2=true; shift ;;
     --skip-nginx) SKIP_NGINX=true; shift ;;
+    --attachment-mode) ATTACHMENT_MODE="$2"; shift 2 ;;
+    --minio-public-port) MINIO_PUBLIC_PORT="$2"; shift 2 ;;
+    --setup-minio-nginx) SETUP_MINIO_NGINX=true; shift ;;
     --port) APP_PORT="$2"; shift 2 ;;
     --instances) PM2_INSTANCES="$2"; shift 2 ;;
     --use-npm) USE_PM=npm; export USE_PM; shift ;;
@@ -192,11 +201,32 @@ elif [[ ! -f "$ENV_FILE" ]]; then
   die "未找到 ${ENV_FILE}，请先创建或打包时使用 --include-env"
 fi
 
-# 若 Nginx 对外地址已知，尽量把 APP_BASE_URL 提示出来（不强制改写已有 packaged env）
+# 按 SERVER_NAME 修正 APP_BASE_URL / MinIO 附件访问（避免 ERR_SSL_PROTOCOL_ERROR）
 if [[ "$SERVER_NAME" != "_" && "$SERVER_NAME" != "localhost" ]]; then
-  if ! grep -qE "^APP_BASE_URL=https://${SERVER_NAME}" "$ENV_FILE" 2>/dev/null; then
-    log "提示: 建议将 ${ENV_FILE} 中 APP_BASE_URL 设为 https://${SERVER_NAME}"
+  CONFIGURE_ENV="${SCRIPT_DIR}/configure-env.sh"
+  if [[ ! -f "$CONFIGURE_ENV" && -f "${BUNDLE_DIR}/bootstrap/configure-env.sh" ]]; then
+    CONFIGURE_ENV="${BUNDLE_DIR}/bootstrap/configure-env.sh"
   fi
+  if [[ -f "$CONFIGURE_ENV" ]]; then
+    log "配置附件访问模式: ${ATTACHMENT_MODE}"
+    CFG_ARGS=(
+      --env-file "$ENV_FILE"
+      --server-name "$SERVER_NAME"
+      --attachment-mode "$ATTACHMENT_MODE"
+      --minio-public-port "$MINIO_PUBLIC_PORT"
+      --no-restart
+    )
+    if [[ "$ATTACHMENT_MODE" == "minio-https" && "$SETUP_MINIO_NGINX" == true ]]; then
+      CFG_ARGS+=(--setup-minio-nginx)
+    fi
+    bash "$CONFIGURE_ENV" "${CFG_ARGS[@]}"
+  else
+    log "警告: 未找到 configure-env.sh，请手动检查 MINIO_PUBLIC_* / APP_BASE_URL"
+  fi
+else
+  log "提示: 未指定 --server-name，跳过自动修正 APP_BASE_URL / 附件模式"
+  log "  若附件打不开（ERR_SSL_PROTOCOL_ERROR），请运行:"
+  log "  sudo ${SCRIPT_DIR}/fix-attachments.sh --server-name <公网IP>"
 fi
 
 load_database_url_from_env "$ENV_FILE"
@@ -307,9 +337,16 @@ fi
 log "部署完成"
 log "  应用目录: ${APP_DIR}"
 log "  环境文件: ${ENV_FILE}"
+log "  附件模式: ${ATTACHMENT_MODE}"
 log "  PM2 实例: ${PM2_INSTANCES}"
 log "  本机: http://127.0.0.1:${APP_PORT}/"
 if [[ "$SKIP_NGINX" == false ]]; then
   log "  HTTPS: https://${SERVER_NAME}/ （自签名证书需浏览器确认）"
 fi
+if [[ "$ATTACHMENT_MODE" == "proxy" ]]; then
+  log "  附件: 经应用代理 /api/attachments/.../view?proxy=1（勿对 MinIO:9000 开 HTTPS）"
+else
+  log "  附件: MinIO HTTPS 预签名 https://${SERVER_NAME}:${MINIO_PUBLIC_PORT}/"
+fi
+log "  若附件仍打不开: sudo ${SCRIPT_DIR}/fix-attachments.sh --server-name ${SERVER_NAME}"
 log "  说明: 未安装 Node/PG/MinIO；未迁移 MinIO 对象"
