@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { importScoreFacts, type FactFieldMapping } from '@/lib/manual-fact-import';
+import { factImportErrorResponse } from '@/lib/fact-import-http';
 
 const MappingSchema = z.object({
   employeeNo: z.string().min(1),
@@ -46,12 +47,11 @@ export async function POST(req: Request) {
     const result = await importScoreFacts(
       prisma, 'worksite.defect-governance', '缺陷治理',
       year, mapping as FactFieldMapping, rows, sourceFile,
+      { preserveEmployeeScoreTotals: true, createdBy: session.userId },
     );
 
     return NextResponse.json({ success: true, ...result });
   } catch (e) {
-    console.error('POST /api/admin/import/defects:', e);
-    const message = e instanceof Error ? e.message : '服务器内部错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return factImportErrorResponse(e, 'POST /api/admin/import/defects:');
   }
 }

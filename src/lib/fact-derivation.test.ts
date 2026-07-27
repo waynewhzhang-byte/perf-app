@@ -109,6 +109,38 @@ describe('buildDerivation — MATRIX_SUM (缺陷治理)', () => {
 });
 
 describe('buildDerivation — NORMALIZE (两票执行)', () => {
+  it('逐票事实按员工原始分求和，并按参与角色汇总计算过程', () => {
+    const facts: DerivationInputFact[] = [
+      {
+        id: 't1',
+        score: 0.01,
+        metadata: { scoreCategory: 'operationPoints' },
+      },
+      {
+        id: 't2',
+        score: 5,
+        metadata: { scoreCategory: 'workLeaderPoints' },
+      },
+      {
+        id: 't3',
+        score: 0.3,
+        metadata: { scoreCategory: 'workPermitterPoints' },
+      },
+    ];
+
+    const d = buildDerivation(
+      'worksite.ticket-execution',
+      facts,
+      { finalScore: 15.9, ticketCohortMax: 10 },
+    )!;
+
+    assert.ok(d.steps.some((step) => /操作票 1 张 × 0\.01 = 0\.01/.test(step.label)));
+    assert.ok(d.steps.some((step) => /工作票负责人得分 5/.test(step.label)));
+    assert.ok(d.steps.some((step) => /工作票许可人得分 0\.3/.test(step.label)));
+    assert.ok(d.steps.some((step) => /原始分 5\.31/.test(step.label)));
+    assert.ok(d.steps.some((step) => /5\.31 \/ 10 × 30 = 15\.93/.test(step.label)));
+  });
+
   it('两段式：breakdown→原始分，再按专业最高折算', () => {
     const facts: DerivationInputFact[] = [
       {

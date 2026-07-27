@@ -150,7 +150,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
       </Link>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">两票执行</h1>
       <p className="mt-1 text-sm text-slate-500">
-        上传《工作现场-两票执行》.xlsx，分别读取「操作票」「工作票」两个工作表，按积分表 3.1 规则聚合每人<strong>原始分</strong>并入库；折算为维度得分在最终汇总阶段完成。
+        上传《工作现场-两票执行》.xlsx，分别读取「操作票」「工作票」两个工作表，按积分表 3.1 规则逐票保留员工参与事实并汇总<strong>原始分</strong>；折算为维度得分在最终汇总阶段完成。
       </p>
       <p className="mt-1 text-xs text-slate-400">依赖员工档案名册 · 能级可先在 profile 中写入 mockDeclarationTier 模拟</p>
 
@@ -295,7 +295,7 @@ export default function TicketImportWizard({ year }: { year: number }) {
           </button>
           {result && (
             <p className="mt-3 text-sm text-emerald-700">
-              聚合 {result.total} 人 · 写入 {result.created} 条 · 替换旧记录 {result.deleted} 条
+              聚合 {result.total} 人 · 写入逐票事实 {result.created} 条 · 替换旧记录 {result.deleted} 条
               {result.unmatchedTotal > 0 && ` · 未匹配姓名 ${result.unmatchedTotal} 个`}
             </p>
           )}

@@ -14,6 +14,7 @@ import {
   aggregateEmployeeDimensions,
   capToStandard,
   round1,
+  sumTicketFactsByEmployee,
   type EmployeeDimensionTotals,
 } from '@/lib/dimension-aggregation';
 import {
@@ -123,6 +124,12 @@ export interface ScoreSheetInput {
     eventType?: string;
     metadata?: unknown;
     sourceFile?: string | null;
+    recordKey?: string | null;
+    recordType?: string | null;
+    recordTitle?: string | null;
+    participationRole?: string | null;
+    sourceSheet?: string | null;
+    sourceRowNo?: number | null;
   }>;
   /** L2 归档后落库的手工/扣分维度事实 */
   submissionFacts?: Array<{
@@ -220,21 +227,14 @@ function buildFactDimensionLines(
   }
 
   if (standard.code === TICKET_CODE) {
-    const agg = perfFacts[0];
-    if (!agg) return [];
-    const raw = Number(agg.score);
-    const meta = agg.metadata as { breakdown?: Record<string, number>; isRawScore?: boolean } | undefined;
-    const cohortMax = input.ticketCohortMax ?? raw;
-    return [
-      {
-        id: agg.id,
-        label: `原始分 ${raw}（专业最高 ${cohortMax}，折算后 ${aggregatedScore}）`,
-        score: aggregatedScore,
-        detail: meta?.breakdown ? JSON.stringify(meta.breakdown) : undefined,
-        sourceDimensionCode: agg.dimensionCode,
-        sourceFile: agg.sourceFile,
-      },
-    ];
+    return perfFacts.map((fact) => ({
+      id: fact.id,
+      label: fact.recordTitle || fact.defectRef || standard.title,
+      score: Number(fact.score),
+      detail: fact.participationRole || fact.role,
+      sourceDimensionCode: fact.dimensionCode,
+      sourceFile: fact.sourceFile,
+    }));
   }
 
   return perfFacts.map((fact) => ({
@@ -496,13 +496,13 @@ export async function loadTicketSpecialtyMaxRaw(
   const specialtyByNo = new Map(
     users.map((u) => [u.employeeNo!, ticketSpecialtyFromWorkArea(u.branch?.name)]),
   );
-  let max = 0;
-  for (const f of facts) {
-    if (specialtyByNo.get(f.employeeNo) === specialty) {
-      max = Math.max(max, Number(f.score));
-    }
-  }
-  return max;
+  const rawByEmployee = sumTicketFactsByEmployee(facts);
+  return Math.max(
+    0,
+    ...rawByEmployee
+      .filter(({ employeeNo }) => specialtyByNo.get(employeeNo) === specialty)
+      .map(({ rawTicketScore }) => rawTicketScore),
+  );
 }
 
 export interface LoadScoreSheetParams {
@@ -606,6 +606,12 @@ export async function loadPerformanceScoreSheet(
       eventType: f.eventType,
       metadata: f.metadata,
       sourceFile: f.sourceFile,
+      recordKey: f.recordKey,
+      recordType: f.recordType,
+      recordTitle: f.recordTitle,
+      participationRole: f.participationRole,
+      sourceSheet: f.sourceSheet,
+      sourceRowNo: f.sourceRowNo,
     })),
     submissionFacts: submissionFacts.map((f) => ({
       id: f.id,

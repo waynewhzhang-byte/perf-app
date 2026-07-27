@@ -12,7 +12,12 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import type { PerformanceFactSeed } from '@/lib/performance-fact-repository';
-import { persistSeedsByDimension, cellStr, type SeedBasedImportResult } from '@/lib/fact-import-common';
+import {
+  persistSeedsBySource,
+  cellStr,
+  sourceRowNoOf,
+  type SeedBasedImportResult,
+} from '@/lib/fact-import-common';
 
 export type CompetitionKind = 'competition-skill' | 'competition-exam' | 'competition-knowledge';
 
@@ -78,7 +83,7 @@ export function buildCompetitionSeeds(
   year: number,
 ): PerformanceFactSeed[] {
   const seeds: PerformanceFactSeed[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const employeeNo = cellStr(row[mapping.employeeNo]);
     if (!employeeNo) continue;
     const employeeName = mapping.employeeName ? cellStr(row[mapping.employeeName]) : employeeNo;
@@ -91,6 +96,8 @@ export function buildCompetitionSeeds(
     const levelKey = inferLevel(level, award);
     const score = rule.scores[levelKey];
 
+    const sourceRowNo = sourceRowNoOf(row, rowIndex + 2);
+    const recordKey = `competition:row${sourceRowNo}:${employeeNo}:${award}`.slice(0, 200);
     seeds.push({
       year,
       employeeNo,
@@ -100,15 +107,20 @@ export function buildCompetitionSeeds(
       role: 'FIRST_HANDLER',
       eventType: 'REMEDIATION',
       score,
-      defectRef: `competition:${award}:${employeeNo}`.slice(0, 200),
+      defectRef: recordKey,
       defectLevel: '',
       eventDate: null,
+      recordKey,
+      recordType: 'COMPETITION',
+      recordTitle: award || rule.dimensionTitle,
+      sourceRowNo,
       metadata: {
         award,
         level,
         category: category ?? null,
         kind,
         levelKey,
+        sourceData: row,
       },
     });
   }
@@ -122,7 +134,27 @@ export async function importCompetitionFacts(
   sourceFile: string,
   rows: Record<string, string>[],
   mapping: CompetitionFieldMapping,
+  options: {
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  } = {},
 ): Promise<{ byDimension: Record<string, SeedBasedImportResult>; total: number }> {
   const seeds = buildCompetitionSeeds(rows, mapping, year);
-  return persistSeedsByDimension(prisma, { year, sourceFile }, seeds);
+  const dimensions = [
+    'performance.competition.competition',
+    'performance.competition.exam',
+  ] as const;
+  const byDimension: Record<string, SeedBasedImportResult> = {};
+  let total = 0;
+  for (const dimensionCode of dimensions) {
+    const result = await persistSeedsBySource(
+      prisma,
+      { year, dimensionCode, sourceFile, ...options },
+      seeds.filter((seed) => seed.dimensionCode === dimensionCode),
+    );
+    byDimension[dimensionCode] = result;
+    total += result.total;
+  }
+  return { byDimension, total };
 }

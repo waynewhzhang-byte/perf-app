@@ -11,7 +11,11 @@ import { prisma } from '@/lib/prisma';
 import { loadMatrix, loadSheet } from '@/lib/verify/source-loader';
 import { checkPerformanceLevel, checkSkillLevel, checkTitleLevel, summarize, type BasicFactRow } from '@/lib/verify/dimension-checks';
 import { createRosterResolverFromUsers } from '@/lib/roster-resolver';
-import { aggregateTicketExecutionRows, mergeWorkMemberTicketScores, type WorkMemberRow } from '@/lib/ticket-execution-import';
+import {
+  aggregateTicketExecutionRows,
+  buildWorkMemberTicketRecords,
+  type WorkMemberRow,
+} from '@/lib/ticket-execution-import';
 import { buildFactsFromDefectRows, type DefectRow } from '@/lib/defect-governance';
 import { buildCompetitionSeeds } from '@/lib/competition-import';
 import { buildPatentSeeds, parsePatentRows } from '@/lib/patent-import';
@@ -101,8 +105,14 @@ async function main() {
     ...loadSheet(`${DATA_DIR}/13.工作班成员工作票一种表（720人）.xlsx`).rows,
   ].map((row) => ({ 票类型: row['票类型'], 姓名: row['姓名'], 人员编号: row['人员编号'] }));
   const ticket = aggregateTicketExecutionRows(operationRows, workRows, resolveWithNo);
-  const ticketExpected = mergeWorkMemberTicketScores(ticket.aggregates, memberRows).filter((row) => byEmployeeNo.has(row.employeeNo));
-  add('worksite.ticket-execution', ticketExpected.map((row) => ({ employeeNo: row.employeeNo, score: row.rawScore })));
+  const ticketRecords = [
+    ...ticket.records,
+    ...buildWorkMemberTicketRecords(memberRows),
+  ].filter((row) => byEmployeeNo.has(row.employeeNo));
+  add(
+    'worksite.ticket-execution',
+    ticketRecords.map((row) => ({ employeeNo: row.employeeNo, score: row.score })),
+  );
 
   // 缺陷和安全：直接复用与生产导入相同的源表解析与评分规则；
   // 仅核验 435 人评价花名册，源表里的名册外参与人不属于本年度评价范围。

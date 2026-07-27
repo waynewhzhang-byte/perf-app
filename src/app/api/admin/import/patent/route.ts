@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { importPatentFacts, type PatentFieldMapping } from '@/lib/patent-import';
+import { factImportErrorResponse } from '@/lib/fact-import-http';
 
 /**
  * 发明专利导入：每行 1 个专利，4 位发明人按序展开为 4 条事实。
@@ -44,13 +45,17 @@ export async function POST(req: Request) {
       patentName: mapping.patentName,
       inventorCols: mapping.inventorCols,
     };
-    const result = await importPatentFacts(prisma, year, sourceFile, rows, patentMapping);
+    const result = await importPatentFacts(
+      prisma,
+      year,
+      sourceFile,
+      rows,
+      patentMapping,
+      { preserveEmployeeScoreTotals: true, createdBy: session.userId },
+    );
 
     return NextResponse.json({ success: true, ...result });
   } catch (e) {
-    console.error('POST /api/admin/import/patent:', e);
-    const message = e instanceof Error ? e.message : '服务器内部错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return factImportErrorResponse(e, 'POST /api/admin/import/patent:');
   }
 }
-

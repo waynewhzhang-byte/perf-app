@@ -324,6 +324,9 @@ export function buildFactsFromDefectRows(
           rawPersonField: line.rawPersonField || null,
           personIndex: line.personIndex,
           category: row.所属类别 != null ? String(row.所属类别) : null,
+          sourceData: Object.fromEntries(
+            Object.entries(row).map(([key, value]) => [key, value == null ? '' : String(value)]),
+          ),
         },
       });
     }
@@ -438,4 +441,3 @@ export function importDefectGovernanceFacts(
     unmatchedNames,
   };
 }
-

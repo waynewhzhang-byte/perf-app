@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   aggregateEmployeeDimensions,
   applyTicketCohortNormalization,
+  sumTicketFactsByEmployee,
   capToStandard,
   cappedPair,
   normalizeWithinCohort,
@@ -86,6 +87,20 @@ describe('aggregateEmployeeDimensions', () => {
 });
 
 describe('applyTicketCohortNormalization', () => {
+  it('逐票事实先按员工求和再进入专业归一化', () => {
+    assert.deepEqual(
+      sumTicketFactsByEmployee([
+        { employeeNo: '1001', score: 0.01 },
+        { employeeNo: '1001', score: 5 },
+        { employeeNo: '1002', score: 1.5 },
+      ]),
+      [
+        { employeeNo: '1001', rawTicketScore: 5.01 },
+        { employeeNo: '1002', rawTicketScore: 1.5 },
+      ],
+    );
+  });
+
   it('normalizes by specialty cohort', () => {
     const normalized = applyTicketCohortNormalization(
       [

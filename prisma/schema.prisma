@@ -552,27 +552,35 @@ enum PerformanceFactEventType {
 }
 
 model PerformanceFact {
-  id             String                   @id @default(cuid())
-  year           Int
-  employeeNo     String
-  employeeName   String
-  userId         String?
-  dimensionCode  String
-  dimensionTitle String
-  role           PerformanceFactRole
-  eventType      PerformanceFactEventType
-  score          Decimal                  @db.Decimal(10, 2)
-  defectRef      String
-  defectLevel    String
-  eventDate      String?
-  sourceFile     String
-  metadata       Json                     @default("{}")
-  createdAt      DateTime                 @default(now())
+  id                String                   @id @default(cuid())
+  year              Int
+  employeeNo        String
+  employeeName      String
+  userId            String?
+  dimensionCode     String
+  dimensionTitle    String
+  role              PerformanceFactRole
+  eventType         PerformanceFactEventType
+  score             Decimal                  @db.Decimal(10, 2)
+  defectRef         String
+  defectLevel       String
+  eventDate         String?
+  sourceFile        String
+  // 原始业务记录身份与来源定位；旧事实允许为空，展示层兼容 metadata/历史字段。
+  recordKey         String?
+  recordType        String?
+  recordTitle       String?
+  participationRole String?
+  sourceSheet       String?
+  sourceRowNo       Int?
+  metadata          Json                     @default("{}")
+  createdAt         DateTime                 @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([year, employeeNo, dimensionCode, defectRef, role, eventType])
   @@index([year, employeeNo, dimensionCode])
+  @@index([year, employeeNo, dimensionCode, recordKey])
   @@index([userId, year])
 }
 

@@ -40,7 +40,14 @@ export interface SeedBasedImportResult {
  */
 export async function persistSeedsBySource(
   prisma: PrismaClient,
-  scope: { year: number; dimensionCode: string; sourceFile: string; replaceAcrossSourceFiles?: boolean },
+  scope: {
+    year: number;
+    dimensionCode: string;
+    sourceFile: string;
+    replaceAcrossSourceFiles?: boolean;
+    preserveEmployeeScoreTotals?: boolean;
+    createdBy?: string;
+  },
   seeds: PerformanceFactSeed[],
 ): Promise<SeedBasedImportResult> {
   if (seeds.length === 0) {
@@ -107,4 +114,10 @@ export async function persistSeedsByDimension(
 export function cellStr(value: unknown): string {
   if (value == null) return '';
   return String(value).trim();
+}
+
+/** 读取导入准备阶段标注的真实 Excel 行号；普通上传仍按“首行为表头”回退。 */
+export function sourceRowNoOf(row: Record<string, string>, fallback: number): number {
+  const sourceRowNo = Number(row.__sourceRowNo);
+  return Number.isInteger(sourceRowNo) && sourceRowNo > 0 ? sourceRowNo : fallback;
 }

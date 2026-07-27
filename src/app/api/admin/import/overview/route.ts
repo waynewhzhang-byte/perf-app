@@ -6,6 +6,7 @@ import {
   BASIC_DIMENSION_LABELS,
   BASIC_DIMENSION_TO_CODE,
 } from '@/lib/basic-dimension-map';
+import { sumTicketFactsByEmployee } from '@/lib/dimension-aggregation';
 
 const PAGE_SIZE = 30;
 
@@ -95,13 +96,18 @@ export async function GET(req: Request) {
         list.push(f);
         perfByNo.set(f.employeeNo, list);
       }
+      const ticketRawByNo = new Map(
+        sumTicketFactsByEmployee(
+          perfFacts.filter((fact) => fact.dimensionCode === 'worksite.ticket-execution'),
+        ).map((row) => [row.employeeNo, row.rawTicketScore]),
+      );
 
       const rows = users.map((u) => {
         const no = u.employeeNo!;
         const basics = basicByNo.get(no) ?? [];
         const perfs = perfByNo.get(no) ?? [];
         const basicTotal = basics.reduce((s, f) => s + Number(f.score), 0);
-        const ticket = perfs.find((f) => f.dimensionCode === 'worksite.ticket-execution');
+        const ticketFacts = perfs.filter((f) => f.dimensionCode === 'worksite.ticket-execution');
         const defectFacts = perfs.filter((f) => f.dimensionCode === 'worksite.defect-governance');
         const defectRaw = defectFacts.reduce((s, f) => s + Number(f.score), 0);
 
@@ -122,10 +128,13 @@ export async function GET(req: Request) {
               yearBreakdown: f.yearBreakdown,
             })),
           },
-          ticket: ticket
+          ticket: ticketFacts.length > 0
             ? {
-                rawScore: Number(ticket.score),
-                breakdown: (ticket.metadata as { breakdown?: unknown })?.breakdown ?? null,
+                rawScore: ticketRawByNo.get(no) ?? 0,
+                recordCount: ticketFacts.length,
+                breakdown: ticketFacts.length === 1
+                  ? (ticketFacts[0]!.metadata as { breakdown?: unknown })?.breakdown ?? null
+                  : null,
               }
             : null,
           defect: defectFacts.length

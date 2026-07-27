@@ -9,6 +9,7 @@ import {
   defaultScoringRuleConfigs,
 } from '@/lib/scoring-standards';
 import { round2 } from '@/lib/rounding';
+import type { FactRecordView } from '@/lib/fact-record-view';
 
 /** 单条推导步骤（前端按序渲染为流程节点）。 */
 export interface DerivationStep {
@@ -31,6 +32,7 @@ export interface DerivationFactField {
   thirdLevelTitle?: string;
   metadata?: unknown;
   sourceFile?: string | null;
+  record?: FactRecordView;
 }
 
 /** buildDerivation 的输入事实（与 DerivationFactField 同构）。 */
@@ -132,7 +134,7 @@ function computeOriginalAggregate(code: string, facts: DerivationInputFact[], co
   if (!standard) return 0;
   if (facts.length === 0) return 0;
   if (standard.ruleType === 'NORMALIZE') {
-    const raw = facts[0]!.score;
+    const raw = facts.reduce((sum, fact) => sum + fact.score, 0);
     const cohortMax = context.ticketCohortMax ?? raw;
     const targetMax = (ruleConfigFor(code)?.targetMaxScore as number | undefined) ?? standard.maxScore;
     return cohortMax > 0 ? round2((raw / cohortMax) * targetMax) : 0;
@@ -310,30 +312,51 @@ function buildNormalizeDerivation(
   const config = ruleConfigFor(code) ?? {};
   const operationStepPrice = (config.operationStepPrice as number | undefined) ?? 0.01;
   const targetMax = (config.targetMaxScore as number | undefined) ?? standard.maxScore;
-  const agg = facts[0]!;
-  const raw = agg.score;
-  const meta = agg.metadata as { breakdown?: TicketBreakdown; isRawScore?: boolean } | undefined;
-  const breakdown = meta?.breakdown;
+  const raw = facts.reduce((sum, fact) => sum + fact.score, 0);
+  const breakdown: TicketBreakdown = {};
+  let operationRecordCount = 0;
+  let hasTicketDetails = false;
+  let hasPerRecordTicketDetails = false;
+  for (const fact of facts) {
+    const meta = fact.metadata as {
+      breakdown?: TicketBreakdown;
+      scoreCategory?: keyof TicketBreakdown;
+    } | undefined;
+    if (meta?.breakdown) {
+      hasTicketDetails = true;
+      for (const [key, value] of Object.entries(meta.breakdown)) {
+        const field = key as keyof TicketBreakdown;
+        breakdown[field] = (breakdown[field] ?? 0) + Number(value ?? 0);
+      }
+    }
+    if (meta?.scoreCategory) {
+      hasTicketDetails = true;
+      hasPerRecordTicketDetails = true;
+      breakdown[meta.scoreCategory] = (breakdown[meta.scoreCategory] ?? 0) + fact.score;
+      if (meta.scoreCategory === 'operationPoints') operationRecordCount += 1;
+    }
+  }
+  if (!operationRecordCount) operationRecordCount = breakdown.operationItems ?? 0;
   const cohortMax = context.ticketCohortMax ?? raw;
   const steps: DerivationStep[] = [];
 
   // 第一段：原始分
-  if (breakdown && (breakdown.operationItems ?? 0) > 0) {
+  if (operationRecordCount > 0) {
     steps.push({
-      label: `操作票 ${breakdown.operationItems!} 项 × ${operationStepPrice} = ${round2(breakdown.operationPoints ?? breakdown.operationItems! * operationStepPrice)}`,
+      label: `操作票 ${operationRecordCount} ${hasPerRecordTicketDetails ? '张' : '项'} × ${operationStepPrice} = ${round2(breakdown.operationPoints ?? operationRecordCount * operationStepPrice)}`,
     });
   }
-  if (breakdown && (breakdown.workLeaderPoints ?? 0) > 0) {
+  if ((breakdown.workLeaderPoints ?? 0) > 0) {
     steps.push({ label: `工作票负责人得分 ${round2(breakdown.workLeaderPoints!)}` });
   }
-  if (breakdown && (breakdown.workPermitterPoints ?? 0) > 0) {
+  if ((breakdown.workPermitterPoints ?? 0) > 0) {
     steps.push({ label: `工作票许可人得分 ${round2(breakdown.workPermitterPoints!)}` });
   }
-  if (breakdown && (breakdown.workMemberPoints ?? 0) > 0) {
+  if ((breakdown.workMemberPoints ?? 0) > 0) {
     steps.push({ label: `工作票班成员得分 ${round2(breakdown.workMemberPoints!)}` });
   }
 
-  if (steps.length > 0) {
+  if (hasTicketDetails) {
     steps.push({ label: `原始分 ${round2(raw)}`, kind: 'subtotal' });
   } else {
     // breakdown 缺失：聚合显示

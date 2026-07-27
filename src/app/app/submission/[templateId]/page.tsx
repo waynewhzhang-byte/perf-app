@@ -63,6 +63,17 @@ interface SubItem {
   attachments?: Attachment[];
   optionReviews?: OptionReview[];
 }
+interface FactRecordResponse {
+  id: string;
+  recordKey: string;
+  recordType: string;
+  title: string;
+  roleLabel?: string;
+  score: number;
+  occurredAt?: string;
+  details: { label: string; value: string }[];
+  source: { file?: string; sheet?: string; rowNo?: number };
+}
 
 export default function SubmissionPage() {
   const { templateId } = useParams<{ templateId: string }>();
@@ -102,6 +113,7 @@ export default function SubmissionPage() {
         thirdLevelTitle?: string;
         yearBreakdown?: unknown;
         sourceFile?: string | null;
+        record?: FactRecordResponse;
       }[];
       derivation?: {
         ruleType: string;
@@ -120,6 +132,7 @@ export default function SubmissionPage() {
           thirdLevelTitle?: string;
           metadata?: unknown;
           sourceFile?: string | null;
+          record?: FactRecordResponse;
         }[];
         steps: { label: string; detail?: string; kind?: 'raw' | 'subtotal' | 'cap' | 'final' | 'note' }[];
       };
@@ -516,7 +529,9 @@ export default function SubmissionPage() {
         itemId: fi.itemId,
         selected: fi.facts.map((f, index) => ({
           index,
-          label: `${f.defectLevel || f.role || ''} ${f.defectRef || f.label || ''}`.trim() || fi.itemTitle,
+          label: f.record?.title
+            ?? (`${f.defectLevel || f.role || ''} ${f.defectRef || f.label || ''}`.trim()
+              || fi.itemTitle),
           score: f.score,
         })),
         isSystemFilled: true as const,
@@ -836,6 +851,41 @@ export default function SubmissionPage() {
   };
 
   type FactItem = NonNullable<typeof factsData>['items'][number];
+  type FactRecord = NonNullable<FactItem['facts'][number]['record']>;
+
+  const formatFactScore = (score: number) =>
+    Number.isInteger(score * 10) ? score.toFixed(1) : score.toFixed(2);
+
+  const renderFactRecord = (record: FactRecord) => {
+    const sourceLocation = [
+      record.source.file,
+      record.source.sheet ? `工作表：${record.source.sheet}` : '',
+      record.source.rowNo ? `第 ${record.source.rowNo} 行` : '',
+    ].filter(Boolean).join(' · ');
+    return (
+      <div className="min-w-0">
+        <p className="font-medium text-slate-700">{record.title}</p>
+        {(record.roleLabel || record.occurredAt) && (
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {[record.roleLabel, record.occurredAt?.slice(0, 10)].filter(Boolean).join(' · ')}
+          </p>
+        )}
+        {record.details.length > 0 && (
+          <dl className="mt-1 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+            {record.details.map((detail, index) => (
+              <div key={`${detail.label}-${index}`} className="flex min-w-0 gap-1 text-[11px]">
+                <dt className="shrink-0 text-slate-400">{detail.label}：</dt>
+                <dd className="break-words text-slate-600">{detail.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {sourceLocation && (
+          <p className="mt-1 text-[10px] text-slate-400">来源：{sourceLocation}</p>
+        )}
+      </div>
+    );
+  };
 
   const renderDerivationCell = (fi: FactItem) => {
     if (fi.factKind === 'profile' || !fi.derivation) {
@@ -867,16 +917,20 @@ export default function SubmissionPage() {
                   <p className="text-xs text-slate-400">暂无导入事实</p>
                 ) : (
                   fi.derivation.rawFactFields.map((rf) => (
-                    <p key={rf.id} className="text-xs text-slate-500">
-                      {rf.thirdLevelTitle && <span className="font-medium">{rf.thirdLevelTitle}</span>}
-                      {rf.defectLevel && ` · ${rf.defectLevel}`}
-                      {rf.defectRef && ` · ${rf.defectRef}`}
-                      {rf.role && ` · ${rf.role}`}
-                      {rf.tierValue && ` · 档位 ${rf.tierValue}`}
-                      {rf.eventDate && ` · ${String(rf.eventDate).slice(0, 10)}`}
-                      {' → '}<b>{rf.score} 分</b>
-                      {rf.sourceFile && <span className="text-slate-400"> · 来源：{rf.sourceFile}</span>}
-                    </p>
+                    <div key={rf.id} className="border-b border-slate-200 py-2 last:border-b-0">
+                      {rf.record ? renderFactRecord(rf.record) : (
+                        <p className="text-xs text-slate-500">
+                          {rf.thirdLevelTitle && <span className="font-medium">{rf.thirdLevelTitle}</span>}
+                          {rf.defectLevel && ` · ${rf.defectLevel}`}
+                          {rf.defectRef && ` · ${rf.defectRef}`}
+                          {rf.role && ` · ${rf.role}`}
+                          {rf.tierValue && ` · 档位 ${rf.tierValue}`}
+                          {rf.eventDate && ` · ${String(rf.eventDate).slice(0, 10)}`}
+                          {' → '}<b>{rf.score} 分</b>
+                          {rf.sourceFile && <span className="text-slate-400"> · 来源：{rf.sourceFile}</span>}
+                        </p>
+                      )}
+                    </div>
                   ))
                 )}
               </div>
@@ -920,6 +974,7 @@ export default function SubmissionPage() {
 
   const renderLeafCriterion = (fi: FactItem, fact?: FactItem['facts'][number]) => {
     if (!fact) return fi.ruleSummary ?? fi.itemTitle;
+    if (fact.record) return renderFactRecord(fact.record);
     if (fi.factKind === 'basic') {
       const tier = fact.tierValue ? `档位 ${fact.tierValue}` : '';
       return [fact.thirdLevelTitle ?? fact.label ?? fi.itemTitle, tier].filter(Boolean).join(' · ');
@@ -1139,11 +1194,11 @@ export default function SubmissionPage() {
         </section>
       )}
 
-      {/* 系统自动填充项：评价维度 → 评分项 → 评价标准与计算过程 */}
+      {/* 系统自动填充项：评价维度 → 评分项 → 基础事实与计算过程 */}
       {appealCentric && groupedFactSections.length > 0 && (
         <div className="mt-5 space-y-5">
           <p className="text-xs text-slate-500">
-            按量化积分表层级展示：评价维度 → 评分项 → 评价标准与计算过程。
+            按量化积分表层级展示：评价维度 → 评分项 → 完整基础事实与计算过程。
           </p>
           {groupedFactSections.map((section) => (
             <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1221,13 +1276,13 @@ export default function SubmissionPage() {
 
                       <div className="px-4 py-3">
                         <div className="mb-2 flex items-center gap-2">
-                          <span className="text-[11px] font-medium text-slate-600">评价标准与计算过程</span>
+                          <span className="text-[11px] font-medium text-slate-600">基础事实与计算过程</span>
                         </div>
                         <div className="overflow-x-auto rounded-md border border-slate-100">
                           <table className="w-full min-w-[28rem] text-left text-xs">
                             <thead>
                               <tr className="bg-slate-50 text-slate-500">
-                                <th className="px-3 py-2 font-medium">评价标准</th>
+                                <th className="px-3 py-2 font-medium">事实记录</th>
                                 <th className="w-16 px-3 py-2 font-medium">得分</th>
                                 <th className="px-3 py-2 font-medium">计算过程</th>
                               </tr>
@@ -1242,7 +1297,7 @@ export default function SubmissionPage() {
                                       renderLeafCriterion(fi, fi.facts.length > 0 ? fact : undefined)
                                     )}
                                   </td>
-                                  <td className="px-3 py-2 font-medium tabular-nums">{Number(fact.score).toFixed(1)}</td>
+                                  <td className="px-3 py-2 font-medium tabular-nums">{formatFactScore(Number(fact.score))}</td>
                                   <td className="px-3 py-2">{index === 0 ? renderDerivationCell(fi) : null}</td>
                                 </tr>
                               ))}

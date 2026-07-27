@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { TECH_CONTRIB_KINDS, importTechContribFacts } from '@/lib/tech-contrib-import';
+import { factImportErrorResponse } from '@/lib/fact-import-http';
 
 const MappingSchema = z.object({
   employeeNo: z.string(),
@@ -42,12 +43,18 @@ export async function POST(req: Request) {
     }
 
     const { year, sourceFile, mapping, rows } = parsed.data;
-    const result = await importTechContribFacts(prisma, kind, year, sourceFile, rows, mapping);
+    const result = await importTechContribFacts(
+      prisma,
+      kind,
+      year,
+      sourceFile,
+      rows,
+      mapping,
+      { preserveEmployeeScoreTotals: true, createdBy: session.userId },
+    );
 
     return NextResponse.json({ success: true, ...result });
   } catch (e) {
-    console.error('POST /api/admin/import/tech:', e);
-    const message = e instanceof Error ? e.message : '服务器内部错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return factImportErrorResponse(e, 'POST /api/admin/import/tech:');
   }
 }

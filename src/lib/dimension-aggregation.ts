@@ -219,6 +219,22 @@ export interface TicketCohortRow {
   rawTicketScore: number;
 }
 
+/** 逐票落库后，归一化前必须先恢复为“每名员工原始总分”。 */
+export function sumTicketFactsByEmployee(
+  facts: Array<{ employeeNo: string; score: unknown }>,
+): Array<{ employeeNo: string; rawTicketScore: number }> {
+  const rawByEmployee = new Map<string, number>();
+  for (const fact of facts) {
+    rawByEmployee.set(
+      fact.employeeNo,
+      Math.round(((rawByEmployee.get(fact.employeeNo) ?? 0) + Number(fact.score)) * 100) / 100,
+    );
+  }
+  return [...rawByEmployee.entries()]
+    .map(([employeeNo, rawTicketScore]) => ({ employeeNo, rawTicketScore }))
+    .sort((a, b) => a.employeeNo.localeCompare(b.employeeNo));
+}
+
 export interface TicketNormalizedRow extends TicketCohortRow {
   ticketScore: number;
   ticketCohortMax: number;
