@@ -13,6 +13,12 @@ import {
 } from '@/lib/score-calculation';
 import { persistSubmissionDimensionFacts } from '@/lib/submission-fact-persistence';
 import {
+  captureFinalFactSnapshot,
+  finalFactSnapshotApprovalError,
+  type FinalFactSnapshot,
+} from '@/lib/final-fact-snapshot';
+import {
+  isFactDataSourceDimension,
   isL1ReviewQueueItem,
   resolveFormItemDimension,
 } from '@/lib/system-filled-items';
@@ -258,6 +264,8 @@ export interface ArchivedSnapshot {
   sections: ReturnType<typeof computeSectionScores>;
   templateMaxScore: number;
   finalizedAt: Date;
+  /** 终审时冻结的完整事实、计分过程与分数一致性结果；旧归档可能不存在。 */
+  factSnapshot?: FinalFactSnapshot;
 }
 
 /**
@@ -268,6 +276,7 @@ export function buildArchivedSnapshot(
   sub: ArchiveSubmissionSource,
   templateSections: ScorableSection[],
   finalizedAt: Date,
+  factSnapshot?: FinalFactSnapshot | null,
 ): ArchivedSnapshot {
   const scoreByItemId = new Map(sub.items.map((it) => [it.itemId, Number(it.score)]));
   const sectionRows = computeSectionScores(templateSections, scoreByItemId);
@@ -318,6 +327,7 @@ export function buildArchivedSnapshot(
     sections: sectionRows,
     templateMaxScore,
     finalizedAt,
+    ...(factSnapshot ? { factSnapshot } : {}),
   };
 }
 
@@ -347,7 +357,24 @@ export async function finalizeArchive(
   if (!sub) return 0;
   const total = sub.items.reduce((sum, item) => sum + Number(item.score), 0);
   const templateSections = await loadSectionsForArchive(tx, sub.templateId);
-  const archived = buildArchivedSnapshot(sub, templateSections, approvedAt);
+  await persistSubmissionDimensionFacts(tx, sub.id, approvedAt);
+  const factSnapshot = await captureFinalFactSnapshot(tx, {
+    submissionId: sub.id,
+    archivedTotalScore: total,
+    capturedAt: approvedAt,
+  });
+  const requiresFactSnapshot = sub.items.some((item) =>
+    isFactDataSourceDimension(resolveFormItemDimension(item.item)));
+  if (requiresFactSnapshot) {
+    const snapshotError = finalFactSnapshotApprovalError(factSnapshot);
+    if (snapshotError) throw new ReviewError(snapshotError);
+  }
+  const archived = buildArchivedSnapshot(
+    sub,
+    templateSections,
+    approvedAt,
+    factSnapshot,
+  );
   await tx.submission.update({
     where: { id: sub.id },
     data: {
@@ -372,7 +399,6 @@ export async function finalizeArchive(
       archivedData: archived as unknown as Prisma.InputJsonValue,
     },
   });
-  await persistSubmissionDimensionFacts(tx, sub.id, approvedAt);
   return total;
 }
 

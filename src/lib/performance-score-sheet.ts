@@ -478,7 +478,7 @@ export function buildPerformanceScoreSheet(input: ScoreSheetInput): PerformanceS
 
 /** 查询同一专业的两票原始最高分。 */
 export async function loadTicketSpecialtyMaxRaw(
-  prisma: PrismaClient,
+  prisma: Pick<PrismaClient, 'performanceFact' | 'user'>,
   year: number,
   workArea: string | null | undefined,
 ): Promise<number> {

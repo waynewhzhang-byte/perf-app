@@ -451,7 +451,7 @@ describe('buildArchivedSnapshot', () => {
 });
 
 describe('finalizeArchive', () => {
-  it('编排顺序：submission.update → performanceRecord.upsert → 申报事实落库', async () => {
+  it('编排顺序：申报事实落库并冻结快照 → submission.update → performanceRecord.upsert', async () => {
     const approvedAt = new Date('2026-07-23T12:00:00.000Z');
     const calls: string[] = [];
     let archivedPayload: unknown;
@@ -471,7 +471,20 @@ describe('finalizeArchive', () => {
       preReviewPassed: null,
       preReviewMessages: null,
       preReviewMatchedRules: null,
-      template: { year: 2026 },
+      template: {
+        year: 2026,
+        sections: [{
+          items: [{
+            id: 'fi-1',
+            title: '手工项',
+            dimensionCode: 'performance.competition',
+            scoreMode: 'TIERS',
+            maxScore: null,
+            maxSelections: 1,
+            scoreOptions: [{ optionId: 'o1', label: '省公司', score: 2 }],
+          }],
+        }],
+      },
       items: [
         {
           id: 'si-1',
@@ -491,7 +504,13 @@ describe('finalizeArchive', () => {
           attachments: [],
         },
       ],
-      user: { id: 'user-1', employeeNo: 'E001', fullName: '张三' },
+      user: {
+        id: 'user-1',
+        employeeNo: 'E001',
+        fullName: '张三',
+        branch: null,
+        department: null,
+      },
     };
 
     const tx = {
@@ -542,19 +561,28 @@ describe('finalizeArchive', () => {
           calls.push('submissionDimensionFact.create');
           return {};
         },
+        findMany: async () => [],
       },
+      employeeBasicFact: { findMany: async () => [] },
+      performanceFact: { findMany: async () => [] },
+      user: { findMany: async () => [] },
     } as any;
 
     const total = await finalizeArchive(tx, 'sub-1', 'reviewer-1', approvedAt);
     assert.equal(total, 2);
     assert.deepEqual(calls.slice(0, 3), [
+      'submissionDimensionFact.deleteMany',
       'submission.update',
       'performanceRecord.upsert',
-      'submissionDimensionFact.deleteMany',
     ]);
-    const snap = archivedPayload as { finalizedAt: Date; submissionId: string };
+    const snap = archivedPayload as {
+      finalizedAt: Date;
+      submissionId: string;
+      factSnapshot: { reconciliation: { status: string } };
+    };
     assert.equal(snap.submissionId, 'sub-1');
     assert.equal(snap.finalizedAt, approvedAt);
+    assert.equal(snap.factSnapshot.reconciliation.status, 'MATCHED');
   });
 
   it('申报不存在时返回 0 且不写库', async () => {
@@ -593,7 +621,20 @@ describe('finalizeAffirmSubmission', () => {
       preReviewPassed: true,
       preReviewMessages: [],
       preReviewMatchedRules: [],
-      template: { year: 2026 },
+      template: {
+        year: 2026,
+        sections: [{
+          items: [{
+            id: 'fi-1',
+            title: '技能等级',
+            dimensionCode: 'basic.skill-level',
+            scoreMode: 'TIERS',
+            maxScore: null,
+            maxSelections: 1,
+            scoreOptions: [],
+          }],
+        }],
+      },
       items: [
         {
           id: 'si-1',
@@ -614,7 +655,13 @@ describe('finalizeAffirmSubmission', () => {
           attachments: [],
         },
       ],
-      user: { id: 'user-1', employeeNo: 'E001', fullName: '张三' },
+      user: {
+        id: 'user-1',
+        employeeNo: 'E001',
+        fullName: '张三',
+        branch: null,
+        department: null,
+      },
     };
 
     const tx = {
@@ -660,7 +707,20 @@ describe('finalizeAffirmSubmission', () => {
       submissionDimensionFact: {
         deleteMany: async () => ({ count: 0 }),
         create: async () => ({}),
+        findMany: async () => [],
       },
+      employeeBasicFact: {
+        findMany: async () => [{
+          id: 'bf-1',
+          dimension: 'SKILL_LEVEL',
+          tierValue: '技师',
+          yearBreakdown: null,
+          score: 3,
+          sourceFile: 'basic.xlsx',
+        }],
+      },
+      performanceFact: { findMany: async () => [] },
+      user: { findMany: async () => [] },
     } as any;
 
     const total = await finalizeAffirmSubmission(tx, 'sub-1', 'user-1', approvedAt);

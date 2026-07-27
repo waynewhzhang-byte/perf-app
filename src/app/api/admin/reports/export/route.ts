@@ -13,6 +13,10 @@ import {
   exportFilenameSuffix,
 } from '@/lib/report-export';
 import { getReviewProgress } from '@/lib/review-progress';
+import { prisma } from '@/lib/prisma';
+import {
+  buildFinalPerformanceReportBuffer,
+} from '@/lib/final-performance-report';
 
 function contentDisposition(filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_');
@@ -49,8 +53,8 @@ export async function GET(req: Request) {
     const parsed = parseExportFilters(url);
     if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
     const filters = parsed;
-    if (url.searchParams.get('complete') === '1') {
-      const progress = await getReviewProgress(filters.templateId);
+    if (format === 'xlsx' || url.searchParams.get('complete') === '1') {
+      const progress = await getReviewProgress(filters.templateId, filters);
       if (!progress?.complete) {
         return NextResponse.json(
           { error: '全体员工尚未完成两级审核，完整绩效报表暂不可导出', progress },
@@ -62,6 +66,34 @@ export async function GET(req: Request) {
 
     const tpl = await getTemplateLabel(filters.templateId);
     if (!tpl) return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
+
+    if (format === 'xlsx') {
+      const result = await buildFinalPerformanceReportBuffer(prisma, filters);
+      if (!result) {
+        return NextResponse.json({ error: '申报表不存在' }, { status: 404 });
+      }
+      if (result.report.rows.length === 0) {
+        return NextResponse.json(
+          { error: '当前筛选范围暂无终审归档数据' },
+          { status: 404 },
+        );
+      }
+      const reviewSuffix = result.manualReviewCount > 0
+        ? `-待人工复核${result.manualReviewCount}人`
+        : '';
+      const name = `${tpl.title}-${tpl.year}-最终绩效事实报表${suffix}${reviewSuffix}.xlsx`;
+      return new NextResponse(new Uint8Array(result.buffer), {
+        headers: {
+          'Content-Type':
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'Content-Disposition': contentDisposition(name),
+          'Content-Length': String(result.buffer.length),
+          'X-Manual-Review-Count': String(result.manualReviewCount),
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
+    }
 
     if (format === 'csv') {
       const csv = await buildTemplateSummaryCsv(filters);

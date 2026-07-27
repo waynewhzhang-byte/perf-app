@@ -1,4 +1,9 @@
 import { prisma } from '@/lib/prisma';
+import {
+  reportSubmissionScopeWhere,
+  type ReportScopeFilters,
+} from '@/lib/report-filters';
+import { readFinalFactSnapshot } from '@/lib/final-fact-snapshot';
 
 export type ReviewProgressBlocker = {
   level: 'L1' | 'L2';
@@ -29,7 +34,30 @@ export type ReviewProgress = {
   complete: boolean;
 };
 
-type ProgressOptions = { branchId?: string };
+type ProgressOptions = Partial<ReportScopeFilters> & { branchId?: string };
+
+export function finalArchiveReviewState(
+  approvedSubmissionIds: string[],
+  records: Array<{ submissionId: string; archivedData: unknown }>,
+) {
+  const recordBySubmission = new Map(
+    records.map((record) => [record.submissionId, record]),
+  );
+  let missingSnapshotCount = 0;
+  let manualReviewCount = 0;
+  for (const submissionId of approvedSubmissionIds) {
+    const record = recordBySubmission.get(submissionId);
+    const snapshot = record
+      ? readFinalFactSnapshot(record.archivedData)
+      : null;
+    if (!snapshot) {
+      missingSnapshotCount += 1;
+    } else if (snapshot.reconciliation.status === 'MANUAL_REVIEW') {
+      manualReviewCount += 1;
+    }
+  }
+  return { missingSnapshotCount, manualReviewCount };
+}
 
 export async function getReviewProgress(templateId: string, options: ProgressOptions = {}): Promise<ReviewProgress | null> {
   const template = await prisma.formTemplate.findUnique({
@@ -38,18 +66,26 @@ export async function getReviewProgress(templateId: string, options: ProgressOpt
   });
   if (!template) return null;
 
+  const scope: ReportScopeFilters = {
+    branchIds: [
+      ...(options.branchIds ?? []),
+      ...(options.branchId ? [options.branchId] : []),
+    ],
+    declarationLevelIds: options.declarationLevelIds ?? [],
+    declarationSpecialtyIds: options.declarationSpecialtyIds ?? [],
+  };
   const employeeWhere = {
     roles: { some: { role: 'EMPLOYEE' as const } },
-    ...(options.branchId ? { branchId: options.branchId } : {}),
+    ...(scope.branchIds.length > 0
+      ? { branchId: { in: scope.branchIds } }
+      : {}),
   };
   const submissionWhere = {
     templateId,
-    ...(options.branchId
-      ? { OR: [{ branchId: options.branchId }, { branchId: null, user: { branchId: options.branchId } }] }
-      : {}),
+    ...reportSubmissionScopeWhere(scope),
   };
 
-  const [employees, submissions, l1Reviewers, l2Reviewers] = await Promise.all([
+  const [employeeCandidates, submissions, l1Reviewers, l2Reviewers] = await Promise.all([
     prisma.user.findMany({
       where: employeeWhere,
       select: { id: true, branchId: true, branch: { select: { name: true } } },
@@ -89,8 +125,31 @@ export async function getReviewProgress(templateId: string, options: ProgressOpt
     }),
   ]);
 
+  const submissionEmployeeIds = new Set(
+    submissions.map((submission) => submission.userId),
+  );
+  const hasDeclarationScope = (
+    scope.declarationLevelIds.length > 0
+    || scope.declarationSpecialtyIds.length > 0
+  );
+  const employees = hasDeclarationScope
+    ? employeeCandidates.filter((employee) => submissionEmployeeIds.has(employee.id))
+    : employeeCandidates;
   const employeeIds = new Set(employees.map((employee) => employee.id));
   const scopedSubmissions = submissions.filter((submission) => employeeIds.has(submission.userId));
+  const approvedSubmissionIds = scopedSubmissions
+    .filter((submission) => submission.status === 'L2_APPROVED')
+    .map((submission) => submission.id);
+  const finalRecords = approvedSubmissionIds.length > 0
+    ? await prisma.performanceRecord.findMany({
+        where: { submissionId: { in: approvedSubmissionIds } },
+        select: { submissionId: true, archivedData: true },
+      })
+    : [];
+  const archiveState = finalArchiveReviewState(
+    approvedSubmissionIds,
+    finalRecords,
+  );
   const statusCounts: Record<string, number> = {};
   for (const submission of scopedSubmissions) {
     statusCounts[submission.status] = (statusCounts[submission.status] ?? 0) + 1;
@@ -181,6 +240,22 @@ export async function getReviewProgress(templateId: string, options: ProgressOpt
       count,
     });
   }
+  if (archiveState.missingSnapshotCount > 0) {
+    blockers.push({
+      level: 'L2',
+      code: 'MISSING_FINAL_FACT_SNAPSHOT',
+      label: '终审档案缺少事实快照',
+      count: archiveState.missingSnapshotCount,
+    });
+  }
+  if (archiveState.manualReviewCount > 0) {
+    blockers.push({
+      level: 'L2',
+      code: 'FINAL_FACT_MANUAL_REVIEW',
+      label: '终审事实与归档分数待人工复核',
+      count: archiveState.manualReviewCount,
+    });
+  }
   for (const branch of employeeCountByBranch.values()) {
     const outstandingCount = scopedSubmissions.filter((submission) => {
       const branchId = submission.branchId ?? submission.user.branch?.id ?? null;
@@ -243,6 +318,10 @@ export async function getReviewProgress(templateId: string, options: ProgressOpt
       })),
     },
     blockers,
-    complete: employees.length > 0 && approvedEmployees.size === employees.length,
+    complete:
+      employees.length > 0
+      && approvedEmployees.size === employees.length
+      && archiveState.missingSnapshotCount === 0
+      && archiveState.manualReviewCount === 0,
   };
 }

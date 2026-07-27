@@ -24,7 +24,8 @@
     "verify:imported-scores": "npx tsx scripts/verify-imported-scores.ts",
     "verify:2026-final-results": "npx tsx scripts/verify-2026-final-results.ts",
     "backfill:2026-hire-dates": "npx tsx scripts/backfill-2026-hire-dates.ts",
-    "backfill:declaration-levels": "npx tsx scripts/backfill-declaration-levels.ts"
+    "backfill:declaration-levels": "npx tsx scripts/backfill-declaration-levels.ts",
+    "backfill:final-fact-snapshots": "npx tsx scripts/backfill-final-fact-snapshots.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

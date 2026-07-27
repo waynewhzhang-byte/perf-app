@@ -2,8 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
-import { EmployeeFactPanel } from '@/components/employee-fact-panel';
-import { SectionRadarPanel } from '@/components/section-radar-panel';
+import { FinalizedFactPanel } from '@/components/finalized-fact-panel';
 import { QuantitativeReportAnalysis } from '@/components/quantitative-report-analysis';
 import type { ReviewProgress } from '@/lib/review-progress';
 
@@ -28,8 +27,6 @@ interface Report {
   records: EmployeeRecord[]; progress: ReviewProgress | null;
 }
 
-const ALL = '';
-
 function distributionBuckets(min: number, max: number, buckets = 8) {
   if (min === max) return [{ label: `${min.toFixed(0)}`, min, max, count: 0 }];
   const step = (max - min) / buckets;
@@ -44,9 +41,9 @@ function distributionBuckets(min: number, max: number, buckets = 8) {
 
 function buildFilterQuery(params: {
   templateId: string;
-  branchId: string;
-  declarationLevelId: string;
-  declarationSpecialtyId: string;
+  branchIds: string[];
+  declarationLevelIds: string[];
+  declarationSpecialtyIds: string[];
   complete?: boolean;
   format?: string;
   submissionId?: string;
@@ -54,9 +51,10 @@ function buildFilterQuery(params: {
   const q = new URLSearchParams();
   if (params.format) q.set('format', params.format);
   if (params.templateId) q.set('templateId', params.templateId);
-  if (params.branchId) q.set('branchId', params.branchId);
-  if (params.declarationLevelId) q.set('declarationLevelId', params.declarationLevelId);
-  if (params.declarationSpecialtyId) q.set('declarationSpecialtyId', params.declarationSpecialtyId);
+  params.branchIds.forEach((id) => q.append('branchIds', id));
+  params.declarationLevelIds.forEach((id) => q.append('declarationLevelIds', id));
+  params.declarationSpecialtyIds.forEach((id) =>
+    q.append('declarationSpecialtyIds', id));
   if (params.complete) q.set('complete', '1');
   if (params.submissionId) q.set('submissionId', params.submissionId);
   return q.toString();
@@ -69,15 +67,19 @@ export default function ReportsPage() {
   const [declarationSpecialties, setDeclarationSpecialties] = useState<DictItem[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [selectedTpl, setSelectedTpl] = useState<string>('');
-  const [branchId, setBranchId] = useState(ALL);
-  const [declarationLevelId, setDeclarationLevelId] = useState(ALL);
-  const [declarationSpecialtyId, setDeclarationSpecialtyId] = useState(ALL);
+  const [branchIds, setBranchIds] = useState<string[]>([]);
+  const [declarationLevelIds, setDeclarationLevelIds] = useState<string[]>([]);
+  const [declarationSpecialtyIds, setDeclarationSpecialtyIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState<string | null>(null);
 
-  const hasFilters = Boolean(branchId || declarationLevelId || declarationSpecialtyId);
+  const hasFilters = (
+    branchIds.length > 0
+    || declarationLevelIds.length > 0
+    || declarationSpecialtyIds.length > 0
+  );
 
   const active = useMemo(() => {
     if (!selectedTpl) return reports[0] ?? null;
@@ -111,48 +113,66 @@ export default function ReportsPage() {
 
   const exportQueryBase = useMemo(() => ({
     templateId: selectedTpl,
-    branchId,
-    declarationLevelId,
-    declarationSpecialtyId,
-  }), [selectedTpl, branchId, declarationLevelId, declarationSpecialtyId]);
+    branchIds,
+    declarationLevelIds,
+    declarationSpecialtyIds,
+  }), [
+    selectedTpl,
+    branchIds,
+    declarationLevelIds,
+    declarationSpecialtyIds,
+  ]);
 
-  const canExportAll = Boolean(active?.progress?.complete);
-  const canExport = Boolean(selectedTpl) && (hasFilters ? (active?.records.length ?? 0) > 0 : canExportAll);
+  const canExport = Boolean(
+    selectedTpl
+    && active?.progress?.complete
+    && (active?.records.length ?? 0) > 0,
+  );
 
   const exportSummary = useCallback(async () => {
     if (!selectedTpl || !canExport) return;
     setExporting('csv');
     await downloadFile(
-      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'csv', complete: !hasFilters })}`,
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'csv', complete: true })}`,
       'summary.csv',
     );
     setExporting(null);
-  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
+  }, [canExport, downloadFile, exportQueryBase, selectedTpl]);
 
   const exportDetail = useCallback(async () => {
     if (!selectedTpl || !canExport) return;
     setExporting('detail');
     await downloadFile(
-      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'detail', complete: !hasFilters })}`,
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'detail', complete: true })}`,
       'detail-summary.csv',
     );
     setExporting(null);
-  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
+  }, [canExport, downloadFile, exportQueryBase, selectedTpl]);
 
   const exportZip = useCallback(async () => {
     if (!selectedTpl || !canExport) return;
     setExporting('zip');
     await downloadFile(
-      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'zip', complete: !hasFilters })}`,
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'zip', complete: true })}`,
       'export.zip',
     );
     setExporting(null);
-  }, [canExport, downloadFile, exportQueryBase, hasFilters, selectedTpl]);
+  }, [canExport, downloadFile, exportQueryBase, selectedTpl]);
+
+  const exportXlsx = useCallback(async () => {
+    if (!selectedTpl || !canExport) return;
+    setExporting('xlsx');
+    await downloadFile(
+      `/api/admin/reports/export?${buildFilterQuery({ ...exportQueryBase, format: 'xlsx', complete: true })}`,
+      'final-performance-facts.xlsx',
+    );
+    setExporting(null);
+  }, [canExport, downloadFile, exportQueryBase, selectedTpl]);
 
   const exportEmployee = useCallback(async (submissionId: string, name: string) => {
     setExporting(submissionId);
     await downloadFile(
-      `/api/admin/reports/export?${buildFilterQuery({ templateId: selectedTpl, branchId: '', declarationLevelId: '', declarationSpecialtyId: '', format: 'employee', submissionId })}`,
+      `/api/admin/reports/export?${buildFilterQuery({ templateId: selectedTpl, branchIds: [], declarationLevelIds: [], declarationSpecialtyIds: [], format: 'employee', submissionId })}`,
       `${name}.zip`,
     );
     setExporting(null);
@@ -163,9 +183,10 @@ export default function ReportsPage() {
     try {
       const params = new URLSearchParams();
       if (tplId) params.set('templateId', tplId);
-      if (branchId) params.set('branchId', branchId);
-      if (declarationLevelId) params.set('declarationLevelId', declarationLevelId);
-      if (declarationSpecialtyId) params.set('declarationSpecialtyId', declarationSpecialtyId);
+      branchIds.forEach((id) => params.append('branchIds', id));
+      declarationLevelIds.forEach((id) => params.append('declarationLevelIds', id));
+      declarationSpecialtyIds.forEach((id) =>
+        params.append('declarationSpecialtyIds', id));
       const r = await fetch(`/api/admin/reports?${params}`);
       if (r.status === 401) { window.location.href = '/admin/login'; return; }
       const d = await r.json();
@@ -177,7 +198,7 @@ export default function ReportsPage() {
       setReports(d.reports ?? []);
     } catch { setError('网络错误'); }
     finally { setLoading(false); }
-  }, [branchId, declarationLevelId, declarationSpecialtyId]);
+  }, [branchIds, declarationLevelIds, declarationSpecialtyIds]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -255,36 +276,39 @@ export default function ReportsPage() {
               ))}
             </select>
           </label>
-          <label className="text-sm text-slate-600">
-            单位
-            <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
-              <option value="">全部</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm text-slate-600">
-            能级等级
-            <select value={declarationLevelId} onChange={(e) => setDeclarationLevelId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
-              <option value="">全部</option>
-              {declarationLevels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm text-slate-600">
-            申报专业
-            <select value={declarationSpecialtyId} onChange={(e) => setDeclarationSpecialtyId(e.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
-              <option value="">全部</option>
-              {declarationSpecialties.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-          <button onClick={() => void load(selectedTpl)} disabled={loading} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
-            {loading ? '加载中…' : '应用筛选'}
-          </button>
+          <MultiChoiceFilter
+            label="单位"
+            items={branches}
+            selected={branchIds}
+            onChange={setBranchIds}
+          />
+          <MultiChoiceFilter
+            label="能级等级"
+            items={declarationLevels}
+            selected={declarationLevelIds}
+            onChange={setDeclarationLevelIds}
+          />
+          <MultiChoiceFilter
+            label="申报专业"
+            items={declarationSpecialties}
+            selected={declarationSpecialtyIds}
+            onChange={setDeclarationSpecialtyIds}
+          />
+          {loading && <span className="text-xs text-slate-400">正在应用筛选…</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
           <button
+            onClick={exportXlsx}
+            disabled={!canExport || exporting !== null}
+            title={active?.progress?.complete ? '导出最终绩效、事实明细和评分过程' : '须等待当前筛选范围完成两级审核'}
+            className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {exporting === 'xlsx' ? '生成中…' : '最终绩效事实报表 (XLSX)'}
+          </button>
+          <button
             onClick={exportSummary}
             disabled={!canExport || exporting !== null}
-            title={hasFilters ? '导出当前筛选范围的汇总表' : canExportAll ? '导出全员汇总表' : '须等待全体员工完成两级审核'}
+            title={active?.progress?.complete ? '导出当前范围汇总表' : '须等待当前筛选范围完成两级审核'}
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             {exporting === 'csv' ? '导出中…' : '汇总表 (CSV)'}
@@ -292,7 +316,7 @@ export default function ReportsPage() {
           <button
             onClick={exportDetail}
             disabled={!canExport || exporting !== null}
-            title={hasFilters ? '导出当前筛选范围的明细汇总' : canExportAll ? '导出全员明细汇总' : '须等待全体员工完成两级审核'}
+            title={active?.progress?.complete ? '导出当前范围评分项明细' : '须等待当前筛选范围完成两级审核'}
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             {exporting === 'detail' ? '导出中…' : '明细汇总 (CSV)'}
@@ -300,7 +324,7 @@ export default function ReportsPage() {
           <button
             onClick={exportZip}
             disabled={!canExport || exporting !== null}
-            title={hasFilters ? '导出当前筛选范围的完整档案' : canExportAll ? '导出全员完整档案' : '须等待全体员工完成两级审核'}
+            title={active?.progress?.complete ? '导出当前范围完整档案' : '须等待当前筛选范围完成两级审核'}
             className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-50"
           >
             {exporting === 'zip' ? '打包中…' : '完整档案 (ZIP)'}
@@ -423,7 +447,7 @@ export default function ReportsPage() {
           <section className="mt-6 rounded-xl border border-slate-200 bg-white">
             <div className="flex items-center justify-between border-b px-5 py-3">
               <h3 className="text-sm font-semibold text-slate-700">员工分值明细（{active.records.length} 人）</h3>
-              <p className="text-xs text-slate-400">展开可查看雷达图、申报项与事实绩效基础</p>
+              <p className="text-xs text-slate-400">展开可查看终审申报项、事实明细与计分过程</p>
             </div>
 
             {active.records.length === 0 ? (
@@ -476,7 +500,6 @@ export default function ReportsPage() {
                         {expanded.has(rec.submissionId) && (
                           <tr key={`${rec.submissionId}-exp`}>
                             <td colSpan={7} className="space-y-4 bg-slate-50 px-5 py-4">
-                              <SectionRadarPanel fetchUrl={`/api/admin/submissions/${rec.submissionId}/radar`} />
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="text-slate-400">
@@ -501,9 +524,7 @@ export default function ReportsPage() {
                                   ))}
                                 </tbody>
                               </table>
-                              {rec.employeeNo && (
-                                <EmployeeFactPanel employeeNo={rec.employeeNo} year={active.templateYear} compact />
-                              )}
+                              <FinalizedFactPanel submissionId={rec.submissionId} />
                               <div className="flex justify-end">
                                 <button
                                   onClick={(e) => { e.stopPropagation(); void exportEmployee(rec.submissionId, `${rec.employeeNo || ''}-${rec.userName}`); }}
@@ -526,6 +547,60 @@ export default function ReportsPage() {
         </>
       )}
     </main>
+  );
+}
+
+function MultiChoiceFilter({
+  label,
+  items,
+  selected,
+  onChange,
+}: {
+  label: string;
+  items: DictItem[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const toggle = (id: string) => {
+    onChange(
+      selected.includes(id)
+        ? selected.filter((value) => value !== id)
+        : [...selected, id],
+    );
+  };
+  return (
+    <fieldset className="min-w-[12rem] rounded-lg border border-slate-200 px-3 py-2">
+      <legend className="px-1 text-xs font-medium text-slate-500">
+        {label}（可多选）
+      </legend>
+      <div className="flex max-w-sm flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className={`rounded-full px-2 py-1 text-xs ${
+            selected.length === 0
+              ? 'bg-slate-900 text-white'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          全部
+        </button>
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => toggle(item.id)}
+            className={`rounded-full px-2 py-1 text-xs ${
+              selected.includes(item.id)
+                ? 'bg-primary-100 font-medium text-primary-700 ring-1 ring-primary-300'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {item.name}
+          </button>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 

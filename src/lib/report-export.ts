@@ -1,51 +1,33 @@
 // 报表导出：按条件筛选申报表，汇总/明细 CSV、完整 ZIP、单员工档案 ZIP（仅二审通过）
 import archiver from 'archiver';
 import { PassThrough } from 'stream';
-import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { getObjectStream } from './minio';
 import { csvField, safeSegment, BOM } from './csv-utils';
+import {
+  parseReportExportFilters,
+  reportSubmissionScopeWhere,
+  type ReportExportFilters,
+} from './report-filters';
 
 const ITEM_STATUS_L2 = 'L2_APPROVED' as const;
 const SUB_STATUS_L2 = 'L2_APPROVED' as const;
 
-export type ExportFilters = {
-  templateId: string;
-  branchId?: string;
-  declarationLevelId?: string;
-  declarationSpecialtyId?: string;
-};
+export type ExportFilters = ReportExportFilters;
 
 type SelectedOption = { label?: string; score?: number };
 
 /** 从 URL 解析导出筛选条件 */
 export function parseExportFilters(url: URL): ExportFilters | { error: string } {
-  const templateId = url.searchParams.get('templateId');
-  if (!templateId) return { error: '缺少 templateId' };
-  const branchId = url.searchParams.get('branchId') || undefined;
-  const declarationLevelId = url.searchParams.get('declarationLevelId') || undefined;
-  const declarationSpecialtyId = url.searchParams.get('declarationSpecialtyId') || undefined;
-  return { templateId, branchId, declarationLevelId, declarationSpecialtyId };
+  return parseReportExportFilters(url);
 }
 
-function submissionWhere(filters: ExportFilters): Prisma.SubmissionWhereInput {
-  const where: Prisma.SubmissionWhereInput = {
+function submissionWhere(filters: ExportFilters) {
+  return {
     templateId: filters.templateId,
     status: SUB_STATUS_L2,
+    ...reportSubmissionScopeWhere(filters),
   };
-  if (filters.declarationLevelId) {
-    where.declarationLevelId = filters.declarationLevelId;
-  }
-  if (filters.declarationSpecialtyId) {
-    where.declarationSpecialtyId = filters.declarationSpecialtyId;
-  }
-  if (filters.branchId) {
-    where.OR = [
-      { branchId: filters.branchId },
-      { branchId: null, user: { branchId: filters.branchId } },
-    ];
-  }
-  return where;
 }
 
 /** 解析 Submission 上的工区显示名 */
@@ -482,8 +464,12 @@ export async function getEmployeeLabel(
 /** 导出文件名后缀（反映筛选条件，便于区分） */
 export function exportFilenameSuffix(filters: ExportFilters): string {
   const parts: string[] = [];
-  if (filters.branchId) parts.push('工区筛选');
-  if (filters.declarationLevelId) parts.push('等级筛选');
-  if (filters.declarationSpecialtyId) parts.push('专业筛选');
+  if (filters.branchIds.length > 0) parts.push(`${filters.branchIds.length}工区`);
+  if (filters.declarationLevelIds.length > 0) {
+    parts.push(`${filters.declarationLevelIds.length}等级`);
+  }
+  if (filters.declarationSpecialtyIds.length > 0) {
+    parts.push(`${filters.declarationSpecialtyIds.length}专业`);
+  }
   return parts.length > 0 ? `-${parts.join('-')}` : '';
 }

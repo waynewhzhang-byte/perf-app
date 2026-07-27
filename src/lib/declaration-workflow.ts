@@ -15,7 +15,10 @@ import {
   levelFromHireDate,
 } from '@/lib/declaration-level';
 import { parseDateOnly, computeItemScore } from '@/lib/submission-score';
-import { finalizeAffirmSubmission } from '@/lib/review-workflow';
+import {
+  finalizeAffirmSubmission,
+  ReviewError,
+} from '@/lib/review-workflow';
 import { normalizeSelectedOptions, type ScoreOptionLike } from '@/lib/form-options';
 import { type HeaderFieldKey, resolveHeaderFields, isFieldEnabled, isFieldRequired } from '@/lib/header-fields';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
@@ -700,7 +703,14 @@ export async function upsertDeclaration(
     });
 
     if (submitMode === 'AFFIRM') {
-      totalScore = await finalizeAffirmSubmission(tx, sub.id, userId);
+      try {
+        totalScore = await finalizeAffirmSubmission(tx, sub.id, userId);
+      } catch (error) {
+        if (error instanceof ReviewError) {
+          throw new DeclarationError(error.message, error.httpStatus);
+        }
+        throw error;
+      }
       finalized = true;
     }
   } else {

@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { extractSystemFilledFromSheet } from '@/lib/system-filled-items';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import { computeSectionScores, type ScorableSection } from '@/lib/score-calculation';
+import { captureFinalFactSnapshot } from '@/lib/final-fact-snapshot';
 
 const BASIC_DIMENSIONS = new Set([
   'basic.skill-level',
@@ -100,6 +101,7 @@ export async function recalculateFactBackedSubmission(
       const archivedData = record.archivedData as {
         items?: Array<{ itemId: string; score: number; selected?: unknown }>;
         sections?: unknown;
+        factSnapshot?: unknown;
       };
       if (Array.isArray(archivedData?.items)) {
         for (const item of archivedData.items) {
@@ -114,6 +116,12 @@ export async function recalculateFactBackedSubmission(
         templateSections,
         new Map(items.map((item) => [item.itemId, Number(item.score)])),
       );
+      const factSnapshot = await captureFinalFactSnapshot(tx, {
+        submissionId,
+        archivedTotalScore: totalScore,
+        capturedAt: new Date(),
+      });
+      if (factSnapshot) archivedData.factSnapshot = factSnapshot;
       await tx.performanceRecord.update({
         where: { id: record.id },
         data: { totalScore, archivedData: archivedData as Prisma.InputJsonValue },
