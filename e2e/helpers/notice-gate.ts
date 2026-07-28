@@ -16,7 +16,13 @@ export async function loginAdminApi(request: APIRequestContext) {
 
 export async function putAppConfig(
   request: APIRequestContext,
-  data: { supportPhone: string; noticeText?: string; noticeSeconds: number },
+  data: {
+    supportPhone: string;
+    noticeText?: string;
+    noticeSeconds: number;
+    homeNoticeTitle?: string;
+    homeNoticeBody?: string;
+  },
 ) {
   await loginAdminApi(request);
   const res = await request.put('/api/admin/app-config', {
@@ -24,6 +30,8 @@ export async function putAppConfig(
       supportPhone: data.supportPhone,
       noticeText: data.noticeText ?? DEFAULT_DECLARATION_NOTICE_TEXT,
       noticeSeconds: data.noticeSeconds,
+      homeNoticeTitle: data.homeNoticeTitle ?? '',
+      homeNoticeBody: data.homeNoticeBody ?? '',
     },
   });
   expect(res.ok(), `PUT app-config failed: ${await res.text()}`).toBeTruthy();

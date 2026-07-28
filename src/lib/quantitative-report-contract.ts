@@ -37,6 +37,12 @@ export interface QuantitativeReportRow {
   ticketTierMaxRaw: number;
   factCount: number;
   safetyFactCount: number;
+  /** 导入事实推算合计（申诉覆盖前） */
+  importedTotalScore: number;
+  /** 申诉管理员改分说明，如「技能等级：4→3」；无改分时为空 */
+  appealAdjustmentNote: string;
+  /** 申诉覆盖相对导入合计的差额 */
+  appealAdjustmentDelta: number;
 }
 
 export function quantitativeReportBranchOptionLabel(name: string): string {

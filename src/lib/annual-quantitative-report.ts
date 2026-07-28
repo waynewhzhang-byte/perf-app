@@ -16,6 +16,7 @@ import {
   quantitativeReportUnitLabel,
   type QuantitativeReportRow,
 } from './quantitative-report-contract';
+import { SCORING_STANDARD_BY_CODE } from './scoring-standards';
 
 const DIMENSIONS = {
   safety: 'performance.safety-contribution',
@@ -63,6 +64,167 @@ export interface AnnualPerformanceFactSource {
   employeeNo: string;
   dimensionCode: string;
   score: unknown;
+}
+
+/** 管理员申诉覆盖分（按员工 + 维度） */
+export interface QuantitativeAppealOverride {
+  employeeNo: string;
+  dimensionCode: string;
+  /** 系统原分（SubmissionItem.score） */
+  systemScore: number;
+  /** 管理员覆盖分 */
+  overrideScore: number;
+}
+
+/** 量化表一行各维度合计（含扣分项，扣分为负或 0） */
+export function quantitativeRowDimensionTotal(row: Pick<
+  QuantitativeReportRow,
+  | 'skillLevel'
+  | 'titleLevel'
+  | 'performanceLevel'
+  | 'safetyContribution'
+  | 'technicalStandard'
+  | 'technicalResource'
+  | 'competitionEvent'
+  | 'competitionExam'
+  | 'innovationAward'
+  | 'innovationPaper'
+  | 'ticketExecution'
+  | 'defectGovernance'
+  | 'violationSevere'
+  | 'violationGeneral'
+>): number {
+  return round1(
+    row.skillLevel
+    + row.titleLevel
+    + row.performanceLevel
+    + row.safetyContribution
+    + row.technicalStandard
+    + row.technicalResource
+    + row.competitionEvent
+    + row.competitionExam
+    + row.innovationAward
+    + row.innovationPaper
+    + row.ticketExecution
+    + row.defectGovernance
+    + row.violationSevere
+    + row.violationGeneral,
+  );
+}
+
+type MutableScoreKey =
+  | 'skillLevel'
+  | 'titleLevel'
+  | 'performanceLevel'
+  | 'safetyContribution'
+  | 'technicalStandard'
+  | 'technicalResource'
+  | 'competitionEvent'
+  | 'competitionExam'
+  | 'innovationAward'
+  | 'innovationPaper'
+  | 'ticketExecution'
+  | 'defectGovernance'
+  | 'violationSevere'
+  | 'violationGeneral';
+
+/** 父维度覆盖时按子列比例缩放；单列维度直接替换。 */
+const OVERRIDE_TARGET_FIELDS: Record<string, MutableScoreKey[]> = {
+  'basic.skill-level': ['skillLevel'],
+  'basic.title-level': ['titleLevel'],
+  'basic.performance-level': ['performanceLevel'],
+  'performance.safety-contribution': ['safetyContribution'],
+  'performance.technical-contribution': ['technicalStandard', 'technicalResource'],
+  'performance.competition': ['competitionEvent', 'competitionExam'],
+  'performance.innovation': ['innovationAward', 'innovationPaper'],
+  'worksite.ticket-execution': ['ticketExecution'],
+  'worksite.defect-governance': ['defectGovernance'],
+  'special.violation-severe': ['violationSevere'],
+  'special.violation-general': ['violationGeneral'],
+};
+
+function dimensionLabel(code: string): string {
+  return SCORING_STANDARD_BY_CODE[code]?.title ?? code;
+}
+
+function applyOverrideToFields(
+  row: QuantitativeReportRow,
+  fields: MutableScoreKey[],
+  overrideScore: number,
+): void {
+  if (fields.length === 1) {
+    row[fields[0]!] = overrideScore;
+    return;
+  }
+  const current = fields.reduce((sum, key) => sum + row[key], 0);
+  if (current === 0 || !Number.isFinite(current)) {
+    row[fields[0]!] = overrideScore;
+    for (const key of fields.slice(1)) row[key] = 0;
+    return;
+  }
+  let allocated = 0;
+  for (let i = 0; i < fields.length; i += 1) {
+    const key = fields[i]!;
+    if (i === fields.length - 1) {
+      row[key] = round1(overrideScore - allocated);
+    } else {
+      const next = round1((row[key] / current) * overrideScore);
+      row[key] = next;
+      allocated = round1(allocated + next);
+    }
+  }
+}
+
+/**
+ * 将 L2 确认有效且管理员已覆盖的申诉分写入量化行：
+ * - 对应维度列改为覆盖分（最终报送分）
+ * - appealAdjustmentNote 记录「维度：原分→覆盖分」
+ * - importedTotalScore / appealAdjustmentDelta 供额外列与总分说明
+ */
+export function applyQuantitativeAppealOverrides(
+  rows: QuantitativeReportRow[],
+  overrides: QuantitativeAppealOverride[],
+): QuantitativeReportRow[] {
+  if (overrides.length === 0) {
+    return rows.map((row) => {
+      const imported = quantitativeRowDimensionTotal(row);
+      return {
+        ...row,
+        importedTotalScore: imported,
+        appealAdjustmentNote: '',
+        appealAdjustmentDelta: 0,
+      };
+    });
+  }
+
+  const byEmployee = new Map<string, QuantitativeAppealOverride[]>();
+  for (const item of overrides) {
+    const list = byEmployee.get(item.employeeNo) ?? [];
+    list.push(item);
+    byEmployee.set(item.employeeNo, list);
+  }
+
+  return rows.map((row) => {
+    const next: QuantitativeReportRow = { ...row };
+    const imported = quantitativeRowDimensionTotal(next);
+    next.importedTotalScore = imported;
+
+    const employeeOverrides = byEmployee.get(row.employeeNo) ?? [];
+    const notes: string[] = [];
+    for (const item of employeeOverrides) {
+      const fields = OVERRIDE_TARGET_FIELDS[item.dimensionCode];
+      if (!fields) continue;
+      const before = fields.reduce((sum, key) => sum + next[key], 0);
+      applyOverrideToFields(next, fields, item.overrideScore);
+      const label = dimensionLabel(item.dimensionCode);
+      notes.push(`${label}：${round1(before)}→${round1(item.overrideScore)}`);
+    }
+
+    const finalTotal = quantitativeRowDimensionTotal(next);
+    next.appealAdjustmentNote = notes.join('；');
+    next.appealAdjustmentDelta = round1(finalTotal - imported);
+    return next;
+  });
 }
 
 export const QUANTITATIVE_DIMENSIONS = [
@@ -320,6 +482,9 @@ export function buildAnnualQuantitativeReportRows(
       ticketTierMaxRaw: 0,
       factCount: dimensionFactCount(totals, DIMENSIONS.defect),
       safetyFactCount: dimensionFactCount(totals, DIMENSIONS.safety),
+      importedTotalScore: 0,
+      appealAdjustmentNote: '',
+      appealAdjustmentDelta: 0,
     } satisfies QuantitativeReportRow];
   });
 
@@ -338,10 +503,17 @@ export function buildAnnualQuantitativeReportRows(
   return provisional
     .map((row) => {
       const ticket = ticketByEmployee.get(row.employeeNo);
-      return {
+      const withTicket = {
         ...row,
         ticketTierMaxRaw: ticket?.ticketCohortMax ?? 0,
         ticketExecution: ticket?.ticketScore ?? 0,
+      };
+      const imported = quantitativeRowDimensionTotal(withTicket);
+      return {
+        ...withTicket,
+        importedTotalScore: imported,
+        appealAdjustmentNote: '',
+        appealAdjustmentDelta: 0,
       };
     })
     .sort((a, b) =>
@@ -379,7 +551,7 @@ export async function loadAnnualQuantitativeReportRows(
 
   const employeeNos = users.flatMap((user) => (user.employeeNo ? [user.employeeNo] : []));
 
-  const [basicFacts, performanceFacts] = await Promise.all([
+  const [basicFacts, performanceFacts, overrideItems] = await Promise.all([
     prisma.employeeBasicFact.findMany({
       where: { year: options.year, employeeNo: { in: employeeNos } },
       select: { employeeNo: true, dimension: true, score: true },
@@ -388,13 +560,47 @@ export async function loadAnnualQuantitativeReportRows(
       where: { year: options.year, employeeNo: { in: employeeNos } },
       select: { employeeNo: true, dimensionCode: true, score: true },
     }),
+    prisma.submissionItem.findMany({
+      where: {
+        overrideScore: { not: null },
+        isSystemFilled: true,
+        confirmationStatus: 'DISPUTED',
+        disputeL2Result: 'APPROVED',
+        submission: {
+          status: 'L2_APPROVED',
+          template: { year: options.year },
+          user: { employeeNo: { in: [...selectedEmployeeNos] } },
+        },
+      },
+      select: {
+        score: true,
+        overrideScore: true,
+        item: { select: { dimensionCode: true } },
+        submission: { select: { user: { select: { employeeNo: true } } } },
+      },
+    }),
   ]);
-  return buildAnnualQuantitativeReportRows(users, basicFacts, performanceFacts, options)
-    .filter((row) => selectedEmployeeNos.has(row.employeeNo));
+
+  const overrides: QuantitativeAppealOverride[] = overrideItems.flatMap((item) => {
+    const employeeNo = item.submission.user.employeeNo;
+    const dimensionCode = item.item.dimensionCode;
+    if (!employeeNo || !dimensionCode || item.overrideScore == null) return [];
+    return [{
+      employeeNo,
+      dimensionCode,
+      systemScore: Number(item.score),
+      overrideScore: Number(item.overrideScore),
+    }];
+  });
+
+  return applyQuantitativeAppealOverrides(
+    buildAnnualQuantitativeReportRows(users, basicFacts, performanceFacts, options),
+    overrides,
+  ).filter((row) => selectedEmployeeNos.has(row.employeeNo));
 }
 
 function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: DeclarationLevel) {
-  sheet.mergeCells('A1:U1');
+  sheet.mergeCells('A1:W1');
   sheet.getCell('A1').value = `国网山西超高压变电公司${year}年能级评价个人量化积分统计公示表`;
   sheet.getCell('A1').font = { name: '宋体', bold: true, size: 16 };
   sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
@@ -408,6 +614,7 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: Declaration
     ['K2:Q2', '工作业绩'],
     ['R2:S2', '工作现场'],
     ['T2:U2', '特殊事项'],
+    ['V2:W2', '申诉调整'],
   ] as const) {
     sheet.mergeCells(range);
     sheet.getCell(range.split(':')[0]).value = label;
@@ -426,6 +633,8 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: Declaration
     ['K3:K4', '安全贡献'],
     ['R3:R4', '两票执行'],
     ['S3:S4', '缺陷治理'],
+    ['V3:V4', '申诉调整说明'],
+    ['W3:W4', '最终总分'],
   ];
   for (const [range, label] of verticalHeaders) {
     sheet.mergeCells(range);
@@ -453,7 +662,7 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: Declaration
 
   for (let row = 2; row <= 4; row += 1) {
     sheet.getRow(row).height = row === 4 ? 34 : 26;
-    for (let col = 1; col <= 21; col += 1) {
+    for (let col = 1; col <= 23; col += 1) {
       const cell = sheet.getCell(row, col);
       cell.font = { name: '宋体', bold: true, size: 10 };
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -463,6 +672,7 @@ function setHeaderRows(sheet: ExcelJS.Worksheet, year: number, tier: Declaration
 }
 
 function addDataRow(sheet: ExcelJS.Worksheet, rowIndex: number, seq: number, data: QuantitativeReportRow) {
+  const finalTotal = quantitativeRowDimensionTotal(data);
   sheet.getRow(rowIndex).values = [
     seq,
     data.fullName,
@@ -485,21 +695,23 @@ function addDataRow(sheet: ExcelJS.Worksheet, rowIndex: number, seq: number, dat
     data.defectGovernance,
     data.violationSevere,
     data.violationGeneral,
+    data.appealAdjustmentNote || '—',
+    finalTotal,
   ];
   sheet.getRow(rowIndex).height = 24;
-  for (let col = 1; col <= 21; col += 1) {
+  for (let col = 1; col <= 23; col += 1) {
     const cell = sheet.getCell(rowIndex, col);
     cell.font = { name: '宋体', size: 10 };
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    if (col >= 8) cell.numFmt = '0.0#';
+    if ((col >= 8 && col <= 21) || col === 23) cell.numFmt = '0.0#';
   }
 }
 
 function applySheetLayout(sheet: ExcelJS.Worksheet, lastRow: number) {
-  const widths = [6, 10, 7, 18, 24, 22, 17, 10, 10, 10, 10, 12, 12, 11, 11, 11, 11, 11, 11, 11, 11];
+  const widths = [6, 10, 7, 18, 24, 22, 17, 10, 10, 10, 10, 12, 12, 11, 11, 11, 11, 11, 11, 11, 11, 28, 11];
   widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
   for (let row = 1; row <= lastRow; row += 1) {
-    for (let col = 1; col <= 21; col += 1) {
+    for (let col = 1; col <= 23; col += 1) {
       sheet.getCell(row, col).border = {
         top: { style: 'thin' },
         left: { style: 'thin' },
@@ -515,7 +727,7 @@ function applySheetLayout(sheet: ExcelJS.Worksheet, lastRow: number) {
     fitToPage: true,
     fitToWidth: 1,
     fitToHeight: 0,
-    printArea: `A1:U${lastRow}`,
+    printArea: `A1:W${lastRow}`,
     margins: { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
   };
 }
@@ -553,15 +765,17 @@ export function buildAnnualQuantitativeReportWorkbook(
     ['工龄截止日期', `${options.year}年7月31日`],
     ['两票执行折算', '个人全年原始分累加；本专业最高分计30分，其余按个人原始分÷本专业最高分×30折算'],
     ['数据来源', '本地数据库员工档案、EmployeeBasicFact、PerformanceFact'],
+    ['申诉覆盖', 'L2 确认有效且管理员已改分的申诉项：维度列取覆盖后得分，V 列注明「维度：导入分→覆盖分」，W 列为最终总分'],
   ]);
   rules.getRow(1).font = { bold: true };
   rules.getColumn(1).width = 22;
   rules.getColumn(2).width = 72;
 
   const roster = workbook.addWorksheet('工号名册');
-  roster.addRow(['工号', '姓名', '单位', '工龄', '能级', '技能', '职称', '绩效', '工作业绩', '工作现场', '扣分']);
+  roster.addRow(['工号', '姓名', '单位', '工龄', '能级', '技能', '职称', '绩效', '工作业绩', '工作现场', '扣分', '导入总分', '申诉调整', '最终总分']);
   roster.getRow(1).font = { bold: true };
   for (const row of rows) {
+    const finalTotal = quantitativeRowDimensionTotal(row);
     roster.addRow([
       row.employeeNo,
       row.fullName,
@@ -574,11 +788,15 @@ export function buildAnnualQuantitativeReportWorkbook(
       round1(row.safetyContribution + row.technicalStandard + row.technicalResource + row.competitionEvent + row.competitionExam + row.innovationAward + row.innovationPaper),
       round1(row.ticketExecution + row.defectGovernance),
       round1(row.violationSevere + row.violationGeneral),
+      row.importedTotalScore,
+      row.appealAdjustmentNote || '—',
+      finalTotal,
     ]);
   }
   roster.columns.forEach((column) => { column.width = 16; });
   roster.getColumn(2).width = 12;
   roster.getColumn(3).width = 20;
+  roster.getColumn(13).width = 28;
 
   return workbook;
 }
