@@ -9,6 +9,7 @@ import {
   reportSubmissionScopeWhere,
   type ReportExportFilters,
 } from './report-filters';
+import { effectiveSubmissionItemScore } from './score-override';
 
 const ITEM_STATUS_L2 = 'L2_APPROVED' as const;
 const SUB_STATUS_L2 = 'L2_APPROVED' as const;
@@ -135,7 +136,9 @@ export async function buildTemplateSummaryCsv(filters: ExportFilters): Promise<s
 
   for (const sub of subs) {
     const scoreByItem = new Map<string, number>();
-    for (const it of sub.items) scoreByItem.set(it.itemId, Number(it.score));
+    for (const it of sub.items) {
+      scoreByItem.set(it.itemId, effectiveSubmissionItemScore(it));
+    }
 
     const row = [
       sub.user.employeeNo ?? '',
@@ -200,7 +203,7 @@ export async function buildTemplateDetailSummaryCsv(filters: ExportFilters): Pro
         sectionTitleById.get(it.item.sectionId) ?? '',
         it.item.title,
         selectedLabels(it.selected).join('、'),
-        Number(it.score).toString(),
+        effectiveSubmissionItemScore(it).toString(),
       ];
       lines.push(row.map((v) => csvField(String(v))).join(','));
     }
@@ -210,7 +213,17 @@ export async function buildTemplateDetailSummaryCsv(filters: ExportFilters): Pro
 }
 
 /** 构建单个 submission 的明细 CSV（章节、申报项、所选项、得分） */
-function buildDetailCsv(sub: ApprovedSubmission, sectionTitleById: Map<string, string>): string {
+function buildDetailCsv(
+  sub: {
+    items: Array<{
+      score: unknown;
+      overrideScore?: unknown;
+      selected: unknown;
+      item: { title: string; sectionId: string };
+    }>;
+  },
+  sectionTitleById: Map<string, string>,
+): string {
   const header = ['章节', '申报项', '所选项', '得分'];
   const lines: string[] = [header.map(csvField).join(',')];
   const sorted = [...sub.items].sort((a, b) => {
@@ -224,7 +237,7 @@ function buildDetailCsv(sub: ApprovedSubmission, sectionTitleById: Map<string, s
       sectionTitleById.get(it.item.sectionId) ?? '',
       it.item.title,
       selectedLabels(it.selected).join('、'),
-      Number(it.score).toString(),
+      effectiveSubmissionItemScore(it).toString(),
     ];
     lines.push(row.map((v) => csvField(String(v))).join(','));
   }

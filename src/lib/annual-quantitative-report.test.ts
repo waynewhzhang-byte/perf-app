@@ -124,6 +124,7 @@ describe('annual quantitative report', () => {
       },
       employeeBasicFact: { findMany: async () => basicFacts },
       performanceFact: { findMany: async () => performanceFacts },
+      submissionItem: { findMany: async () => [] },
     } as unknown as PrismaClient;
 
     const departmentRows = await loadAnnualQuantitativeReportRows(mockPrisma, {
@@ -136,7 +137,25 @@ describe('annual quantitative report', () => {
     assert.equal(departmentRows[0]?.ticketExecution, 16.4);
   });
 
-  it('builds the 21-column workbook without shifting row data', async (t) => {
+  it('applies admin appeal overrides into dimension scores and notes', async () => {
+    const { applyQuantitativeAppealOverrides } = await import('./annual-quantitative-report');
+    const withOverride = applyQuantitativeAppealOverrides(rows, [{
+      employeeNo: '1001',
+      dimensionCode: 'basic.skill-level',
+      systemScore: 3,
+      overrideScore: 4,
+    }]);
+    const employee = withOverride.find((row) => row.employeeNo === '1001');
+    assert.equal(employee?.skillLevel, 4);
+    assert.equal(employee?.importedTotalScore, 27.9);
+    assert.equal(employee?.appealAdjustmentDelta, 1);
+    assert.match(employee?.appealAdjustmentNote ?? '', /技能等级：3→4/);
+
+    const analysis = buildAnnualQuantitativeReportAnalysis(withOverride);
+    assert.equal(analysis.records.find((row) => row.employeeNo === '1001')?.totalScore, 28.9);
+  });
+
+  it('builds the workbook with appeal columns and final total', async (t) => {
     const workbook = buildAnnualQuantitativeReportWorkbook(rows, options);
     const dir = mkdtempSync(join(tmpdir(), 'perf-annual-report-'));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -152,8 +171,13 @@ describe('annual quantitative report', () => {
       assert.equal(sheet.pageSetup.fitToWidth, 1);
       assert.equal(typeof sheet.getCell('A5').value, 'number');
       assert.equal(typeof sheet.getCell('B5').value, 'string');
-      assert.equal(sheet.getRow(5).cellCount, 21);
+      assert.equal(sheet.getCell('V2').value, '申诉调整');
+      assert.equal(sheet.getCell('V3').value, '申诉调整说明');
+      assert.equal(sheet.getCell('W3').value, '最终总分');
+      assert.equal(sheet.getRow(5).cellCount, 23);
     }
     assert.match(String(reopened.getWorksheet('积分规则')?.getCell('B8').value), /本专业最高分计30分/);
+    assert.equal(reopened.getWorksheet('积分规则')?.getCell('A10').value, '申诉覆盖');
+    assert.match(String(reopened.getWorksheet('积分规则')?.getCell('B10').value), /覆盖后得分/);
   });
 });

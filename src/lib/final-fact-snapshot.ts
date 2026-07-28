@@ -14,6 +14,9 @@ import {
 } from '@/lib/declaration-level';
 import { loadTicketSpecialtyMaxRaw } from '@/lib/performance-score-sheet';
 import { round1 } from '@/lib/rounding';
+import {
+  isAppealSupplementSourceFile,
+} from '@/lib/submission-fact-persistence';
 
 export interface ArchivedBasicFact {
   id: string;
@@ -115,6 +118,9 @@ export interface BuildFinalFactSnapshotInput {
 export function buildFinalFactSnapshot(
   input: BuildFinalFactSnapshotInput,
 ): FinalFactSnapshot {
+  const scoringSubmissionFacts = input.submissionFacts.filter(
+    (fact) => !isAppealSupplementSourceFile(fact.sourceFile),
+  );
   const scoreSheet = buildPerformanceScoreSheet({
     year: input.year,
     employeeNo: input.employee.employeeNo,
@@ -143,7 +149,7 @@ export function buildFinalFactSnapshot(
       sourceSheet: fact.record.source.sheet,
       sourceRowNo: fact.record.source.rowNo,
     })),
-    submissionFacts: input.submissionFacts,
+    submissionFacts: scoringSubmissionFacts,
     ticketCohortMax: input.ticketCohortMax,
   });
   const difference = round1(

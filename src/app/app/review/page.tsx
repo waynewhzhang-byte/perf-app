@@ -46,10 +46,12 @@ const defaultDecision = (): RowDecision => ({ disputeAction: 'APPROVE' });
 
 export default function ReviewPage() {
   const [tab, setTab] = useState<Tab>('pending');
-  const [level, setLevel] = useState<1 | 2>(1);
-  const [availableLevels, setAvailableLevels] = useState<Array<1 | 2>>([1]);
+  /** null = 首次未解析；由 API 按角色自动判定，避免纯 L2 账号首屏误传 level=1 得到 403 空列表 */
+  const [level, setLevel] = useState<1 | 2 | null>(null);
+  const [availableLevels, setAvailableLevels] = useState<Array<1 | 2>>([]);
   const [rows, setRows] = useState<AppealReviewRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [itemTitle, setItemTitle] = useState('');
   const [keyword, setKeyword] = useState('');
   const [branchId, setBranchId] = useState('');
@@ -64,10 +66,12 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ filename: string; viewUrl: string; kind: ViewKind } | null>(null);
   const [openingAttId, setOpeningAttId] = useState<string | null>(null);
+  const [postApproveHint, setPostApproveHint] = useState<{ count: number; submissionIds: string[] } | null>(null);
 
-  const load = useCallback(async (nextTab: Tab = tab, nextLevel: 1 | 2 = level) => {
+  const load = useCallback(async (nextTab: Tab = tab, nextLevel: 1 | 2 | null = level) => {
     const params = new URLSearchParams();
-    params.set('level', String(nextLevel));
+    // 已解析过级别时带上；首屏省略，让服务端按 REVIEWER_L1/L2 自动选
+    if (nextLevel != null) params.set('level', String(nextLevel));
     if (nextTab === 'completed') params.set('filter', 'completed');
     if (itemTitle.trim()) params.set('itemTitle', itemTitle.trim());
     if (keyword.trim()) params.set('keyword', keyword.trim());
@@ -75,11 +79,18 @@ export default function ReviewPage() {
     if (departmentId) params.set('departmentId', departmentId);
     if (declarationSpecialtyId) params.set('declarationSpecialtyId', declarationSpecialtyId);
     const r = await fetch(`/api/review?${params}`);
-    const d = await r.json();
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setRows([]);
+      setTotal(0);
+      setLoadError(d.error || '加载审核列表失败');
+      return;
+    }
+    setLoadError(null);
     setRows(d.appealRows ?? []);
     setTotal(d.total ?? 0);
-    setLevel(d.level ?? nextLevel);
-    setAvailableLevels(d.availableLevels ?? [d.level ?? nextLevel]);
+    setLevel(d.level ?? nextLevel ?? 1);
+    setAvailableLevels(d.availableLevels ?? (d.level ? [d.level] : []));
     setBranches(d.branches ?? []);
     setDepartments(d.departments ?? []);
     setDeclarationSpecialties(d.declarationSpecialties ?? []);
@@ -90,7 +101,7 @@ export default function ReviewPage() {
 
   // 仅 tab 切换时自动拉取；关键字/申诉项筛选由「筛选」按钮触发，避免输入时清空勾选。
   useEffect(() => {
-    void load(tab);
+    void load(tab, level);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: do not reload on every keyword keystroke
   }, [tab]);
 
@@ -149,7 +160,7 @@ export default function ReviewPage() {
   const buildDecisionForRow = (row: AppealReviewRow, dec: RowDecision) => {
     const disputeAction = dec.disputeAction ?? 'APPROVE';
     const disputeNote = disputeAction === 'REJECT' ? dec.disputeNote : undefined;
-    if (level === 1) {
+    if (level !== 2) {
       return {
         submissionItemId: row.submissionItemId,
         action: disputeAction,
@@ -209,6 +220,18 @@ export default function ReviewPage() {
         alert(d.error || '提交失败');
         return;
       }
+      if (level === 2) {
+        const approved = targetRows.filter((row) => {
+          const dec = decisionMap[row.submissionItemId] ?? defaultDecision();
+          return dec.disputeAction === 'APPROVE';
+        });
+        if (approved.length > 0) {
+          setPostApproveHint({
+            count: approved.length,
+            submissionIds: [...new Set(approved.map((row) => row.submissionId))],
+          });
+        }
+      }
       await load();
     } finally {
       setBusy(false);
@@ -260,13 +283,62 @@ export default function ReviewPage() {
           <h1 className="text-2xl font-bold tracking-tight">
             申诉审核工作台
             <span className="ml-2 text-sm font-normal text-slate-400">
-              （{level === 2 ? '二级 / 总部部门' : '一级 / 工区'}）
+              （{level === 2 ? '二级 / 总部部门' : level === 1 ? '一级 / 工区' : '加载中…'}）
             </span>
           </h1>
           <p className="mt-1 text-sm text-slate-500">每行一条申诉；同一员工在本 scope 内的全部申诉均显示在列表中。</p>
         </div>
         <LogoutButton isAdmin />
       </div>
+
+      {loadError && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+      )}
+
+      {postApproveHint && (
+        <div className="mt-4 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-950">
+          <p className="font-semibold">申诉已确认有效 · 下一步由管理员修正事实</p>
+          <p className="mt-1 text-xs leading-5 text-orange-800">
+            已确认 {postApproveHint.count} 条申诉。事实台账与分数不会自动变更；请管理员打开「申诉事实修正」，更新对应事实后由系统重算总分。
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a
+              href="/admin/fact-corrections"
+              className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
+            >
+              打开待事实修正列表
+            </a>
+            {postApproveHint.submissionIds.slice(0, 3).map((id) => (
+              <a
+                key={id}
+                href={`/admin/fact-corrections/${id}`}
+                className="rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-medium text-orange-800 hover:bg-orange-100"
+              >
+                修正本申报
+              </a>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPostApproveHint(null)}
+              className="rounded-lg px-3 py-1.5 text-xs text-orange-700 hover:bg-orange-100"
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(level === 2 || availableLevels.includes(2)) && (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
+          二级确认申诉有效后，分数不会立刻变化。管理员须在管理后台「申诉事实修正」中更新事实台账并保存，系统才会按规则重算。
+          {' '}
+          <a href="/admin/fact-corrections" className="font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800">
+            前往申诉事实修正
+          </a>
+        </div>
+      )}
 
       <div className="mt-4 inline-flex gap-1 rounded-lg bg-slate-100 p-1">
         <button
@@ -495,11 +567,21 @@ export default function ReviewPage() {
                   </td>
                   <td className="px-3 py-3">
                     {tab === 'completed' ? (
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                        row.auditLabel === '确认' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-                      }`}>
-                        {row.auditLabel ?? '—'}
-                      </span>
+                      <div className="space-y-2">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                          row.auditLabel === '确认' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+                        }`}>
+                          {row.auditLabel ?? '—'}
+                        </span>
+                        {level === 2 && row.auditLabel === '确认' && (
+                          <a
+                            href={`/admin/fact-corrections/${row.submissionId}`}
+                            className="block text-xs font-medium text-orange-700 underline underline-offset-2 hover:text-orange-800"
+                          >
+                            管理员修正事实 →
+                          </a>
+                        )}
+                      </div>
                     ) : (
                       <div className="space-y-2">
                         <div className="flex gap-3 text-xs">

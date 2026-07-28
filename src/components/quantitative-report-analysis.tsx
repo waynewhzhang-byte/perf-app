@@ -20,7 +20,10 @@ interface QuantitativeRecord {
   worksiteScore: number;
   deductionScore: number;
   totalScore: number;
-  [key: string]: string | number;
+  importedTotalScore?: number;
+  appealAdjustmentNote?: string;
+  appealAdjustmentDelta?: number;
+  [key: string]: string | number | undefined;
 }
 interface Analysis {
   employeeCount: number;
@@ -124,7 +127,7 @@ export function QuantitativeReportAnalysis() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">年度量化积分报表</h2>
-          <p className="mt-1 text-sm text-slate-500">与量化积分报送表同口径：全员导入事实、工龄能级、13 个评分维度及扣分项。</p>
+          <p className="mt-1 text-sm text-slate-500">与量化积分报送表同口径：全员导入事实、工龄能级、评分维度；已审核通过的申诉覆盖分计入最终总分，并单独标注调整说明。</p>
         </div>
         <button
           type="button"
@@ -297,6 +300,16 @@ function EmployeeRows({
                 </div>
               ))}
             </div>
+            {(record.appealAdjustmentNote || (record.importedTotalScore != null && record.importedTotalScore !== record.totalScore)) && (
+              <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                申诉调整：{record.appealAdjustmentNote || '—'}
+                {record.importedTotalScore != null && (
+                  <span className="ml-2 tabular-nums">
+                    导入合计 {Number(record.importedTotalScore).toFixed(1)} → 最终 {record.totalScore.toFixed(1)}
+                  </span>
+                )}
+              </p>
+            )}
             <EmployeeFactPanel employeeNo={record.employeeNo} year={year} compact />
           </td>
         </tr>

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { getSession, getUserRoles } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { LogoutButton } from '@/components/logout-button';
+import { eligibleFactCorrectionItemWhere } from '@/lib/fact-correction';
 
 export default async function AdminHome() {
   const s = await getSession(true);
@@ -11,10 +12,11 @@ export default async function AdminHome() {
   if (!roles.includes('ADMIN')) redirect('/admin/login');
 
   const cfg = await prisma.notifyConfig.findUnique({ where: { id: 1 } });
-  const [userCount, tplCount, subCount] = await Promise.all([
+  const [userCount, tplCount, subCount, pendingFactCorrections] = await Promise.all([
     prisma.user.count(),
     prisma.formTemplate.count(),
     prisma.submission.count(),
+    prisma.submissionItem.count({ where: eligibleFactCorrectionItemWhere('pending') }),
   ]);
 
   return (
@@ -37,6 +39,20 @@ export default async function AdminHome() {
         </div>
       )}
 
+      {pendingFactCorrections > 0 && (
+        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+          <span>
+            有 <strong className="font-semibold tabular-nums">{pendingFactCorrections}</strong> 条二审已确认有效的申诉待调整得分。
+          </span>
+          <Link
+            href="/admin/fact-corrections"
+            className="ml-auto shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
+          >
+            前往调整
+          </Link>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
         <Stat label="用户总数" value={userCount} />
         <Stat label="申报模板" value={tplCount} />
@@ -56,6 +72,16 @@ export default async function AdminHome() {
         <NavCard href="/admin/templates" title="申报表配置" desc="设计与发布申报模板" />
         <NavCard href="/admin/users" title="用户与角色" desc="审核员分配、角色管理" />
         <NavCard href="/admin/review-audit" title="审核审计" desc="一级/二级审核进度、卡点与结果" />
+        <NavCard
+          href="/admin/fact-corrections"
+          title="申诉得分调整"
+          desc={
+            pendingFactCorrections > 0
+              ? `二审确认有效后按规则调整维度得分（待处理 ${pendingFactCorrections} 项）`
+              : '二审确认有效后按计分规则直接调整维度得分'
+          }
+          badge={pendingFactCorrections > 0 ? pendingFactCorrections : undefined}
+        />
         <NavCard href="/admin/reports" title="报表分析" desc="全员终审完成后的完整绩效报表" />
         <NavCard href="/admin/export" title="数据导出" desc="条件筛选 CSV / 单人 ZIP / 归档" />
       </nav>
@@ -72,13 +98,30 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function NavCard({ href, title, desc }: { href: string; title: string; desc: string }) {
+function NavCard({
+  href,
+  title,
+  desc,
+  badge,
+}: {
+  href: string;
+  title: string;
+  desc: string;
+  badge?: number;
+}) {
   return (
     <Link
       href={href}
-      className="group block rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:border-primary-300 hover:shadow-md cursor-pointer"
+      className="group relative block rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:border-primary-300 hover:shadow-md cursor-pointer"
     >
-      <h3 className="font-semibold">{title}</h3>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="font-semibold">{title}</h3>
+        {badge != null && badge > 0 && (
+          <span className="rounded-full bg-orange-600 px-2 py-0.5 text-xs font-semibold tabular-nums text-white">
+            {badge}
+          </span>
+        )}
+      </div>
       <p className="mt-1 text-sm text-slate-500">{desc}</p>
     </Link>
   );

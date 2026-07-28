@@ -56,6 +56,10 @@ export async function resetSubmissionForE2E(input: {
         disputeL2Note: null,
         disputeL2ReviewerId: null,
         disputeL2ReviewedAt: null,
+        overrideScore: null,
+        overrideReason: null,
+        overrideBy: null,
+        overrideAt: null,
         rejectReason: null,
         reviewedBy: null,
         reviewedAt: null,
@@ -66,6 +70,7 @@ export async function resetSubmissionForE2E(input: {
       data: {
         status: 'DRAFT',
         submittedAt: null,
+        totalScore: 0,
         l1ReviewerId: null,
         l1ReviewedAt: null,
         l2ReviewerId: null,

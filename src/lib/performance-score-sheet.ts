@@ -31,6 +31,7 @@ import {
   parseMockDeclarationTier,
 } from '@/lib/declaration-level';
 import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
+import { isAppealSupplementSourceFile } from '@/lib/submission-fact-persistence';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 
@@ -351,6 +352,11 @@ function buildDimensionRow(
     score = capToStandard(standard.code, score);
   }
 
+  // 申诉后管理员维度覆盖分优先于事实推算 / 手工申报分
+  if (sub?.overrideScore != null && sub.overrideScore !== '') {
+    score = Number(sub.overrideScore);
+  }
+
   return {
     dimensionCode: standard.code,
     title: standard.title,
@@ -511,13 +517,18 @@ export interface LoadScoreSheetParams {
   employeeNo: string;
   templateId: string;
   userId?: string;
+  /**
+   * 默认 true：分表得分应用管理员 overrideScore。
+   * 事实重算写回系统原分时传 false，避免把覆盖分再次灌进 score 字段。
+   */
+  applyOverrides?: boolean;
 }
 
 /** 从数据库加载并构建员工绩效分表 */
 export async function loadPerformanceScoreSheet(
   params: LoadScoreSheetParams,
 ): Promise<PerformanceScoreSheet | null> {
-  const { prisma, year, employeeNo, templateId, userId } = params;
+  const { prisma, year, employeeNo, templateId, userId, applyOverrides = true } = params;
 
   const user = await prisma.user.findFirst({
     where: userId ? { id: userId } : { employeeNo },
@@ -587,7 +598,9 @@ export async function loadPerformanceScoreSheet(
       selected: it.selected,
       isSystemFilled: it.isSystemFilled,
       confirmationStatus: it.confirmationStatus,
-      overrideScore: it.overrideScore != null ? Number(it.overrideScore) : null,
+      overrideScore: applyOverrides && it.overrideScore != null
+        ? Number(it.overrideScore)
+        : null,
     })),
     basicFacts: basicFacts.map((f) => ({
       id: f.id,
@@ -613,14 +626,16 @@ export async function loadPerformanceScoreSheet(
       sourceSheet: f.sourceSheet,
       sourceRowNo: f.sourceRowNo,
     })),
-    submissionFacts: submissionFacts.map((f) => ({
-      id: f.id,
-      dimensionCode: f.dimensionCode,
-      label: f.label,
-      score: Number(f.score),
-      count: f.count,
-      unitScore: Number(f.unitScore),
-    })),
+    submissionFacts: submissionFacts
+      .filter((f) => !isAppealSupplementSourceFile(f.sourceFile))
+      .map((f) => ({
+        id: f.id,
+        dimensionCode: f.dimensionCode,
+        label: f.label,
+        score: Number(f.score),
+        count: f.count,
+        unitScore: Number(f.unitScore),
+      })),
     ticketCohortMax,
   });
 }

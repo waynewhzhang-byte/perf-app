@@ -172,101 +172,106 @@ export default function SubmissionPage() {
 
   useEffect(() => {
     (async () => {
-      const [tplRes, subRes, profileRes] = await Promise.all([
-        fetch(`/api/templates/${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json()),
-        fetch('/api/profile').then((r) => r.ok ? r.json() : null).catch(() => null),
-      ]);
-      const orgRes = await fetch('/api/public/organization').then((r) => r.json()).catch(() => ({}));
-      const nextOptions: HeaderOptions = {
-        branches: orgRes.branches ?? [],
-        declarationLevels: orgRes.declarationLevels ?? [],
-        declarationSpecialties: orgRes.declarationSpecialties ?? [],
-      };
-      setOptions(nextOptions);
-      const template: Template | null = tplRes?.template ?? null;
-      let currentTemplate: Template | null = template;
-      const existing = subRes.submissions?.[0];
-
-      if (!currentTemplate && existing) {
-        currentTemplate = {
-          id: existing.template.id, title: existing.template.title,
-          year: existing.template.year, description: existing.template.description,
-          sections: [{
-            id: 's', title: '申报项', items: existing.items.map((si: any) => ({
-              id: si.item.id, title: si.item.title, hint: si.item.hint,
-              dimensionCode: si.item.dimensionCode,
-              isRequired: si.item.isRequired, requireAttachment: si.item.requireAttachment,
-              maxSelections: si.item.maxSelections, scoreOptions: si.item.scoreOptions,
-              scoreMode: si.item.scoreMode, maxScore: si.item.maxScore,
-            })),
-          }],
+      try {
+        const [tplRes, subRes, profileRes] = await Promise.all([
+          fetch(`/api/templates/${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch(`/api/submissions?templateId=${templateId}`).then((r) => r.json()),
+          fetch('/api/profile').then((r) => r.ok ? r.json() : null).catch(() => null),
+        ]);
+        const orgRes = await fetch('/api/public/organization').then((r) => r.json()).catch(() => ({}));
+        const nextOptions: HeaderOptions = {
+          branches: orgRes.branches ?? [],
+          declarationLevels: orgRes.declarationLevels ?? [],
+          declarationSpecialties: orgRes.declarationSpecialties ?? [],
         };
-      }
+        setOptions(nextOptions);
+        const template: Template | null = tplRes?.template ?? null;
+        let currentTemplate: Template | null = template;
+        const existing = subRes.submissions?.[0];
 
-      if (!currentTemplate) { setLoading(false); return; }
-      setTpl(currentTemplate);
-      setSub(existing ? {
-        id: existing.id,
-        status: existing.status,
-        preReviewMessages: Array.isArray(existing.preReviewMessages) ? existing.preReviewMessages : null,
-      } : null);
-      const workAreaEnabled = isFieldEnabled(resolveHeaderFields(currentTemplate.headerFields), 'workArea');
-      setHeader({
-        workAreaId: workAreaEnabled
-          ? existing?.branchId ?? nextOptions.branches[0]?.id ?? ''
-          : profileRes?.user?.branch?.id ?? '',
-        hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
-        declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
-        // 申报专业需员工本人选择，不默认第一项
-        declarationSpecialtyId: existing?.declarationSpecialtyId ?? '',
-      });
+        if (!currentTemplate && existing) {
+          currentTemplate = {
+            id: existing.template.id, title: existing.template.title,
+            year: existing.template.year, description: existing.template.description,
+            sections: [{
+              id: 's', title: '申报项', items: existing.items.map((si: any) => ({
+                id: si.item.id, title: si.item.title, hint: si.item.hint,
+                dimensionCode: si.item.dimensionCode,
+                isRequired: si.item.isRequired, requireAttachment: si.item.requireAttachment,
+                maxSelections: si.item.maxSelections, scoreOptions: si.item.scoreOptions,
+                scoreMode: si.item.scoreMode, maxScore: si.item.maxScore,
+              })),
+            }],
+          };
+        }
 
-      const map: Record<string, SubItem> = {};
-      currentTemplate.sections.forEach((s) => s.items.forEach((it) => {
-        const ex = existing?.items?.find((x: any) => x.itemId === it.id);
-        if (isSystemConfirmationDimension(it.dimensionCode)) return;
-        map[it.id] = ex ? {
-          id: ex.id, itemId: it.id, selected: ex.selected ?? [],
-          declaredScore: ex.selected?.find((row: Selected) => row.optionId === 'employee-declared-score')?.score ?? null,
-          content: ex.content ?? '',
-          status: ex.status, rejectReason: ex.rejectReason, attachments: ex.attachments,
-          optionReviews: ex.optionReviews ?? [],
-        } : { itemId: it.id, selected: [], content: '' };
-      }));
-      setAnswers(map);
-      // 加载系统填充事实数据
-      const factsRes = await fetch(`/api/facts?templateId=${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null);
-      if (factsRes?.items?.length) {
-        setFactsData(factsRes);
-        // 从已有 submission item 恢复确认/申诉状态
-        const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
-        const disps: Record<string, string> = {};
-        const claimed: Record<string, number> = {};
-        if (existing?.items) {
-          const dbIds: Record<string, string> = {};
-          const factAtts: Record<string, Attachment[]> = {};
-          for (const si of existing.items) {
-            if ((si as any).isSystemFilled && (si as any).confirmationStatus) {
-              confs[si.itemId] = (si as any).confirmationStatus;
-              if ((si as any).disputeReason) disps[si.itemId] = (si as any).disputeReason;
-              if ((si as any).disputeClaimedScore != null) {
-                claimed[si.itemId] = Number((si as any).disputeClaimedScore);
+        if (!currentTemplate) return;
+        setTpl(currentTemplate);
+        setSub(existing ? {
+          id: existing.id,
+          status: existing.status,
+          preReviewMessages: Array.isArray(existing.preReviewMessages) ? existing.preReviewMessages : null,
+        } : null);
+        const workAreaEnabled = isFieldEnabled(resolveHeaderFields(currentTemplate.headerFields), 'workArea');
+        setHeader({
+          workAreaId: workAreaEnabled
+            ? existing?.branchId ?? nextOptions.branches[0]?.id ?? ''
+            : profileRes?.user?.branch?.id ?? '',
+          hireDate: existing?.hireDate ? String(existing.hireDate).slice(0, 10) : '',
+          declarationLevelId: existing?.declarationLevelId ?? nextOptions.declarationLevels[0]?.id ?? '',
+          // 申报专业需员工本人选择，不默认第一项
+          declarationSpecialtyId: existing?.declarationSpecialtyId ?? '',
+        });
+
+        const map: Record<string, SubItem> = {};
+        currentTemplate.sections.forEach((s) => s.items.forEach((it) => {
+          const ex = existing?.items?.find((x: any) => x.itemId === it.id);
+          if (isSystemConfirmationDimension(it.dimensionCode)) return;
+          map[it.id] = ex ? {
+            id: ex.id, itemId: it.id, selected: ex.selected ?? [],
+            declaredScore: ex.selected?.find((row: Selected) => row.optionId === 'employee-declared-score')?.score ?? null,
+            content: ex.content ?? '',
+            status: ex.status, rejectReason: ex.rejectReason, attachments: ex.attachments,
+            optionReviews: ex.optionReviews ?? [],
+          } : { itemId: it.id, selected: [], content: '' };
+        }));
+        setAnswers(map);
+        // 加载系统填充事实数据
+        const factsRes = await fetch(`/api/facts?templateId=${templateId}`).then((r) => r.ok ? r.json() : null).catch(() => null);
+        if (factsRes?.items?.length) {
+          setFactsData(factsRes);
+          // 从已有 submission item 恢复确认/申诉状态
+          const confs: Record<string, 'CONFIRMED' | 'DISPUTED'> = {};
+          const disps: Record<string, string> = {};
+          const claimed: Record<string, number> = {};
+          if (existing?.items) {
+            const dbIds: Record<string, string> = {};
+            const factAtts: Record<string, Attachment[]> = {};
+            for (const si of existing.items) {
+              if ((si as any).isSystemFilled && (si as any).confirmationStatus) {
+                confs[si.itemId] = (si as any).confirmationStatus;
+                if ((si as any).disputeReason) disps[si.itemId] = (si as any).disputeReason;
+                if ((si as any).disputeClaimedScore != null) {
+                  claimed[si.itemId] = Number((si as any).disputeClaimedScore);
+                }
+              }
+              if ((si as any).isSystemFilled) {
+                if (si.id) dbIds[si.itemId] = si.id;
+                if (si.attachments?.length) factAtts[si.itemId] = si.attachments;
               }
             }
-            if ((si as any).isSystemFilled) {
-              if (si.id) dbIds[si.itemId] = si.id;
-              if (si.attachments?.length) factAtts[si.itemId] = si.attachments;
-            }
+            setFactsItemDbIds(dbIds);
+            setFactsAttachments(factAtts);
           }
-          setFactsItemDbIds(dbIds);
-          setFactsAttachments(factAtts);
+          setFactsConfirmations(confs);
+          setFactsDisputes(disps);
+          setFactsClaimedScores(claimed);
         }
-        setFactsConfirmations(confs);
-        setFactsDisputes(disps);
-        setFactsClaimedScores(claimed);
+      } catch (e) {
+        console.error('load submission page:', e);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     })();
   }, [templateId]);
 
@@ -1265,6 +1270,38 @@ export default function SubmissionPage() {
                               </>
                             )}
                           </p>
+                          {disputed && (
+                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                              <p>
+                                系统分 {fi.totalScore.toFixed(1)}
+                                {' → '}
+                                主张分 {factsClaimedScores[fi.itemId] != null
+                                  ? factsClaimedScores[fi.itemId]!.toFixed(1)
+                                  : '—'}
+                              </p>
+                              {factsDisputes[fi.itemId] && (
+                                <p className="mt-1 whitespace-pre-wrap text-amber-900/90">
+                                  申诉理由：{factsDisputes[fi.itemId]}
+                                </p>
+                              )}
+                              {(factsAttachments[fi.itemId]?.length ?? 0) > 0 && (
+                                <ul className="mt-1.5 space-y-0.5">
+                                  {factsAttachments[fi.itemId]!.map((att) => (
+                                    <li key={att.id}>
+                                      <a
+                                        href={`/api/attachments/${att.id}/view?proxy=1`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="font-medium text-primary-700 underline-offset-2 hover:underline"
+                                      >
+                                        {att.filename}
+                                      </a>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div className="shrink-0 text-right">
                           <p className="text-[10px] font-medium text-slate-500">评分项得分</p>
@@ -1314,9 +1351,11 @@ export default function SubmissionPage() {
         </div>
       )}
 
-      {appealCentric && savedAppeals.length > 0 && itemEditable && (
+      {appealCentric && savedAppeals.length > 0 && (
         <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50/60 p-5">
-          <h2 className="text-sm font-semibold text-amber-900">已保存的申诉（{savedAppeals.length}）</h2>
+          <h2 className="text-sm font-semibold text-amber-900">
+            {itemEditable ? `已保存的申诉（${savedAppeals.length}）` : `已提交的申诉（${savedAppeals.length}）`}
+          </h2>
           <ul className="mt-3 space-y-2">
             {savedAppeals.map((fi) => (
               <li key={fi.itemId} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-amber-200 bg-white px-4 py-3">
@@ -1328,24 +1367,42 @@ export default function SubmissionPage() {
                   <p className="mt-0.5 text-xs text-slate-500">
                     系统分 {fi.totalScore.toFixed(1)} → 主张分 {factsClaimedScores[fi.itemId]?.toFixed(1) ?? '—'}
                   </p>
-                  <p className="mt-1 line-clamp-2 text-xs text-slate-600">{factsDisputes[fi.itemId]}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-xs text-slate-600">{factsDisputes[fi.itemId]}</p>
+                  {(factsAttachments[fi.itemId]?.length ?? 0) > 0 && (
+                    <ul className="mt-1.5 space-y-0.5">
+                      {factsAttachments[fi.itemId]!.map((att) => (
+                        <li key={att.id} className="text-xs">
+                          <a
+                            href={`/api/attachments/${att.id}/view?proxy=1`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-primary-700 underline-offset-2 hover:underline"
+                          >
+                            {att.filename}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                <div className="flex shrink-0 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openAppealModal(fi.itemId)}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteAppeal(fi.itemId)}
-                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 cursor-pointer"
-                  >
-                    删除
-                  </button>
-                </div>
+                {itemEditable && (
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openAppealModal(fi.itemId)}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteAppeal(fi.itemId)}
+                      className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 cursor-pointer"
+                    >
+                      删除
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
