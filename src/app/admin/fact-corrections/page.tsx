@@ -30,7 +30,7 @@ const STATUS_LABEL: Record<string, string> = {
   REJECTED: '已驳回',
 };
 
-export default function FactCorrectionsListPage() {
+export default function ScoreOverrideListPage() {
   const [status, setStatus] = useState<ListStatus>('pending');
   const [year, setYear] = useState('');
   const [keyword, setKeyword] = useState('');
@@ -80,9 +80,9 @@ export default function FactCorrectionsListPage() {
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">申诉事实修正</h1>
+          <h1 className="text-2xl font-bold tracking-tight">申诉得分调整</h1>
           <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
-            二审确认有效的系统事实申诉会进入本列表。管理员在此修正事实台账后，系统按评分规则重算总分（不可手工改分）。
+            二审确认有效的系统事实申诉会进入本列表。管理员按计分规则直接调整对应维度得分（不改事实台账）。
           </p>
         </div>
         <AdminPageActions />
@@ -90,11 +90,11 @@ export default function FactCorrectionsListPage() {
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3">
-          <p className="text-xs font-medium text-orange-700">待修正申诉项</p>
+          <p className="text-xs font-medium text-orange-700">待调整申诉项</p>
           <p className="mt-1 text-2xl font-bold tabular-nums text-orange-900">{pendingCount}</p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-          <p className="text-xs font-medium text-emerald-700">已修正申诉项</p>
+          <p className="text-xs font-medium text-emerald-700">已调整申诉项</p>
           <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-900">{correctedCount}</p>
         </div>
       </div>
@@ -103,8 +103,8 @@ export default function FactCorrectionsListPage() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="inline-flex gap-1 rounded-lg bg-slate-100 p-1">
             {([
-              ['pending', '待修正'],
-              ['corrected', '已修正'],
+              ['pending', '待调整'],
+              ['corrected', '已调整'],
               ['all', '全部'],
             ] as const).map(([value, label]) => (
               <button
@@ -163,7 +163,7 @@ export default function FactCorrectionsListPage() {
         </div>
         {rows.length === 0 && !loading && (
           <p className="p-8 text-center text-sm text-slate-400">
-            {status === 'pending' ? '暂无待修正的申诉事实' : '暂无记录'}
+            {status === 'pending' ? '暂无待调整的申诉得分' : '暂无记录'}
           </p>
         )}
         {loading && <p className="p-8 text-center text-sm text-slate-400">加载中…</p>}
@@ -184,12 +184,12 @@ export default function FactCorrectionsListPage() {
                     </span>
                     {row.pendingItemCount > 0 && (
                       <span className="rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">
-                        待修正 {row.pendingItemCount} 项
+                        待调整 {row.pendingItemCount} 项
                       </span>
                     )}
                     {row.correctedItemCount > 0 && (
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                        已修正 {row.correctedItemCount} 项
+                        已调整 {row.correctedItemCount} 项
                       </span>
                     )}
                   </div>
@@ -210,7 +210,7 @@ export default function FactCorrectionsListPage() {
                   href={`/admin/fact-corrections/${row.submissionId}`}
                   className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
                 >
-                  {row.pendingItemCount > 0 ? '修正事实并重算' : '查看 / 继续修正'}
+                  {row.pendingItemCount > 0 ? '调整得分' : '查看 / 继续调整'}
                 </Link>
               </div>
             </li>

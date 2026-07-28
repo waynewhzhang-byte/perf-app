@@ -219,16 +219,16 @@ export default function ReviewAuditPage() {
       {pendingFactCorrections > 0 && (
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-950">
           <div className="min-w-0 flex-1">
-            <p className="font-semibold">下一步：修正事实并重算分数</p>
+            <p className="font-semibold">下一步：调整申诉得分</p>
             <p className="mt-0.5 text-xs text-orange-800">
-              当前有 {pendingFactCorrections} 条二审已确认有效的申诉，尚未写入事实修正。分数不会自动变化，需管理员在「申诉事实修正」中更新台账后由系统重算。
+              当前有 {pendingFactCorrections} 条二审已确认有效的申诉，尚未调整得分。请在「申诉得分调整」中按计分规则直接改分。
             </p>
           </div>
           <Link
             href="/admin/fact-corrections"
             className="shrink-0 rounded-lg bg-orange-600 px-4 py-2 text-xs font-medium text-white hover:bg-orange-700"
           >
-            打开待事实修正列表
+            打开待调整列表
           </Link>
         </div>
       )}
@@ -346,13 +346,13 @@ export default function ReviewAuditPage() {
                       {approvedDisputeCount > 0 && (
                         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2.5 text-sm text-orange-950">
                           <p className="min-w-0 flex-1 text-xs leading-5">
-                            本申报有 <strong>{approvedDisputeCount}</strong> 项申诉已由二审确认有效。请进入「申诉事实修正」更新事实台账并重算分数。
+                            本申报有 <strong>{approvedDisputeCount}</strong> 项申诉已由二审确认有效。请进入「申诉得分调整」按计分规则直接修改对应维度得分。
                           </p>
                           <Link
                             href={`/admin/fact-corrections/${detail!.id}`}
                             className="shrink-0 rounded bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
                           >
-                            修正本申报事实
+                            调整本申报得分
                           </Link>
                         </div>
                       )}
@@ -433,17 +433,17 @@ export default function ReviewAuditPage() {
                                     {it.attachments.length > 0 && (
                                       <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
                                     )}
-                                    {it.disputeL2Result === 'APPROVED' && (
+                                    {it.disputeL2Result === 'APPROVED' && it.overrideScore == null && (
                                       <div className="mt-2 rounded-lg border border-orange-200 bg-orange-50 p-3">
-                                        <p className="text-xs font-semibold text-orange-900">二审已确认有效 · 待修正事实</p>
+                                        <p className="text-xs font-semibold text-orange-900">二审已确认有效 · 待调整得分</p>
                                         <p className="mt-1 text-xs text-orange-800">
-                                          请在申诉事实修正页更新对应事实台账；保存后系统按规则重算总分与归档档案。
+                                          请在申诉得分调整页按计分规则直接修改该维度总分；保存后同步申报总分与归档档案。
                                         </p>
                                         <Link
                                           href={`/admin/fact-corrections/${detail!.id}`}
                                           className="mt-2 inline-block rounded bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
                                         >
-                                          查看并修正事实数据
+                                          查看并调整得分
                                         </Link>
                                       </div>
                                     )}

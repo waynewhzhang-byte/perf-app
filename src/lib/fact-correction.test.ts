@@ -16,18 +16,19 @@ describe('fact-correction', () => {
     assert.equal(factKindForDimension('special.violation-general'), 'PERFORMANCE');
   });
 
-  it('builds pending/corrected list filters for L2-approved appeals', () => {
+  it('builds pending/corrected list filters by overrideScore for L2-approved appeals', () => {
     const pending = eligibleFactCorrectionItemWhere('pending');
     assert.equal(pending.isSystemFilled, true);
     assert.equal(pending.confirmationStatus, 'DISPUTED');
     assert.equal(pending.disputeL2Result, 'APPROVED');
     assert.deepEqual(pending.item, { dimensionCode: { in: FACT_CORRECTION_DIMENSION_CODES } });
-    assert.deepEqual(pending.factCorrections, { none: {} });
+    assert.equal(pending.overrideScore, null);
+    assert.equal(pending.factCorrections, undefined);
 
     const corrected = eligibleFactCorrectionItemWhere('corrected');
-    assert.deepEqual(corrected.factCorrections, { some: {} });
+    assert.deepEqual(corrected.overrideScore, { not: null });
 
     const all = eligibleFactCorrectionItemWhere('all');
-    assert.equal(all.factCorrections, undefined);
+    assert.equal(all.overrideScore, undefined);
   });
 });

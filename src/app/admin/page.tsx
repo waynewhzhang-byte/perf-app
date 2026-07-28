@@ -42,13 +42,13 @@ export default async function AdminHome() {
       {pendingFactCorrections > 0 && (
         <div className="mt-6 flex flex-wrap items-center gap-3 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
           <span>
-            有 <strong className="font-semibold tabular-nums">{pendingFactCorrections}</strong> 条二审已确认有效的申诉待修正事实并重算分数。
+            有 <strong className="font-semibold tabular-nums">{pendingFactCorrections}</strong> 条二审已确认有效的申诉待调整得分。
           </span>
           <Link
             href="/admin/fact-corrections"
             className="ml-auto shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
           >
-            前往修正
+            前往调整
           </Link>
         </div>
       )}
@@ -74,11 +74,11 @@ export default async function AdminHome() {
         <NavCard href="/admin/review-audit" title="审核审计" desc="一级/二级审核进度、卡点与结果" />
         <NavCard
           href="/admin/fact-corrections"
-          title="申诉事实修正"
+          title="申诉得分调整"
           desc={
             pendingFactCorrections > 0
-              ? `二审确认有效后修正事实并重算（待处理 ${pendingFactCorrections} 项）`
-              : '二审确认有效后修正事实台账并重算分数'
+              ? `二审确认有效后按规则调整维度得分（待处理 ${pendingFactCorrections} 项）`
+              : '二审确认有效后按计分规则直接调整维度得分'
           }
           badge={pendingFactCorrections > 0 ? pendingFactCorrections : undefined}
         />

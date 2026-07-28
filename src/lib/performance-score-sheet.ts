@@ -31,6 +31,7 @@ import {
   parseMockDeclarationTier,
 } from '@/lib/declaration-level';
 import { ticketSpecialtyFromWorkArea } from '@/lib/ticket-specialty';
+import { isAppealSupplementSourceFile } from '@/lib/submission-fact-persistence';
 
 export type ScoreSource = 'FACT' | 'MANUAL' | 'NONE' | 'DEDUCTION';
 
@@ -351,6 +352,11 @@ function buildDimensionRow(
     score = capToStandard(standard.code, score);
   }
 
+  // 申诉后管理员维度覆盖分优先于事实推算 / 手工申报分
+  if (sub?.overrideScore != null && sub.overrideScore !== '') {
+    score = Number(sub.overrideScore);
+  }
+
   return {
     dimensionCode: standard.code,
     title: standard.title,
@@ -613,14 +619,16 @@ export async function loadPerformanceScoreSheet(
       sourceSheet: f.sourceSheet,
       sourceRowNo: f.sourceRowNo,
     })),
-    submissionFacts: submissionFacts.map((f) => ({
-      id: f.id,
-      dimensionCode: f.dimensionCode,
-      label: f.label,
-      score: Number(f.score),
-      count: f.count,
-      unitScore: Number(f.unitScore),
-    })),
+    submissionFacts: submissionFacts
+      .filter((f) => !isAppealSupplementSourceFile(f.sourceFile))
+      .map((f) => ({
+        id: f.id,
+        dimensionCode: f.dimensionCode,
+        label: f.label,
+        score: Number(f.score),
+        count: f.count,
+        unitScore: Number(f.unitScore),
+      })),
     ticketCohortMax,
   });
 }

@@ -3,6 +3,10 @@ import { extractSystemFilledFromSheet } from '@/lib/system-filled-items';
 import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
 import { computeSectionScores, type ScorableSection } from '@/lib/score-calculation';
 import { captureFinalFactSnapshot } from '@/lib/final-fact-snapshot';
+import {
+  eligibleScoreOverrideItemWhere,
+  SCORE_OVERRIDE_DIMENSION_CODES,
+} from '@/lib/score-override';
 
 const BASIC_DIMENSIONS = new Set([
   'basic.skill-level',
@@ -21,11 +25,8 @@ const PERFORMANCE_DIMENSIONS = new Set([
   'special.violation-general',
 ]);
 
-/** Dimensions eligible for admin appeal fact correction (list/query filters). */
-export const FACT_CORRECTION_DIMENSION_CODES = [
-  ...BASIC_DIMENSIONS,
-  ...PERFORMANCE_DIMENSIONS,
-] as string[];
+/** @deprecated Prefer SCORE_OVERRIDE_DIMENSION_CODES — kept for import compatibility. */
+export const FACT_CORRECTION_DIMENSION_CODES = SCORE_OVERRIDE_DIMENSION_CODES;
 
 export type FactCorrectionKind = 'BASIC' | 'PERFORMANCE';
 
@@ -35,18 +36,14 @@ export function factKindForDimension(dimensionCode: string): FactCorrectionKind 
   return null;
 }
 
-/** Prisma filter for L2-approved system-fact appeals that support correction. */
+/**
+ * L2 已确认有效的系统事实申诉队列。
+ * pending / corrected 以是否已写入 overrideScore 为准（管理员直接改分，不再改事实台账）。
+ */
 export function eligibleFactCorrectionItemWhere(
   status: 'pending' | 'corrected' | 'all' = 'pending',
 ): Prisma.SubmissionItemWhereInput {
-  return {
-    isSystemFilled: true,
-    confirmationStatus: 'DISPUTED',
-    disputeL2Result: 'APPROVED',
-    item: { dimensionCode: { in: FACT_CORRECTION_DIMENSION_CODES } },
-    ...(status === 'pending' ? { factCorrections: { none: {} } } : {}),
-    ...(status === 'corrected' ? { factCorrections: { some: {} } } : {}),
-  };
+  return eligibleScoreOverrideItemWhere(status);
 }
 
 /** Rebuild the system-filled item scores and dependent aggregate records from current facts. */
@@ -102,12 +99,28 @@ export async function recalculateFactBackedSubmission(
       sortOrder: item.sortOrder,
     })),
   }));
+  const existingSystemItems = await prisma.submissionItem.findMany({
+    where: { submissionId, isSystemFilled: true },
+    select: { itemId: true, overrideScore: true },
+  });
+  const overrideByItemId = new Map(
+    existingSystemItems.map((row) => [
+      row.itemId,
+      row.overrideScore == null ? null : Number(row.overrideScore),
+    ]),
+  );
+
   let totalScore = 0;
   await prisma.$transaction(async (tx) => {
     for (const [itemId, row] of systemRowsByItemId) {
+      const overrideScore = overrideByItemId.get(itemId);
       await tx.submissionItem.updateMany({
         where: { submissionId, itemId, isSystemFilled: true },
-        data: { score: row.score, selected: row.selected as Prisma.InputJsonValue },
+        data: {
+          // 管理员覆盖分优先：事实重算不覆盖已调整的申诉项分数
+          score: overrideScore != null ? overrideScore : row.score,
+          selected: row.selected as Prisma.InputJsonValue,
+        },
       });
     }
     const items = await tx.submissionItem.findMany({ where: { submissionId } });
@@ -127,7 +140,8 @@ export async function recalculateFactBackedSubmission(
         for (const item of archivedData.items) {
           const row = systemRowsByItemId.get(item.itemId);
           if (row) {
-            item.score = row.score;
+            const overrideScore = overrideByItemId.get(item.itemId);
+            item.score = overrideScore != null ? overrideScore : row.score;
             item.selected = row.selected;
           }
         }
@@ -149,7 +163,15 @@ export async function recalculateFactBackedSubmission(
     }
   });
 
-  return { totalScore, scoreByItemId: new Map([...systemRowsByItemId].map(([itemId, row]) => [itemId, row.score])) };
+  return {
+    totalScore,
+    scoreByItemId: new Map(
+      [...systemRowsByItemId].map(([itemId, row]) => {
+        const overrideScore = overrideByItemId.get(itemId);
+        return [itemId, overrideScore != null ? overrideScore : row.score];
+      }),
+    ),
+  };
 }
 
 /**

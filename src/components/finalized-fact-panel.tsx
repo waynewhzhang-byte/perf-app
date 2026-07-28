@@ -293,6 +293,7 @@ export function FinalizedFactPanel({
                     <p className="text-sm font-medium text-slate-800">{fact.label}</p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       {fact.dimensionTitle} · {formatScore(fact.unitScore)} 分 × {fact.count}
+                      {String(fact.sourceFile).startsWith('appeal-supplement:') ? ' · 申诉补充' : ''}
                     </p>
                   </div>
                   <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold tabular-nums">

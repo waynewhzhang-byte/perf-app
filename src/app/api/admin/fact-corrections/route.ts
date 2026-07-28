@@ -1,74 +1,14 @@
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
-import {
-  eligibleFactCorrectionItemWhere,
-  factKindForDimension,
-  recalculateFactBackedSubmission,
-} from '@/lib/fact-correction';
-import { loadBasicFactTiers } from '@/lib/basic-fact-import';
-import { scorePerformanceLevel, scoreSkillLevel, scoreTitleLevel } from '@/lib/basic-quality';
-import { computeFactScores, type ScoringRule } from '@/lib/scoring-engine';
-import { sourceDimensionCodes } from '@/lib/scoring-standards';
-import {
-  buildDerivedFactCorrection,
-  isDerivedFactCorrectionDimension,
-} from '@/lib/fact-correction-performance';
+import { eligibleFactCorrectionItemWhere } from '@/lib/fact-correction';
+import { loadPerformanceScoreSheet } from '@/lib/performance-score-sheet';
+import { SCORING_STANDARD_BY_CODE } from '@/lib/scoring-standards';
+import { resolveDimensionMaxScore } from '@/lib/score-override';
 
-const BasicDimensionByCode = {
-  'basic.skill-level': 'SKILL_LEVEL',
-  'basic.title-level': 'TITLE_LEVEL',
-  'basic.performance-level': 'PERFORMANCE_LEVEL',
-} as const;
-
-const PayloadSchema = z.object({
-  submissionItemId: z.string(),
-  factId: z.string().optional(),
-  kind: z.enum(['BASIC', 'PERFORMANCE']),
-  reason: z.string().min(1),
-  evidenceNote: z.string().optional(),
-  tierValue: z.string().optional(),
-  yearBreakdown: z.record(z.string(), z.string().nullable()).optional(),
-  role: z.enum(['FIRST_DISCOVERER', 'CO_DISCOVERER', 'FIRST_HANDLER', 'CO_HANDLER']).optional(),
-  eventType: z.enum(['DISCOVERY', 'REMEDIATION']).optional(),
-  defectLevel: z.string().optional(),
-  defectRef: z.string().optional(),
-  eventDate: z.string().optional(),
-  rawScore: z.number().min(0).optional(),
-  incidentId: z.string().optional(),
-  faultCount: z.number().int().min(1).optional(),
-  subtype: z.string().optional(),
-  award: z.string().optional(),
-  level: z.string().optional(),
-  project: z.string().optional(),
-  category: z.string().optional(),
-  violationLevel: z.string().optional(),
-  violationRole: z.string().optional(),
-  description: z.string().optional(),
-});
-
-async function loadEligibleItem(submissionItemId: string) {
-  const item = await prisma.submissionItem.findUnique({
-    where: { id: submissionItemId },
-    include: {
-      item: true,
-      submission: { include: { user: true, template: true } },
-    },
-  });
-  if (!item) throw new Error('申报项不存在');
-  if (!item.isSystemFilled || item.confirmationStatus !== 'DISPUTED' || item.disputeL2Result !== 'APPROVED') {
-    throw new Error('仅能修正二审已确认有效的系统事实申诉项');
-  }
-  const kind = factKindForDimension(item.item.dimensionCode ?? '');
-  if (!kind) throw new Error('该评分项暂不支持事实修正');
-  if (!item.submission.user.employeeNo) throw new Error('员工缺少工号，无法修正事实');
-  return { item, kind };
-}
-
-async function listEligibleCorrections(url: URL) {
+async function listEligibleOverrides(url: URL) {
   const statusParam = url.searchParams.get('status') ?? 'pending';
   const status = statusParam === 'corrected' || statusParam === 'all' ? statusParam : 'pending';
   const yearRaw = url.searchParams.get('year');
@@ -93,11 +33,6 @@ async function listEligibleCorrections(url: URL) {
     where: { AND: andFilters },
     include: {
       item: { select: { id: true, title: true, dimensionCode: true } },
-      factCorrections: {
-        select: { id: true, correctedAt: true },
-        orderBy: { correctedAt: 'desc' },
-        take: 1,
-      },
       submission: {
         select: {
           id: true,
@@ -137,7 +72,7 @@ async function listEligibleCorrections(url: URL) {
   for (const row of items) {
     const submissionId = row.submission.id;
     const existing = bySubmission.get(submissionId);
-    const corrected = row.factCorrections.length > 0;
+    const corrected = row.overrideScore != null;
     const l2At = row.disputeL2ReviewedAt?.toISOString() ?? null;
     if (!existing) {
       bySubmission.set(submissionId, {
@@ -185,7 +120,7 @@ export async function GET(req: Request) {
     if (session instanceof NextResponse) return session;
     const url = new URL(req.url);
     const submissionId = url.searchParams.get('submissionId');
-    if (!submissionId) return listEligibleCorrections(url);
+    if (!submissionId) return listEligibleOverrides(url);
 
     const items = await prisma.submissionItem.findMany({
       where: {
@@ -197,171 +132,102 @@ export async function GET(req: Request) {
       include: {
         item: true,
         attachments: { select: { id: true, filename: true, mimeType: true } },
-        factCorrections: { orderBy: { correctedAt: 'desc' } },
       },
+      orderBy: { updatedAt: 'asc' },
     });
+
     const submission = await prisma.submission.findUnique({
       where: { id: submissionId },
-      include: { user: { select: { employeeNo: true, fullName: true } }, template: { select: { year: true } } },
+      include: {
+        user: { select: { id: true, employeeNo: true, fullName: true } },
+        template: { select: { id: true, year: true } },
+      },
     });
-    if (!submission?.user.employeeNo) return NextResponse.json({ error: '申报或员工不存在' }, { status: 404 });
-    const employeeNo = submission.user.employeeNo;
+    if (!submission?.user.employeeNo) {
+      return NextResponse.json({ error: '申报或员工不存在' }, { status: 404 });
+    }
 
-    const basicDimensions = [...new Set(items.flatMap((item) => {
-      const dimensionCode = item.item.dimensionCode ?? '';
-      const kind = factKindForDimension(dimensionCode);
-      const dimension = kind === 'BASIC'
-        ? BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode]
-        : undefined;
-      return dimension ? [dimension] : [];
-    }))];
-    const performanceDimensionCodes = [...new Set(items.flatMap((item) => {
-      const dimensionCode = item.item.dimensionCode ?? '';
-      return factKindForDimension(dimensionCode) === 'PERFORMANCE'
-        ? sourceDimensionCodes(dimensionCode)
+    const sheet = await loadPerformanceScoreSheet({
+      prisma,
+      year: submission.template.year,
+      employeeNo: submission.user.employeeNo,
+      templateId: submission.template.id,
+      userId: submission.user.id,
+    });
+
+    const sheetRowByItemId = new Map(
+      (sheet?.sections ?? []).flatMap((section) =>
+        section.items
+          .filter((row) => row.itemId)
+          .map((row) => [row.itemId!, row] as const),
+      ),
+    );
+
+    const details = items.map((row) => {
+      const dimensionCode = row.item.dimensionCode ?? '';
+      const standard = SCORING_STANDARD_BY_CODE[dimensionCode];
+      const sheetRow = sheetRowByItemId.get(row.itemId);
+      const selectedLines = Array.isArray(row.selected)
+        ? (row.selected as Array<{ label?: string; score?: number; detail?: string }>).map((line, index) => ({
+          label: line.label ?? `计分明细 ${index + 1}`,
+          score: Number(line.score ?? 0),
+          detail: line.detail,
+        }))
         : [];
-    }))];
-    const [basicFacts, performanceFacts] = await Promise.all([
-      prisma.employeeBasicFact.findMany({
-        where: { year: submission.template.year, employeeNo, dimension: { in: basicDimensions } },
-      }),
-      prisma.performanceFact.findMany({
-        where: { year: submission.template.year, employeeNo, dimensionCode: { in: performanceDimensionCodes } },
-        orderBy: { createdAt: 'asc' },
-      }),
-    ]);
-    const details = items.map((item) => {
-      const dimensionCode = item.item.dimensionCode ?? '';
-      const kind = factKindForDimension(dimensionCode);
-      if (!kind) return null;
-      const facts = kind === 'BASIC'
-        ? basicFacts.filter((fact) => fact.dimension === BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode])
-        : performanceFacts.filter((fact) => sourceDimensionCodes(dimensionCode).includes(fact.dimensionCode));
-      // 客户端 FactCorrectionPage 期望 item 为 FormItem（{ id, title, dimensionCode }），
-      // attachments / factCorrections 平铺在顶层；与 SubmissionItem 区分以避免结构错位。
-      return { item: item.item, kind, attachments: item.attachments, factCorrections: item.factCorrections, facts };
-    }).filter((detail): detail is NonNullable<typeof detail> => detail !== null);
-    return NextResponse.json({ success: true, employee: submission.user, year: submission.template.year, items: details });
+      const scoreLines = (sheetRow?.lines ?? []).map((line) => ({
+        label: line.label,
+        score: line.score,
+        detail: line.detail,
+      }));
+      const displayLines = scoreLines.length > 0 ? scoreLines : selectedLines;
+      const maxScore = resolveDimensionMaxScore(
+        dimensionCode,
+        row.item.maxScore != null ? Number(row.item.maxScore) : null,
+      );
+      const linesSum = displayLines.reduce((sum, line) => sum + Number(line.score), 0);
+      const systemScore = displayLines.length > 0
+        ? (maxScore > 0 ? Math.min(linesSum, maxScore) : linesSum)
+        : Number(row.score);
+
+      return {
+        submissionItemId: row.id,
+        formItemId: row.itemId,
+        title: row.item.title,
+        dimensionCode,
+        maxScore,
+        currentScore: Number(row.score),
+        systemScore,
+        disputeClaimedScore: row.disputeClaimedScore == null ? null : Number(row.disputeClaimedScore),
+        disputeReason: row.disputeReason,
+        disputeL1Note: row.disputeL1Note,
+        disputeL2Note: row.disputeL2Note,
+        ruleSummary: standard?.scoringSummary ?? sheetRow?.ruleSummary ?? '',
+        scoreLines: displayLines,
+        attachments: row.attachments,
+        overrideScore: row.overrideScore == null ? null : Number(row.overrideScore),
+        overrideReason: row.overrideReason,
+        overrideAt: row.overrideAt?.toISOString() ?? null,
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      employee: submission.user,
+      year: submission.template.year,
+      totalScore: Number(submission.totalScore),
+      items: details,
+    });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : '服务器内部错误' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : '服务器内部错误' },
+      { status: 500 },
+    );
   }
 }
 
-export async function POST(req: Request) {
-  try {
-    const session = await requireAdmin();
-    if (session instanceof NextResponse) return session;
-    const parsed = PayloadSchema.safeParse(await req.json());
-    if (!parsed.success) return NextResponse.json({ error: '参数无效', issues: parsed.error.issues }, { status: 400 });
-    const input = parsed.data;
-    const { item, kind } = await loadEligibleItem(input.submissionItemId);
-    if (input.kind !== kind) return NextResponse.json({ error: '事实类型与评分项不匹配' }, { status: 400 });
-    const { user, template } = item.submission;
-    const dimensionCode = item.item.dimensionCode!;
-    let beforeData: unknown = null;
-    let afterData: unknown;
-    let factId: string;
-    let action: 'CREATE' | 'UPDATE';
-
-    if (kind === 'BASIC') {
-      const dimension = BasicDimensionByCode[dimensionCode as keyof typeof BasicDimensionByCode];
-      if (!dimension || !input.tierValue?.trim()) return NextResponse.json({ error: '请填写事实档位' }, { status: 400 });
-      const existing = input.factId
-        ? await prisma.employeeBasicFact.findUnique({ where: { id: input.factId } })
-        : await prisma.employeeBasicFact.findUnique({ where: { year_employeeNo_dimension: { year: template.year, employeeNo: user.employeeNo!, dimension } } });
-      if (existing && (existing.year !== template.year || existing.employeeNo !== user.employeeNo || existing.dimension !== dimension)) {
-        return NextResponse.json({ error: '事实记录不属于当前员工和评分项' }, { status: 400 });
-      }
-      const tiers = await loadBasicFactTiers(prisma);
-      const breakdown = input.yearBreakdown ?? {};
-      const score = dimension === 'SKILL_LEVEL'
-        ? scoreSkillLevel(input.tierValue, tiers.skill)
-        : dimension === 'TITLE_LEVEL'
-          ? scoreTitleLevel(input.tierValue, tiers.title)
-          : scorePerformanceLevel([breakdown['2023'] ?? null, breakdown['2024'] ?? null, breakdown['2025'] ?? null], tiers.performance).score;
-      const data = {
-        year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
-        dimension, tierValue: input.tierValue, yearBreakdown: dimension === 'PERFORMANCE_LEVEL' ? breakdown : undefined,
-        score, sourceFile: existing?.sourceFile ?? `appeal-correction:${item.submissionId}`,
-      };
-      beforeData = existing;
-      action = existing ? 'UPDATE' : 'CREATE';
-      const fact = existing
-        ? await prisma.employeeBasicFact.update({ where: { id: existing.id }, data })
-        : await prisma.employeeBasicFact.create({ data });
-      factId = fact.id;
-      afterData = fact;
-    } else {
-      const existing = input.factId ? await prisma.performanceFact.findUnique({ where: { id: input.factId } }) : null;
-      if (existing && (
-        existing.year !== template.year
-        || existing.employeeNo !== user.employeeNo
-        || !sourceDimensionCodes(dimensionCode).includes(existing.dimensionCode)
-      )) {
-        return NextResponse.json({ error: '事实记录不属于当前员工和评分项' }, { status: 400 });
-      }
-      const sourceFile = existing?.sourceFile ?? `appeal-correction:${item.submissionId}`;
-      let data;
-      if (isDerivedFactCorrectionDimension(dimensionCode)) {
-        const seed = buildDerivedFactCorrection({
-          dimensionCode,
-          year: template.year,
-          employeeNo: user.employeeNo!,
-          employeeName: user.fullName,
-          sourceFile,
-          existing,
-          subtype: input.subtype,
-          award: input.award,
-          level: input.level,
-          project: input.project,
-          category: input.category,
-          violationLevel: input.violationLevel,
-          violationRole: input.violationRole,
-          description: input.description,
-          eventDate: input.eventDate,
-        });
-        data = {
-          year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
-          dimensionCode: seed.dimensionCode, dimensionTitle: seed.dimensionTitle, role: seed.role, eventType: seed.eventType,
-          score: seed.score, defectRef: seed.defectRef, defectLevel: seed.defectLevel, eventDate: seed.eventDate,
-          sourceFile, metadata: { ...seed.metadata, correctedByAppeal: true },
-        };
-      } else {
-        if (!input.defectRef?.trim()) return NextResponse.json({ error: '请填写事实编号或标识' }, { status: 400 });
-        const ruleRow = await prisma.scoringRule.findUnique({ where: { dimensionCode } });
-        if (!ruleRow?.enabled) return NextResponse.json({ error: '该维度未配置可用评分规则' }, { status: 400 });
-        const rule: ScoringRule = { id: ruleRow.id, dimensionCode, ruleType: ruleRow.ruleType as ScoringRule['ruleType'], cap: Number(ruleRow.cap), enabled: ruleRow.enabled, ...(ruleRow.config as object) };
-        const metadata = { ...(existing?.metadata as object ?? {}), incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, correctedByAppeal: true };
-        const [scored] = computeFactScores([{
-          employeeNo: user.employeeNo!, employeeName: user.fullName, dimensionCode,
-          role: input.role ?? existing?.role ?? 'FIRST_DISCOVERER', eventType: input.eventType ?? existing?.eventType ?? 'DISCOVERY',
-          defectLevel: input.defectLevel ?? existing?.defectLevel, defectRef: input.defectRef,
-          eventDate: input.eventDate ?? existing?.eventDate ?? undefined, sourceFile,
-          incidentId: input.incidentId, faultCount: input.faultCount, rawScore: input.rawScore, metadata,
-        }], [rule]);
-        if (!scored) return NextResponse.json({ error: '该事实不能按当前规则计分，请补全必要字段' }, { status: 400 });
-        data = {
-          year: template.year, employeeNo: user.employeeNo!, employeeName: user.fullName, userId: user.id,
-          dimensionCode, dimensionTitle: item.item.title, role: scored.role, eventType: scored.eventType,
-          score: scored.score, defectRef: scored.defectRef ?? input.defectRef, defectLevel: scored.defectLevel ?? '', eventDate: scored.eventDate ?? null,
-          sourceFile, metadata,
-        };
-      }
-      beforeData = existing;
-      action = existing ? 'UPDATE' : 'CREATE';
-      const fact = existing
-        ? await prisma.performanceFact.update({ where: { id: existing.id }, data })
-        : await prisma.performanceFact.create({ data });
-      factId = fact.id;
-      afterData = fact;
-    }
-
-    await prisma.factCorrection.create({
-      data: { submissionItemId: item.id, kind, action, factId, beforeData: beforeData as object ?? undefined, afterData: afterData as object, reason: input.reason, evidenceNote: input.evidenceNote, correctedBy: session.userId },
-    });
-    const recalculated = await recalculateFactBackedSubmission(prisma, item.submissionId);
-    return NextResponse.json({ success: true, totalScore: recalculated.totalScore });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : '服务器内部错误' }, { status: 500 });
-  }
+export async function POST() {
+  return NextResponse.json(
+    { error: '已改为管理员直接调整得分，请使用 POST /api/admin/override' },
+    { status: 410 },
+  );
 }

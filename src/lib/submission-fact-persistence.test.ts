@@ -118,6 +118,7 @@ describe('extractSubmissionDimensionFacts', () => {
     );
 
     // 无系统导入事实时，员工补充的 performance.* 维度也必须归档为事实。
+    // 无申诉的系统填充项（si2）仍跳过。
     const safetyLine = lines.find((l) => l.dimensionCode === 'performance.safety-contribution');
     assert.equal(safetyLine?.score, 6);
     const techLine = lines.find((l) => l.dimensionCode === 'performance.technical-contribution');
@@ -130,6 +131,73 @@ describe('extractSubmissionDimensionFacts', () => {
     assert.equal(violationLine.metadata?.source, 'submission');
     assert.deepEqual(violationLine.metadata?.attachments, [
       { id: 'aV1', filename: 'violation.pdf', storageKey: 'kV1', mimeType: 'application/pdf' },
+    ]);
+  });
+
+  it('二审确认有效的系统事实申诉落库为申诉补充事实', () => {
+    const lines = extractSubmissionDimensionFacts(
+      [
+        {
+          id: 'si-appeal',
+          itemId: 'form-skill',
+          status: 'L2_APPROVED',
+          isSystemFilled: true,
+          content: null,
+          selected: [],
+          score: 1,
+          confirmationStatus: 'DISPUTED',
+          disputeReason: '实际为高级技师，导入遗漏',
+          disputeClaimedScore: 4,
+          disputeL1Result: 'APPROVED',
+          disputeL1Note: '材料齐全',
+          disputeL2Result: 'APPROVED',
+          disputeL2Note: '确认有效',
+          overrideScore: 4,
+          overrideReason: '按高级技师档计分',
+          item: {
+            title: '技能等级',
+            dimensionCode: 'basic.skill-level',
+            scoreOptions: [],
+          },
+          optionReviews: [],
+          attachments: [
+            { id: 'a-skill', filename: 'cert.pdf', storageKey: 'k-skill', mimeType: 'application/pdf' },
+          ],
+        },
+        {
+          id: 'si-system-ok',
+          itemId: 'form-title',
+          status: 'L2_APPROVED',
+          isSystemFilled: true,
+          content: null,
+          selected: [],
+          score: 2,
+          confirmationStatus: 'CONFIRMED',
+          item: {
+            title: '职称等级',
+            dimensionCode: 'basic.title-level',
+            scoreOptions: [],
+          },
+          optionReviews: [],
+          attachments: [],
+        },
+      ],
+      approvedAt,
+      'sub-1',
+    );
+
+    assert.equal(lines.length, 1);
+    const appeal = lines[0]!;
+    assert.equal(appeal.optionId, 'appeal-supplement');
+    assert.equal(appeal.label, '申诉确认补充事实');
+    assert.equal(appeal.score, 4);
+    assert.equal(appeal.content, '实际为高级技师，导入遗漏');
+    assert.equal(appeal.sourceFile, 'appeal-supplement:sub-1');
+    assert.equal(appeal.metadata?.source, 'appeal-supplement');
+    assert.equal(appeal.metadata?.disputeClaimedScore, 4);
+    assert.equal(appeal.metadata?.overrideScore, 4);
+    assert.deepEqual(appeal.metadata?.attachments, [
+      { id: 'a-skill', filename: 'cert.pdf', storageKey: 'k-skill', mimeType: 'application/pdf' },
     ]);
   });
 

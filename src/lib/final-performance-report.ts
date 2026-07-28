@@ -375,13 +375,14 @@ export function buildFinalPerformanceReportWorkbook(
       ]);
     }
     for (const fact of snapshot.submissionFacts) {
+      const isAppeal = String(fact.sourceFile).startsWith('appeal-supplement:');
       facts.addRow([
         row.employeeNo,
         row.employeeName,
         row.workAreaName,
         row.declarationLevelName,
         row.declarationSpecialtyName,
-        '员工补充事实',
+        isAppeal ? '申诉补充事实' : '员工补充事实',
         fact.dimensionTitle,
         fact.label,
         '',
