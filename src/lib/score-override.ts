@@ -55,10 +55,11 @@ export function isDeductionDimension(dimensionCode: string | null | undefined): 
 /**
  * 有效得分：管理员覆盖分优先，否则为系统原分（score 永不因覆盖而改写）。
  * 审核「系统分值」读 score；总分/归档聚合读本函数。
+ * 入参兼容 number / string / Prisma.Decimal（build 时 Prisma 客户端类型为 Decimal）。
  */
 export function effectiveSubmissionItemScore(item: {
-  score: number | string | null | undefined;
-  overrideScore?: number | string | null;
+  score: unknown;
+  overrideScore?: unknown;
 }): number {
   if (item.overrideScore != null && item.overrideScore !== '') {
     const overridden = Number(item.overrideScore);
