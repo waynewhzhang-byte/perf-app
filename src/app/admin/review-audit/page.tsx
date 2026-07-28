@@ -72,6 +72,7 @@ export default function ReviewAuditPage() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingFactCorrections, setPendingFactCorrections] = useState(0);
   const loadList = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -98,6 +99,19 @@ export default function ReviewAuditPage() {
   }, [branchId, departmentId, declarationSpecialtyId, templateId, year, status]);
 
   useEffect(() => { loadList(); }, [loadList]);
+
+  useEffect(() => {
+    fetch('/api/admin/fact-corrections?status=pending')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setPendingFactCorrections(d.pendingCount ?? 0);
+      })
+      .catch(() => {});
+  }, []);
+
+  const approvedDisputeCount = detail
+    ? detail.items.filter((it) => it.disputeL2Result === 'APPROVED').length
+    : 0;
 
   const openDetail = async (submissionId: string) => {
     if (detail?.id === submissionId) { setDetail(null); setRecord(null); return; }
@@ -201,6 +215,23 @@ export default function ReviewAuditPage() {
           {loading ? '刷新中…' : '刷新'}
         </button>
       </div>
+
+      {pendingFactCorrections > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-950">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">下一步：修正事实并重算分数</p>
+            <p className="mt-0.5 text-xs text-orange-800">
+              当前有 {pendingFactCorrections} 条二审已确认有效的申诉，尚未写入事实修正。分数不会自动变化，需管理员在「申诉事实修正」中更新台账后由系统重算。
+            </p>
+          </div>
+          <Link
+            href="/admin/fact-corrections"
+            className="shrink-0 rounded-lg bg-orange-600 px-4 py-2 text-xs font-medium text-white hover:bg-orange-700"
+          >
+            打开待事实修正列表
+          </Link>
+        </div>
+      )}
 
       {error && <p className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
@@ -312,6 +343,20 @@ export default function ReviewAuditPage() {
                         </div>
                       </div>
 
+                      {approvedDisputeCount > 0 && (
+                        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2.5 text-sm text-orange-950">
+                          <p className="min-w-0 flex-1 text-xs leading-5">
+                            本申报有 <strong>{approvedDisputeCount}</strong> 项申诉已由二审确认有效。请进入「申诉事实修正」更新事实台账并重算分数。
+                          </p>
+                          <Link
+                            href={`/admin/fact-corrections/${detail!.id}`}
+                            className="shrink-0 rounded bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
+                          >
+                            修正本申报事实
+                          </Link>
+                        </div>
+                      )}
+
                       <div className="rounded-lg border bg-white p-3">
                         <h4 className="text-xs font-semibold text-slate-500">能级评价申报信息</h4>
                         <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
@@ -389,12 +434,18 @@ export default function ReviewAuditPage() {
                                       <p className="mt-0.5 text-xs text-blue-500">附件 {it.attachments.length} 个</p>
                                     )}
                                     {it.disputeL2Result === 'APPROVED' && (
-                                      <Link
-                                        href={`/admin/fact-corrections/${detail!.id}`}
-                                        className="mt-2 inline-block rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
-                                      >
-                                        查看并修正事实数据
-                                      </Link>
+                                      <div className="mt-2 rounded-lg border border-orange-200 bg-orange-50 p-3">
+                                        <p className="text-xs font-semibold text-orange-900">二审已确认有效 · 待修正事实</p>
+                                        <p className="mt-1 text-xs text-orange-800">
+                                          请在申诉事实修正页更新对应事实台账；保存后系统按规则重算总分与归档档案。
+                                        </p>
+                                        <Link
+                                          href={`/admin/fact-corrections/${detail!.id}`}
+                                          className="mt-2 inline-block rounded bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
+                                        >
+                                          查看并修正事实数据
+                                        </Link>
+                                      </div>
                                     )}
                                   </div>
                                   <span className="ml-3 shrink-0 rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">

@@ -344,6 +344,11 @@ export default function ExportPage() {
           ) : (
             <>
               当前符合条件：<strong>{candidates.length}</strong> 人
+              {candidates.length === 0 && (
+                <span className="mt-1 block text-xs text-amber-700">
+                  仅列出申报状态为「二审通过（L2_APPROVED）」的员工。若各项已审完但仍找不到人，通常是终审归档被分差校验拦住，请先在审核侧完成终审或联系管理员重算事实分。
+                </span>
+              )}
             </>
           )}
         </p>
@@ -406,7 +411,7 @@ export default function ExportPage() {
                 className={inputClass}
               >
                 {candidates.length === 0 ? (
-                  <option value="">无符合条件员工</option>
+                  <option value="">无二审通过员工（请先确认终审归档成功）</option>
                 ) : (
                   candidates.map((c) => (
                     <option key={c.submissionId} value={c.submissionId}>

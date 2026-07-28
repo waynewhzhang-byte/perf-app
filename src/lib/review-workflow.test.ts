@@ -5,6 +5,7 @@ import {
   applyL2,
   buildArchivedSnapshot,
   countPendingL2Disputes,
+  expandL2DecisionsForAppealQueue,
   finalizeAffirmSubmission,
   finalizeArchive,
   isPendingL2Dispute,
@@ -116,6 +117,33 @@ describe('validateL2Decisions', () => {
   });
 });
 
+describe('expandL2DecisionsForAppealQueue', () => {
+  it('用同 submissionItemId 的申诉决策补齐 optionReviewId', () => {
+    const expanded = expandL2DecisionsForAppealQueue(
+      [{ id: 'or-skill', submissionItemId: 'fact-1' }],
+      [{ submissionItemId: 'fact-1', action: 'APPROVE', disputeAction: 'APPROVE' }],
+    );
+    assert.deepEqual(expanded, [
+      { submissionItemId: 'fact-1', action: 'APPROVE', disputeAction: 'APPROVE' },
+      { optionReviewId: 'or-skill', action: 'APPROVE', note: undefined },
+    ]);
+    assert.doesNotThrow(() =>
+      validateL2Decisions([{ id: 'or-skill', label: '技能等级（满分4分）' }], expanded),
+    );
+  });
+
+  it('已有 optionReviewId 时不重复展开', () => {
+    const expanded = expandL2DecisionsForAppealQueue(
+      [{ id: 'or-skill', submissionItemId: 'fact-1' }],
+      [
+        { submissionItemId: 'fact-1', action: 'APPROVE', disputeAction: 'APPROVE' },
+        { optionReviewId: 'or-skill', action: 'APPROVE' },
+      ],
+    );
+    assert.equal(expanded.filter((d) => d.optionReviewId === 'or-skill').length, 1);
+  });
+});
+
 describe('applyL2', () => {
   it('仅有基础事实申诉时仍可记录二审结论', async () => {
     const itemUpdates: unknown[] = [];
@@ -158,6 +186,7 @@ describe('applyL2', () => {
     const update = itemUpdates[0] as { where: { id: string }; data: Record<string, unknown> };
     assert.equal(update.where.id, 'fact-1');
     assert.equal(update.data.disputeL2Result, 'APPROVED');
+    assert.equal(update.data.status, 'L2_APPROVED');
     assert.equal(update.data.disputeL2ReviewerId, 'reviewer-1');
     assert.ok(update.data.disputeL2ReviewedAt instanceof Date);
   });
@@ -204,6 +233,79 @@ describe('applyL2', () => {
 
     assert.equal(result.outcome, 'pending');
     assert.equal(finalizeCalled, false);
+  });
+
+  it('申诉工作台仅提交 submissionItemId 时自动覆盖同项 PENDING_L2 子项', async () => {
+    const optionUpdates: unknown[] = [];
+    const itemUpdates: unknown[] = [];
+    let optionFindCalls = 0;
+    const tx = {
+      submission: {
+        findUnique: async () => ({ id: 'sub-1', status: 'L1_APPROVED', user: { contact: '13800000000' } }),
+        update: async () => ({}),
+      },
+      user: { findUnique: async () => ({ departmentId: 'dept-org' }) },
+      submissionOptionReview: {
+        findMany: async () => {
+          optionFindCalls += 1;
+          if (optionFindCalls === 1) {
+            return [{
+              id: 'or-skill',
+              submissionItemId: 'fact-skill',
+              label: '技能等级（满分4分）',
+              status: 'PENDING_L2',
+              departmentId: 'dept-org',
+              submissionItem: { item: { title: '技能等级' } },
+            }];
+          }
+          return [{
+            id: 'or-skill',
+            submissionItemId: 'fact-skill',
+            status: 'L2_APPROVED',
+          }];
+        },
+        update: async (input: unknown) => { optionUpdates.push(input); return {}; },
+        // 他部门仍有待审子项 → pending，避免走 finalizeArchive
+        count: async () => 1,
+      },
+      submissionItem: {
+        findMany: async () => [{
+          id: 'fact-skill',
+          itemId: 'basic.skill-level',
+          isSystemFilled: true,
+          confirmationStatus: 'DISPUTED',
+          disputeL1Result: 'APPROVED',
+          disputeL2Result: null,
+          item: { title: '技能等级', dimensionCode: 'basic.skill-level' },
+        }],
+        count: async () => 0,
+        update: async (input: unknown) => { itemUpdates.push(input); return {}; },
+      },
+      dimensionReviewRoute: {
+        findMany: async () => [{ dimensionCode: 'basic.skill-level', departmentId: 'dept-org' }],
+      },
+      reviewLog: { create: async () => ({}) },
+    } as any;
+
+    const result = await applyL2(tx, {
+      submissionId: 'sub-1',
+      reviewerId: 'l2-org',
+      decisions: [{
+        submissionItemId: 'fact-skill',
+        action: 'APPROVE',
+        disputeAction: 'APPROVE',
+      }],
+    });
+
+    assert.equal(result.outcome, 'pending');
+    assert.equal(optionUpdates.length, 1);
+    const orUpdate = optionUpdates[0] as { where: { id: string }; data: { status: string } };
+    assert.equal(orUpdate.where.id, 'or-skill');
+    assert.equal(orUpdate.data.status, 'L2_APPROVED');
+    assert.ok(itemUpdates.some((u) => {
+      const row = u as { where: { id: string }; data: { disputeL2Result?: string } };
+      return row.where.id === 'fact-skill' && row.data.disputeL2Result === 'APPROVED';
+    }));
   });
 });
 

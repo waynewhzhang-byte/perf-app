@@ -1,9 +1,14 @@
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
-import { factKindForDimension, recalculateFactBackedSubmission } from '@/lib/fact-correction';
+import {
+  eligibleFactCorrectionItemWhere,
+  factKindForDimension,
+  recalculateFactBackedSubmission,
+} from '@/lib/fact-correction';
 import { loadBasicFactTiers } from '@/lib/basic-fact-import';
 import { scorePerformanceLevel, scoreSkillLevel, scoreTitleLevel } from '@/lib/basic-quality';
 import { computeFactScores, type ScoringRule } from '@/lib/scoring-engine';
@@ -63,12 +68,124 @@ async function loadEligibleItem(submissionItemId: string) {
   return { item, kind };
 }
 
+async function listEligibleCorrections(url: URL) {
+  const statusParam = url.searchParams.get('status') ?? 'pending';
+  const status = statusParam === 'corrected' || statusParam === 'all' ? statusParam : 'pending';
+  const yearRaw = url.searchParams.get('year');
+  const year = yearRaw ? Number(yearRaw) : null;
+  const keyword = url.searchParams.get('keyword')?.trim() ?? '';
+
+  const andFilters: Prisma.SubmissionItemWhereInput[] = [eligibleFactCorrectionItemWhere(status)];
+  if (year != null && Number.isFinite(year)) {
+    andFilters.push({ submission: { template: { year } } });
+  }
+  if (keyword) {
+    andFilters.push({
+      OR: [
+        { submission: { user: { employeeNo: { contains: keyword, mode: 'insensitive' } } } },
+        { submission: { user: { fullName: { contains: keyword, mode: 'insensitive' } } } },
+        { item: { title: { contains: keyword, mode: 'insensitive' } } },
+      ],
+    });
+  }
+
+  const items = await prisma.submissionItem.findMany({
+    where: { AND: andFilters },
+    include: {
+      item: { select: { id: true, title: true, dimensionCode: true } },
+      factCorrections: {
+        select: { id: true, correctedAt: true },
+        orderBy: { correctedAt: 'desc' },
+        take: 1,
+      },
+      submission: {
+        select: {
+          id: true,
+          status: true,
+          totalScore: true,
+          user: {
+            select: {
+              employeeNo: true,
+              fullName: true,
+              branch: { select: { name: true } },
+              department: { select: { name: true } },
+            },
+          },
+          template: { select: { year: true, title: true } },
+        },
+      },
+    },
+    orderBy: [{ disputeL2ReviewedAt: 'desc' }, { updatedAt: 'desc' }],
+  });
+
+  const bySubmission = new Map<string, {
+    submissionId: string;
+    status: string;
+    totalScore: number;
+    employeeNo: string | null;
+    employeeName: string;
+    branchName: string | null;
+    departmentName: string | null;
+    year: number;
+    templateTitle: string;
+    pendingItemCount: number;
+    correctedItemCount: number;
+    itemTitles: string[];
+    latestL2ReviewedAt: string | null;
+  }>();
+
+  for (const row of items) {
+    const submissionId = row.submission.id;
+    const existing = bySubmission.get(submissionId);
+    const corrected = row.factCorrections.length > 0;
+    const l2At = row.disputeL2ReviewedAt?.toISOString() ?? null;
+    if (!existing) {
+      bySubmission.set(submissionId, {
+        submissionId,
+        status: row.submission.status,
+        totalScore: Number(row.submission.totalScore),
+        employeeNo: row.submission.user.employeeNo,
+        employeeName: row.submission.user.fullName,
+        branchName: row.submission.user.branch?.name ?? null,
+        departmentName: row.submission.user.department?.name ?? null,
+        year: row.submission.template.year,
+        templateTitle: row.submission.template.title,
+        pendingItemCount: corrected ? 0 : 1,
+        correctedItemCount: corrected ? 1 : 0,
+        itemTitles: [row.item.title],
+        latestL2ReviewedAt: l2At,
+      });
+      continue;
+    }
+    if (!corrected) existing.pendingItemCount += 1;
+    else existing.correctedItemCount += 1;
+    if (!existing.itemTitles.includes(row.item.title)) existing.itemTitles.push(row.item.title);
+    if (l2At && (!existing.latestL2ReviewedAt || l2At > existing.latestL2ReviewedAt)) {
+      existing.latestL2ReviewedAt = l2At;
+    }
+  }
+
+  const [pendingCount, correctedCount] = await Promise.all([
+    prisma.submissionItem.count({ where: eligibleFactCorrectionItemWhere('pending') }),
+    prisma.submissionItem.count({ where: eligibleFactCorrectionItemWhere('corrected') }),
+  ]);
+
+  return NextResponse.json({
+    success: true,
+    status,
+    pendingCount,
+    correctedCount,
+    rows: [...bySubmission.values()],
+  });
+}
+
 export async function GET(req: Request) {
   try {
     const session = await requireAdmin();
     if (session instanceof NextResponse) return session;
-    const submissionId = new URL(req.url).searchParams.get('submissionId');
-    if (!submissionId) return NextResponse.json({ error: '缺少 submissionId' }, { status: 400 });
+    const url = new URL(req.url);
+    const submissionId = url.searchParams.get('submissionId');
+    if (!submissionId) return listEligibleCorrections(url);
 
     const items = await prisma.submissionItem.findMany({
       where: {

@@ -118,6 +118,16 @@ export async function getObjectStream(key: string) {
   return getInternalClient().getObject(BUCKET, key);
 }
 
+/** 读入完整对象（附件预览需 Content-Length，避免浏览器 PDF 插件对 chunked 流解析失败） */
+export async function getObjectBuffer(key: string): Promise<Buffer> {
+  const stream = await getObjectStream(key);
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
  * 生成浏览器可访问的预签名 URL。
  * 使用 PUBLIC 端点参与签名（Host 与浏览器请求一致）；固定 region 避免去连公网探测。
@@ -155,6 +165,21 @@ export function isMinioConnectivityError(err: unknown): boolean {
     /ECONNREFUSED/i.test(msg) ||
     /self.?signed/i.test(msg) ||
     /certificate/i.test(msg)
+  );
+}
+
+/** 对象不存在（库有记录但桶内无文件，或 key 错误） */
+export function isMinioObjectNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string; name?: string };
+  const code = e.code ?? '';
+  const msg = e.message ?? '';
+  return (
+    code === 'NotFound' ||
+    code === 'NoSuchKey' ||
+    code === 'NoSuchObject' ||
+    /NoSuchKey/i.test(msg) ||
+    /The specified key does not exist/i.test(msg)
   );
 }
 

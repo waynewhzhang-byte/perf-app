@@ -21,12 +21,32 @@ const PERFORMANCE_DIMENSIONS = new Set([
   'special.violation-general',
 ]);
 
+/** Dimensions eligible for admin appeal fact correction (list/query filters). */
+export const FACT_CORRECTION_DIMENSION_CODES = [
+  ...BASIC_DIMENSIONS,
+  ...PERFORMANCE_DIMENSIONS,
+] as string[];
+
 export type FactCorrectionKind = 'BASIC' | 'PERFORMANCE';
 
 export function factKindForDimension(dimensionCode: string): FactCorrectionKind | null {
   if (BASIC_DIMENSIONS.has(dimensionCode)) return 'BASIC';
   if (PERFORMANCE_DIMENSIONS.has(dimensionCode)) return 'PERFORMANCE';
   return null;
+}
+
+/** Prisma filter for L2-approved system-fact appeals that support correction. */
+export function eligibleFactCorrectionItemWhere(
+  status: 'pending' | 'corrected' | 'all' = 'pending',
+): Prisma.SubmissionItemWhereInput {
+  return {
+    isSystemFilled: true,
+    confirmationStatus: 'DISPUTED',
+    disputeL2Result: 'APPROVED',
+    item: { dimensionCode: { in: FACT_CORRECTION_DIMENSION_CODES } },
+    ...(status === 'pending' ? { factCorrections: { none: {} } } : {}),
+    ...(status === 'corrected' ? { factCorrections: { some: {} } } : {}),
+  };
 }
 
 /** Rebuild the system-filled item scores and dependent aggregate records from current facts. */

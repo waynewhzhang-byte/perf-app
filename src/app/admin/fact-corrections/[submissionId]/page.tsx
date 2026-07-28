@@ -129,7 +129,7 @@ export default function FactCorrectionPage() {
     <main className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link href="/admin/review-audit" className="text-sm text-slate-500 hover:text-slate-700">← 返回审核审计</Link>
+          <Link href="/admin/fact-corrections" className="text-sm text-slate-500 hover:text-slate-700">← 返回待事实修正列表</Link>
           <h1 className="mt-2 text-2xl font-bold">申诉事实修正</h1>
           <p className="mt-1 text-sm text-slate-600">修正事实后由系统按评分规则重算；最终分数不可手工编辑。</p>
           {employee && <p className="mt-1 text-sm text-slate-500">{employee.fullName} · {employee.employeeNo} · {year} 年度</p>}

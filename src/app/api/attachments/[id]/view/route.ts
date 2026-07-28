@@ -1,7 +1,6 @@
 // 附件在线查看：校验权限后返回 MinIO 预签名 URL（inline）或 302 跳转
 export { dynamic } from '@/lib/api-route';
 import { NextResponse } from 'next/server';
-import { Readable } from 'node:stream';
 import {
   attachmentViewKind,
   loadAttachmentForView,
@@ -10,8 +9,9 @@ import {
 import { getSession } from '@/lib/auth';
 import {
   isMinioConnectivityError,
+  isMinioObjectNotFoundError,
   MinioUnavailableError,
-  getObjectStream,
+  getObjectBuffer,
   presignedGetUrl,
 } from '@/lib/minio';
 
@@ -75,12 +75,14 @@ export async function GET(
   const proxy = new URL(req.url).searchParams.get('proxy') === '1';
   if (proxy) {
     try {
-      const stream = await getObjectStream(att.storageKey);
-      return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
+      const body = await getObjectBuffer(att.storageKey);
+      return new NextResponse(new Uint8Array(body), {
         headers: {
           'Content-Type': mimeType,
+          'Content-Length': String(body.length),
           'Content-Disposition': inlineContentDisposition(att.filename),
           'Cache-Control': 'private, max-age=60',
+          'Accept-Ranges': 'bytes',
         },
       });
     } catch (e) {
@@ -90,6 +92,9 @@ export async function GET(
           { error: new MinioUnavailableError(e).message },
           { status: 503 },
         );
+      }
+      if (isMinioObjectNotFoundError(e)) {
+        return NextResponse.json({ error: '附件文件不存在或已被删除' }, { status: 404 });
       }
       console.error('GET /api/attachments/[id]/view proxy:', e);
       return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });
@@ -112,6 +117,9 @@ export async function GET(
         { error: new MinioUnavailableError(e).message },
         { status: 503 },
       );
+    }
+    if (isMinioObjectNotFoundError(e)) {
+      return NextResponse.json({ error: '附件文件不存在或已被删除' }, { status: 404 });
     }
     console.error('GET /api/attachments/[id]/view:', e);
     return NextResponse.json({ error: '服务器内部错误' }, { status: 500 });

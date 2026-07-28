@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPageActions } from '@/components/admin-page-actions';
 import { formatDeclarationLevelDisplay } from '@/lib/declaration-level';
 
@@ -72,6 +72,21 @@ const SOURCE_LABEL: Record<ScoreItem['source'], string> = {
   DEDUCTION: '扣分事实',
 };
 
+function resolveEmployeeNoFromSearch(employees: Employee[], keyword: string): string | null {
+  const trimmed = keyword.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  const exact = employees.find((employee) => employee.employeeNo.toLowerCase() === lower);
+  if (exact) return exact.employeeNo;
+  const matches = employees.filter((employee) =>
+    employee.employeeNo.toLowerCase().includes(lower) ||
+    employee.fullName.toLowerCase().includes(lower) ||
+    employee.branch?.name.toLowerCase().includes(lower) ||
+    employee.department?.name.toLowerCase().includes(lower)
+  );
+  return matches.length === 1 ? matches[0].employeeNo : null;
+}
+
 export default function EmployeeScoreSheetPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [search, setSearch] = useState('');
@@ -80,6 +95,7 @@ export default function EmployeeScoreSheetPage() {
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const autoLoadFromQueryRef = useRef(false);
 
   const loadEmployees = useCallback(async () => {
     try {
@@ -107,7 +123,10 @@ export default function EmployeeScoreSheetPage() {
     const params = new URLSearchParams(window.location.search);
     const linkedEmployeeNo = params.get('employeeNo');
     const linkedYear = Number(params.get('year'));
-    if (linkedEmployeeNo) setEmployeeNo(linkedEmployeeNo);
+    if (linkedEmployeeNo) {
+      setEmployeeNo(linkedEmployeeNo);
+      setSearch(linkedEmployeeNo);
+    }
     if (linkedYear >= 2000 && linkedYear <= 2100) setYear(linkedYear);
   }, [loadEmployees]);
 
@@ -122,16 +141,28 @@ export default function EmployeeScoreSheetPage() {
     ).slice(0, 30);
   }, [employees, search]);
 
-  async function loadSheet() {
-    if (!employeeNo) {
-      setLoadError('请先选择员工');
+  // 输入工号/唯一命中时自动选中，避免「只填查找、不选下拉」导致按钮一直禁用
+  useEffect(() => {
+    const resolved = resolveEmployeeNoFromSearch(employees, search);
+    if (resolved && resolved !== employeeNo) {
+      setEmployeeNo(resolved);
+    }
+  }, [employees, search, employeeNo]);
+
+  const selectedEmployeeNo = employeeNo || resolveEmployeeNoFromSearch(employees, search) || '';
+
+  const loadSheet = useCallback(async (overrideEmployeeNo?: string) => {
+    const targetEmployeeNo = overrideEmployeeNo || selectedEmployeeNo;
+    if (!targetEmployeeNo) {
+      setLoadError('请先输入或选择员工工号');
       return;
     }
+    if (targetEmployeeNo !== employeeNo) setEmployeeNo(targetEmployeeNo);
     setLoading(true);
     setLoadError(null);
     setResult(null);
     try {
-      const params = new URLSearchParams({ year: String(year), employeeNo });
+      const params = new URLSearchParams({ year: String(year), employeeNo: targetEmployeeNo });
       const response = await fetch(`/api/admin/import/scores?${params}`);
       if (response.status === 401) {
         window.location.href = '/admin/login';
@@ -153,7 +184,16 @@ export default function EmployeeScoreSheetPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [employeeNo, selectedEmployeeNo, year]);
+
+  useEffect(() => {
+    if (autoLoadFromQueryRef.current) return;
+    if (!employeeNo || employees.length === 0) return;
+    const linked = new URLSearchParams(window.location.search).get('employeeNo');
+    if (!linked || linked !== employeeNo) return;
+    autoLoadFromQueryRef.current = true;
+    void loadSheet(employeeNo);
+  }, [employeeNo, employees.length, loadSheet]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
@@ -161,7 +201,7 @@ export default function EmployeeScoreSheetPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">员工事实绩效表</h1>
           <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
-            从 435 名员工中按工号、姓名或工区选择一人，查看系统根据事实数据与积分规则实时生成的年度绩效表。
+            输入工号或姓名后会自动选中匹配员工，再点击「查看绩效表」即可查看系统根据事实数据与积分规则实时生成的年度绩效表。
           </p>
         </div>
         <AdminPageActions />
@@ -185,7 +225,7 @@ export default function EmployeeScoreSheetPage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="输入工号、姓名、工区或部门"
+              placeholder="输入工号、姓名、工区或部门（精确工号会自动选中）"
               className={inputClass}
             />
           </label>
@@ -208,8 +248,8 @@ export default function EmployeeScoreSheetPage() {
           </label>
           <button
             type="button"
-            disabled={loading || !employeeNo}
-            onClick={loadSheet}
+            disabled={loading || !selectedEmployeeNo}
+            onClick={() => void loadSheet()}
             className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? '生成中…' : '查看绩效表'}

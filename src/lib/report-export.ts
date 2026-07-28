@@ -210,7 +210,10 @@ export async function buildTemplateDetailSummaryCsv(filters: ExportFilters): Pro
 }
 
 /** 构建单个 submission 的明细 CSV（章节、申报项、所选项、得分） */
-function buildDetailCsv(sub: ApprovedSubmission, sectionTitleById: Map<string, string>): string {
+function buildDetailCsv(
+  sub: { items: Array<{ score: unknown; selected: unknown; item: { title: string; sectionId: string } }> },
+  sectionTitleById: Map<string, string>,
+): string {
   const header = ['章节', '申报项', '所选项', '得分'];
   const lines: string[] = [header.map(csvField).join(',')];
   const sorted = [...sub.items].sort((a, b) => {
