@@ -517,13 +517,18 @@ export interface LoadScoreSheetParams {
   employeeNo: string;
   templateId: string;
   userId?: string;
+  /**
+   * 默认 true：分表得分应用管理员 overrideScore。
+   * 事实重算写回系统原分时传 false，避免把覆盖分再次灌进 score 字段。
+   */
+  applyOverrides?: boolean;
 }
 
 /** 从数据库加载并构建员工绩效分表 */
 export async function loadPerformanceScoreSheet(
   params: LoadScoreSheetParams,
 ): Promise<PerformanceScoreSheet | null> {
-  const { prisma, year, employeeNo, templateId, userId } = params;
+  const { prisma, year, employeeNo, templateId, userId, applyOverrides = true } = params;
 
   const user = await prisma.user.findFirst({
     where: userId ? { id: userId } : { employeeNo },
@@ -593,7 +598,9 @@ export async function loadPerformanceScoreSheet(
       selected: it.selected,
       isSystemFilled: it.isSystemFilled,
       confirmationStatus: it.confirmationStatus,
-      overrideScore: it.overrideScore != null ? Number(it.overrideScore) : null,
+      overrideScore: applyOverrides && it.overrideScore != null
+        ? Number(it.overrideScore)
+        : null,
     })),
     basicFacts: basicFacts.map((f) => ({
       id: f.id,

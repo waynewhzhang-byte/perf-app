@@ -191,11 +191,15 @@ describe('extractSubmissionDimensionFacts', () => {
     assert.equal(appeal.optionId, 'appeal-supplement');
     assert.equal(appeal.label, '申诉确认补充事实');
     assert.equal(appeal.score, 4);
-    assert.equal(appeal.content, '实际为高级技师，导入遗漏');
+    assert.match(String(appeal.content), /申诉理由：实际为高级技师，导入遗漏/);
+    assert.match(String(appeal.content), /系统原分：1/);
+    assert.match(String(appeal.content), /主张分：4/);
+    assert.match(String(appeal.content), /管理员覆盖分：4/);
     assert.equal(appeal.sourceFile, 'appeal-supplement:sub-1');
     assert.equal(appeal.metadata?.source, 'appeal-supplement');
     assert.equal(appeal.metadata?.disputeClaimedScore, 4);
     assert.equal(appeal.metadata?.overrideScore, 4);
+    assert.equal(appeal.metadata?.systemScore, 1);
     assert.deepEqual(appeal.metadata?.attachments, [
       { id: 'a-skill', filename: 'cert.pdf', storageKey: 'k-skill', mimeType: 'application/pdf' },
     ]);

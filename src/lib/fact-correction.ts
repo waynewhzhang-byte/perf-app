@@ -5,6 +5,7 @@ import { computeSectionScores, type ScorableSection } from '@/lib/score-calculat
 import { captureFinalFactSnapshot } from '@/lib/final-fact-snapshot';
 import {
   eligibleScoreOverrideItemWhere,
+  effectiveSubmissionItemScore,
   SCORE_OVERRIDE_DIMENSION_CODES,
 } from '@/lib/score-override';
 
@@ -63,6 +64,8 @@ export async function recalculateFactBackedSubmission(
     employeeNo: submission.user.employeeNo,
     templateId: submission.templateId,
     userId: submission.userId,
+    // 必须忽略覆盖分，才能把事实推算原分写回 score；覆盖分单独留在 overrideScore
+    applyOverrides: false,
   });
   if (!sheet) throw new Error('无法加载员工事实绩效表');
 
@@ -113,18 +116,17 @@ export async function recalculateFactBackedSubmission(
   let totalScore = 0;
   await prisma.$transaction(async (tx) => {
     for (const [itemId, row] of systemRowsByItemId) {
-      const overrideScore = overrideByItemId.get(itemId);
       await tx.submissionItem.updateMany({
         where: { submissionId, itemId, isSystemFilled: true },
         data: {
-          // 管理员覆盖分优先：事实重算不覆盖已调整的申诉项分数
-          score: overrideScore != null ? overrideScore : row.score,
+          // 始终写回事实推算原分；管理员覆盖分留在 overrideScore，互不覆盖
+          score: row.score,
           selected: row.selected as Prisma.InputJsonValue,
         },
       });
     }
     const items = await tx.submissionItem.findMany({ where: { submissionId } });
-    totalScore = items.reduce((sum, item) => sum + Number(item.score), 0);
+    totalScore = items.reduce((sum, item) => sum + effectiveSubmissionItemScore(item), 0);
     await tx.submission.update({ where: { id: submissionId }, data: { totalScore } });
 
     const record = await tx.performanceRecord.findUnique({
@@ -132,7 +134,12 @@ export async function recalculateFactBackedSubmission(
     });
     if (record) {
       const archivedData = record.archivedData as {
-        items?: Array<{ itemId: string; score: number; selected?: unknown }>;
+        items?: Array<{
+          itemId: string;
+          score: number;
+          selected?: unknown;
+          overrideScore?: number | null;
+        }>;
         sections?: unknown;
         factSnapshot?: unknown;
       };
@@ -141,14 +148,15 @@ export async function recalculateFactBackedSubmission(
           const row = systemRowsByItemId.get(item.itemId);
           if (row) {
             const overrideScore = overrideByItemId.get(item.itemId);
-            item.score = overrideScore != null ? overrideScore : row.score;
+            item.score = row.score;
             item.selected = row.selected;
+            if (overrideScore != null) item.overrideScore = overrideScore;
           }
         }
       }
       archivedData.sections = computeSectionScores(
         templateSections,
-        new Map(items.map((item) => [item.itemId, Number(item.score)])),
+        new Map(items.map((item) => [item.itemId, effectiveSubmissionItemScore(item)])),
       );
       const factSnapshot = await captureFinalFactSnapshot(tx, {
         submissionId,

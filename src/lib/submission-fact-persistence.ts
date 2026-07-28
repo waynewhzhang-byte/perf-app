@@ -124,6 +124,13 @@ export function extractApprovedAppealSupplementFacts(
     const currentScore = row.score == null ? 0 : Number(row.score);
     const finalScore = overrideScore ?? currentScore;
     const claimed = row.disputeClaimedScore == null ? null : Number(row.disputeClaimedScore);
+    const reason = row.disputeReason?.trim() || row.content?.trim() || '';
+    const detailParts = [
+      reason ? `申诉理由：${reason}` : null,
+      `系统原分：${currentScore}`,
+      claimed != null ? `主张分：${claimed}` : null,
+      overrideScore != null ? `管理员覆盖分：${overrideScore}` : `生效分：${finalScore}`,
+    ].filter(Boolean);
 
     lines.push({
       submissionItemId: row.id,
@@ -135,13 +142,14 @@ export function extractApprovedAppealSupplementFacts(
       unitScore: finalScore,
       count: 1,
       score: finalScore,
-      content: row.disputeReason?.trim() || row.content,
+      content: detailParts.join('；'),
       sourceFile: submissionId ? appealSupplementSourceFile(submissionId) : undefined,
       metadata: {
         source: APPEAL_SUPPLEMENT_SOURCE,
         approvedAt: approvedAt.toISOString(),
         disputeClaimedScore: claimed,
         finalScore,
+        systemScore: currentScore,
         overrideScore,
         overrideReason: row.overrideReason ?? null,
         disputeL1Result: row.disputeL1Result ?? null,

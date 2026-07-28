@@ -90,6 +90,36 @@ describe('mapAppealReviewRow', () => {
     assert.equal(row.unitName, '忻州运维站 · 运维一班');
     assert.equal(row.declarationSpecialtyName, '变电运维');
   });
+
+  it('系统分值取 score 字段（覆盖后仍应为系统原分）', () => {
+    const row = mapAppealReviewRow({
+      id: 'si-2',
+      submissionId: 'sub-2',
+      score: '4',
+      disputeReason: '主张降分',
+      disputeClaimedScore: '3',
+      disputeL1Result: 'APPROVED',
+      disputeL2Result: 'APPROVED',
+      item: { title: '技能等级', dimensionCode: 'basic.skill-level' },
+      attachments: [],
+      submission: {
+        submittedAt: new Date('2026-07-01T00:00:00Z'),
+        workAreaName: null,
+        declarationSpecialtyId: null,
+        declarationSpecialtyName: null,
+        user: {
+          fullName: '杨胜云',
+          contact: '11403328',
+          employeeNo: '11403328',
+          departmentId: null,
+          branch: { id: 'b1', name: '晋北运维分部' },
+          department: null,
+        },
+      },
+    } as never);
+    assert.equal(row.systemScore, 4);
+    assert.equal(row.disputeClaimedScore, 3);
+  });
 });
 
 describe('listAppealReviewRows', () => {

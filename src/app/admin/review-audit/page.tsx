@@ -427,7 +427,8 @@ export default function ReviewAuditPage() {
                                     )}
                                     {it.overrideScore != null && (
                                       <p className="mt-0.5 text-xs text-orange-700">
-                                        管理员覆盖：{Number(it.score).toFixed(1)} 分（原因：{it.overrideReason || '—'}）
+                                        管理员覆盖：{Number(it.overrideScore).toFixed(1)} 分
+                                        （系统原分 {Number(it.score).toFixed(1)}；原因：{it.overrideReason || '—'}）
                                       </p>
                                     )}
                                     {it.attachments.length > 0 && (

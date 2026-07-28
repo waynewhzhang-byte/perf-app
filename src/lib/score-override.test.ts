@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   eligibleScoreOverrideItemWhere,
+  effectiveSubmissionItemScore,
   isDeductionDimension,
   resolveDimensionMaxScore,
   SCORE_OVERRIDE_DIMENSION_CODES,
@@ -22,6 +23,13 @@ describe('score-override', () => {
 
     const all = eligibleScoreOverrideItemWhere('all');
     assert.equal(all.overrideScore, undefined);
+  });
+
+  it('effective score prefers override and keeps system score separate', () => {
+    assert.equal(effectiveSubmissionItemScore({ score: 4, overrideScore: 3 }), 3);
+    assert.equal(effectiveSubmissionItemScore({ score: 4, overrideScore: null }), 4);
+    assert.equal(effectiveSubmissionItemScore({ score: '4.5', overrideScore: undefined }), 4.5);
+    assert.equal(effectiveSubmissionItemScore({ score: 0, overrideScore: -2 }), -2);
   });
 
   it('validates positive dimension override against max score', () => {

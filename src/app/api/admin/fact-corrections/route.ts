@@ -188,6 +188,9 @@ export async function GET(req: Request) {
       const systemScore = displayLines.length > 0
         ? (maxScore > 0 ? Math.min(linesSum, maxScore) : linesSum)
         : Number(row.score);
+      const currentScore = row.overrideScore != null
+        ? Number(row.overrideScore)
+        : Number(row.score);
 
       return {
         submissionItemId: row.id,
@@ -195,7 +198,7 @@ export async function GET(req: Request) {
         title: row.item.title,
         dimensionCode,
         maxScore,
-        currentScore: Number(row.score),
+        currentScore,
         systemScore,
         disputeClaimedScore: row.disputeClaimedScore == null ? null : Number(row.disputeClaimedScore),
         disputeReason: row.disputeReason,

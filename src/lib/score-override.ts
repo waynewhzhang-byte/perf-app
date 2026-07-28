@@ -52,6 +52,21 @@ export function isDeductionDimension(dimensionCode: string | null | undefined): 
   return SCORING_STANDARD_BY_CODE[dimensionCode]?.dataSource === 'deduction';
 }
 
+/**
+ * 有效得分：管理员覆盖分优先，否则为系统原分（score 永不因覆盖而改写）。
+ * 审核「系统分值」读 score；总分/归档聚合读本函数。
+ */
+export function effectiveSubmissionItemScore(item: {
+  score: number | string | null | undefined;
+  overrideScore?: number | string | null;
+}): number {
+  if (item.overrideScore != null && item.overrideScore !== '') {
+    const overridden = Number(item.overrideScore);
+    if (Number.isFinite(overridden)) return overridden;
+  }
+  return Number(item.score ?? 0);
+}
+
 /** Validate admin override score against dimension rules. Returns error message or null. */
 export function validateOverrideScore(input: {
   overrideScore: number;
@@ -156,7 +171,9 @@ export async function applyScoreOverride(
   });
   if (validationError) throw Object.assign(new Error(validationError), { httpStatus: 400 });
 
-  const oldScore = Number(item.score);
+  // 变更前有效分（已覆盖则用覆盖分，否则系统原分）；系统原分 score 字段保持不变
+  const oldScore = effectiveSubmissionItemScore(item);
+  const systemScore = Number(item.score);
   const newScore = input.overrideScore;
 
   return prisma.$transaction(async (tx) => {
@@ -167,14 +184,18 @@ export async function applyScoreOverride(
         overrideReason: input.overrideReason,
         overrideBy: input.adminUserId,
         overrideAt: new Date(),
-        score: newScore,
+        // 故意不改 score：保留系统原始分供审核「系统分值」展示
       },
     });
 
     const allItems = await tx.submissionItem.findMany({
       where: { submissionId: item.submissionId },
     });
-    const totalScore = allItems.reduce((sum, row) => sum + Number(row.score), 0);
+    // 当前项刚写入 override，findMany 已含新值；其余项用 override ?? score
+    const totalScore = allItems.reduce(
+      (sum, row) => sum + effectiveSubmissionItemScore(row),
+      0,
+    );
     await tx.submission.update({
       where: { id: item.submissionId },
       data: { totalScore },
@@ -187,7 +208,7 @@ export async function applyScoreOverride(
         reviewerId: input.adminUserId,
         level: 3,
         action: 'APPROVE',
-        note: `管理员覆盖分：${oldScore} → ${newScore} 分，原因：${input.overrideReason}`,
+        note: `管理员覆盖分：${oldScore} → ${newScore} 分（系统原分 ${systemScore}），原因：${input.overrideReason}`,
       },
     });
 
@@ -212,7 +233,8 @@ export async function applyScoreOverride(
       if (Array.isArray(archivedData.items)) {
         const target = archivedData.items.find((row) => row.itemId === item.itemId);
         if (target) {
-          target.score = newScore;
+          // score = 系统原分；最终生效分在 overrideScore
+          target.score = systemScore;
           target.overrideScore = newScore;
           target.overrideReason = input.overrideReason;
         }
@@ -220,7 +242,7 @@ export async function applyScoreOverride(
       const templateSections = await loadTemplateSections(tx, item.submission.templateId);
       archivedData.sections = computeSectionScores(
         templateSections,
-        new Map(allItems.map((row) => [row.itemId, Number(row.score)])),
+        new Map(allItems.map((row) => [row.itemId, effectiveSubmissionItemScore(row)])),
       );
       // 刷新申诉补充事实与终审事实快照，供查询/报表导出
       await persistSubmissionDimensionFacts(tx, item.submissionId, new Date());
