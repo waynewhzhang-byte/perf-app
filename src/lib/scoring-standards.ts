@@ -166,6 +166,44 @@ export function getScoringStandard(code: string): DimensionScoringStandard | und
   return SCORING_STANDARD_BY_CODE[code];
 }
 
+// ── 显示文案覆盖（纯展示，不影响分数/算法/事实）──────────────────────
+// 与 src/lib/scoring-standard-text.ts 的 ScoringStandardTextOverride 字段对齐，
+// 但在此处不直接 import（避免模块环引用风险）；保持结构同构即可。
+
+/** 文案覆盖：任一字段为 null = 该字段回退常量默认值。 */
+export interface ScoringStandardDisplayOverride {
+  title?: string | null;
+  scoringSummary?: string | null;
+  ownerDepartment?: string | null;
+  referenceFile?: string | null;
+  notes?: string | null;
+}
+
+/** 单维度：用覆盖（非 null 字段）替换 standard 的文案，结构字段原样保留。 */
+export function applyOneDisplayOverride(
+  item: DimensionScoringStandard,
+  override: ScoringStandardDisplayOverride | undefined,
+): DimensionScoringStandard {
+  if (!override) return item;
+  return {
+    ...item,
+    title: override.title ?? item.title,
+    scoringSummary: override.scoringSummary ?? item.scoringSummary,
+    ownerDepartment: override.ownerDepartment ?? item.ownerDepartment,
+    referenceFile: override.referenceFile ?? item.referenceFile,
+    notes: override.notes ?? item.notes,
+  };
+}
+
+/** 批量：按 dimensionCode 应用覆盖 Map，未被覆盖的项保持常量默认值。 */
+export function applyDisplayOverrides(
+  items: DimensionScoringStandard[],
+  overrides: Map<string, ScoringStandardDisplayOverride>,
+): DimensionScoringStandard[] {
+  if (overrides.size === 0) return items;
+  return items.map((item) => applyOneDisplayOverride(item, overrides.get(item.code)));
+}
+
 // ── 章节树 / 查询 helper（原 performance-dimension-registry）────────
 
 /** 一级维度：Excel「评价维度」列 */

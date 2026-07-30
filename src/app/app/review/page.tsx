@@ -139,18 +139,45 @@ export default function ReviewPage() {
     }
   };
 
+  const closePreview = () => {
+    setPreview((prev) => {
+      if (prev?.viewUrl.startsWith('blob:')) URL.revokeObjectURL(prev.viewUrl);
+      return null;
+    });
+  };
+
   const openAttachment = async (attId: string) => {
     setOpeningAttId(attId);
     try {
-      const r = await fetch(`/api/attachments/${attId}/view`, { credentials: 'include' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { alert(d.error || '无法打开附件'); return; }
-      if (!d.viewUrl) { alert('无法获取附件地址'); return; }
-      if (d.kind === 'other') {
-        window.open(d.viewUrl, '_blank', 'noopener,noreferrer');
+      // 元数据走 /view；文件字节一律同域 proxy 拉成 blob。
+      // 避免 iframe/img 直连 MINIO_PUBLIC（常为未开放的 IP:9000 →「拒绝连接」）；
+      // PDF 内置查看器对 Range/跨域也更敏感，blob 可与 PNG 走同一条稳妥路径。
+      const metaRes = await fetch(`/api/attachments/${attId}/view`, { credentials: 'include' });
+      const meta = await metaRes.json().catch(() => ({}));
+      if (!metaRes.ok) { alert(meta.error || '无法打开附件'); return; }
+
+      const proxyUrl = `/api/attachments/${attId}/view?proxy=1`;
+      if (meta.kind === 'other') {
+        window.open(proxyUrl, '_blank', 'noopener,noreferrer');
         return;
       }
-      setPreview({ filename: d.filename ?? '附件', viewUrl: d.viewUrl, kind: d.kind as ViewKind });
+
+      const fileRes = await fetch(proxyUrl, { credentials: 'include' });
+      if (!fileRes.ok) {
+        const err = await fileRes.json().catch(() => ({}));
+        alert(err.error || '无法加载附件内容');
+        return;
+      }
+      const blob = await fileRes.blob();
+      const viewUrl = URL.createObjectURL(blob);
+      setPreview((prev) => {
+        if (prev?.viewUrl.startsWith('blob:')) URL.revokeObjectURL(prev.viewUrl);
+        return {
+          filename: meta.filename ?? '附件',
+          viewUrl,
+          kind: meta.kind as ViewKind,
+        };
+      });
     } finally {
       setOpeningAttId(null);
     }
@@ -636,7 +663,7 @@ export default function ReviewPage() {
           role="dialog"
           aria-modal="true"
           aria-label={`预览：${preview.filename}`}
-          onClick={() => setPreview(null)}
+          onClick={closePreview}
         >
           <div
             className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
@@ -644,7 +671,7 @@ export default function ReviewPage() {
           >
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <p className="truncate text-sm font-medium">{preview.filename}</p>
-              <button type="button" onClick={() => setPreview(null)} className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 cursor-pointer">
+              <button type="button" onClick={closePreview} className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 cursor-pointer">
                 关闭
               </button>
             </div>

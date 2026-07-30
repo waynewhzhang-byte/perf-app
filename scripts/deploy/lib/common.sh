@@ -18,6 +18,71 @@ require_cmd() {
   done
 }
 
+# 以实际跑应用的用户执行 pm2（sudo 场景下 root 的 pm2 列表为空，restart 会「成功但无效」）
+pm2_run_user() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    echo "$SUDO_USER"
+  else
+    echo "${SUDO_USER:-$USER}"
+  fi
+}
+
+# 重启 perf-app 并使 .env 生效；失败则非零退出（勿再 || true 吞掉）
+# 使用 delete + start，避免 pm2 dump 里残留的旧 MINIO_PUBLIC_* 压过 .env
+restart_perf_app_pm2() {
+  local app_name="${PM2_APP_NAME:-perf-app}"
+  local app_dir="${APP_DIR:-/opt/perf-app}"
+  local app_port="${APP_PORT:-3000}"
+  local run_user
+  local ecosystem=""
+  run_user="$(pm2_run_user)"
+
+  if ! command -v pm2 >/dev/null 2>&1 && [[ "$(id -u)" -eq 0 ]]; then
+    export PATH="/usr/local/bin:/usr/bin:$PATH"
+  fi
+  if ! command -v pm2 >/dev/null 2>&1; then
+    log "未找到 pm2，请手动以用户 ${run_user} 执行: pm2 restart ${app_name} --update-env"
+    return 1
+  fi
+
+  for candidate in \
+    "${app_dir}/scripts/deploy/ecosystem.config.cjs" \
+    "${SCRIPT_DIR:-}/ecosystem.config.cjs"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      ecosystem="$candidate"
+      break
+    fi
+  done
+
+  _pm2_as_user() {
+    if [[ "$(id -u)" -eq 0 && "$run_user" != "root" ]]; then
+      su - "$run_user" -c "$*"
+    else
+      bash -c "$*"
+    fi
+  }
+
+  log "以用户 ${run_user} 重新拉起 ${app_name}（清除 PM2 残留环境变量）"
+  _pm2_as_user "pm2 delete ${app_name}" >/dev/null 2>&1 || true
+
+  if [[ -n "$ecosystem" ]]; then
+    if ! _pm2_as_user "cd ${app_dir} && APP_DIR=${app_dir} APP_PORT=${app_port} PM2_APP_NAME=${app_name} pm2 start ${ecosystem} --update-env"; then
+      log "错误: pm2 start 失败。请检查: sudo -u ${run_user} -i pm2 status"
+      return 1
+    fi
+  else
+    if ! _pm2_as_user "pm2 restart ${app_name} --update-env || pm2 restart all --update-env"; then
+      log "错误: pm2 重启失败（也未找到 ecosystem.config.cjs）。请检查: sudo -u ${run_user} -i pm2 status"
+      return 1
+    fi
+  fi
+
+  _pm2_as_user "pm2 save" >/dev/null 2>&1 || true
+  _pm2_as_user "pm2 status ${app_name}" || true
+  return 0
+}
+
+
 # 从 .env 读取 KEY=VALUE（去掉引号）
 env_get() {
   local env_file="$1" key="$2" line val

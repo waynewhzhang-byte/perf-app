@@ -1,11 +1,14 @@
 /**
  * 员工端评分规则说明页的数据组装。
- * 单一数据源：SCORING_STANDARDS + declaration-level 常量。
+ * 单一数据源：SCORING_STANDARDS + declaration-level 常量；
+ * 文案可被管理员按年度覆盖（overrides，纯展示，不影响分数）。
  */
 import { DECLARATION_LEVELS } from './declaration-level';
 import {
   SCORING_STANDARDS,
+  applyDisplayOverrides,
   type DimensionScoringStandard,
+  type ScoringStandardDisplayOverride,
   type StandardRuleType,
 } from './scoring-standards';
 
@@ -93,9 +96,14 @@ export function ruleTypeLabel(ruleType: StandardRuleType): string {
   return RULE_TYPE_LABELS[ruleType] ?? ruleType;
 }
 
-export function buildScoringGuideContent(year = 2026): ScoringGuideContent {
-  const positiveItems = SCORING_STANDARDS.filter((s) => s.dataSource !== 'deduction');
-  const deductionItems = SCORING_STANDARDS.filter((s) => s.dataSource === 'deduction');
+export function buildScoringGuideContent(
+  year = 2026,
+  overrides?: Map<string, ScoringStandardDisplayOverride>,
+): ScoringGuideContent {
+  // 应用文案覆盖（纯显示，maxScore/ruleType 等结构字段不受影响）
+  const standards = overrides ? applyDisplayOverrides(SCORING_STANDARDS, overrides) : SCORING_STANDARDS;
+  const positiveItems = standards.filter((s) => s.dataSource !== 'deduction');
+  const deductionItems = standards.filter((s) => s.dataSource === 'deduction');
   const positiveMaxScore = positiveItems.reduce((sum, item) => sum + item.maxScore, 0);
 
   const sections: ScoringGuideSection[] = SECTION_ORDER.map((code) => {

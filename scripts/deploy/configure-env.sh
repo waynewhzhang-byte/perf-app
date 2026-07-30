@@ -190,18 +190,16 @@ log "修正后关键项:"
 grep -E '^(# )?MINIO_|^APP_BASE_URL=' "$ENV_FILE" | sed 's/^/  /' || true
 
 if [[ "$RESTART_PM2" == true ]]; then
-  if command -v pm2 >/dev/null 2>&1; then
-    log "pm2 restart perf-app --update-env"
-    pm2 restart perf-app --update-env || pm2 restart all --update-env || true
-  else
-    log "未找到 pm2，请手动重启应用使 .env 生效"
-  fi
+  # sudo 时必须用原登录用户的 pm2；root 的 pm2 列表通常是空的，restart 会静默失败 → 「修了没效果」
+  restart_perf_app_pm2
 fi
 
-log "完成。请用审核账号打开附件验证。"
+log "完成。请用审核账号打开附件验证（硬刷新 Ctrl+Shift+R）。"
 log "若仍失败，在服务器执行:"
+log "  grep -E '^(# )?MINIO_|^APP_BASE_URL=' ${ENV_FILE}"
 log "  curl -sI http://127.0.0.1:9000/minio/health/live"
 log "  curl -k -sI https://${SERVER_NAME}/"
+log "  # 用审核员已登录浏览器的 Cookie，看 viewUrl 是否含 proxy=1 或仍指向 :9000"
 if [[ "$ATTACHMENT_MODE" == "minio-https" ]]; then
   log "  curl -k -sI https://${SERVER_NAME}:${MINIO_PUBLIC_PORT}/minio/health/live"
 fi
