@@ -663,6 +663,25 @@ model ScoringRule {
   updatedAt     DateTime @updatedAt
 }
 
+// ========== 评分规则显示文案覆盖（纯展示，不影响分数/算法/事实） ==========
+// 按 (year, dimensionCode) 覆盖 SCORING_STANDARDS 常量的说明性文字。
+// 任一列 null = 该字段回退常量默认值；整行删除 = 完全回退默认。
+model ScoringStandardText {
+  id              String   @id @default(cuid())
+  year            Int
+  dimensionCode   String
+  title           String?
+  scoringSummary  String?
+  ownerDepartment String?
+  referenceFile   String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([year, dimensionCode])
+  @@index([year])
+}
+
 // ========== 年度绩效档案 ==========
 model PerformanceRecord {
   id           String   @id @default(cuid())
