@@ -82,7 +82,7 @@ export async function GET(
           'Content-Length': String(body.length),
           'Content-Disposition': inlineContentDisposition(att.filename),
           'Cache-Control': 'private, max-age=60',
-          'Accept-Ranges': 'bytes',
+          // 不声明 Accept-Ranges：未实现 Range/206 时，Chrome PDF 查看器会发 Range 请求并易异常
         },
       });
     } catch (e) {
