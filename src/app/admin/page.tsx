@@ -65,6 +65,7 @@ export default async function AdminHome() {
         <NavCard href="/admin/auth" title="登录验证策略" desc="验证码开关与强密码规则" />
         <NavCard href="/admin/organization" title="组织架构" desc="工区 / 部门 / 申报字典" />
         <NavCard href="/admin/scoring" title="绩效算法配置" desc="评分规则与导入维度算法设置" />
+        <NavCard href="/admin/scoring-rules-text" title="计分规则文案" desc="修改 11 项规则的显示文字（标题/说明/责任部门）" />
         <NavCard href="/admin/import" title="基础事实导入" desc="基本素质 / 两票 / 缺陷治理 一键导入与查看" />
         <NavCard href="/admin/employee-score-sheet" title="员工事实绩效表" desc="按工号查看事实数据自动生成的年度绩效表" />
         <NavCard href="/admin/auto-review-rules" title="自动预审规则" desc="工作年限与申报等级校验" />
