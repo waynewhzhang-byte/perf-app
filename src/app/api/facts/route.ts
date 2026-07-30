@@ -23,6 +23,7 @@ import {
 } from '@/lib/system-filled-items';
 import { buildDerivation, type DerivationInputFact } from '@/lib/fact-derivation';
 import { formatPerformanceFactRecord, type FactRecordView } from '@/lib/fact-record-view';
+import { loadScoringStandardOverrides } from '@/lib/scoring-standard-text';
 
 function withoutRawMetadata<T extends { rawFactFields: DerivationInputFact[] }>(derivation: T): T {
   return {
@@ -71,6 +72,9 @@ export async function GET(req: Request) {
 
   // 两票折算基准：同专业原始分最高值（仅两票维度需要，其他维度传入 undefined 忽略）
   const ticketCohortMax = await loadTicketSpecialtyMaxRaw(prisma, template.year, user?.branch?.name);
+
+  // 规则说明文案覆盖（纯展示，不影响分数）；按年度加载一次，传给 buildDerivation
+  const displayOverrides = await loadScoringStandardOverrides(prisma, template.year);
 
   const factBoundItems = sections.flatMap((sec) =>
     sec.items
@@ -178,7 +182,7 @@ export async function GET(req: Request) {
           ] : [],
           totalScore: sys.score,
           // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
-          derivation: buildDerivation(code, basicDerivationFacts, { finalScore: sys.score }) ?? undefined,
+          derivation: buildDerivation(code, basicDerivationFacts, { finalScore: sys.score }, displayOverrides.get(code)) ?? undefined,
         };
       }
 
@@ -232,6 +236,7 @@ export async function GET(req: Request) {
             code,
             perfDerivationFacts,
             { finalScore: sys.score, ticketCohortMax },
+            displayOverrides.get(code),
           );
           return derivation ? withoutRawMetadata(derivation) : undefined;
         })(),

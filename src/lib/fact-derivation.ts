@@ -6,7 +6,9 @@
  */
 import {
   SCORING_STANDARD_BY_CODE,
+  applyOneDisplayOverride,
   defaultScoringRuleConfigs,
+  type ScoringStandardDisplayOverride,
 } from '@/lib/scoring-standards';
 import { round2 } from '@/lib/rounding';
 import type { FactRecordView } from '@/lib/fact-record-view';
@@ -77,15 +79,19 @@ export function buildDerivation(
   dimensionCode: string,
   facts: DerivationInputFact[],
   context: DerivationContext,
+  /** 纯展示文案覆盖：只改 ruleSummary/referenceFile/notes 等文字，不影响 steps/算分。 */
+  displayOverride?: ScoringStandardDisplayOverride,
 ): Derivation | null {
   const standard = SCORING_STANDARD_BY_CODE[dimensionCode];
   if (!standard) return null;
 
+  // 应用文案覆盖（仅展示文字，ruleType 等结构字段不变）
+  const displayed = applyOneDisplayOverride(standard, displayOverride);
   const base: Derivation = {
     ruleType: standard.ruleType,
-    ruleSummary: standard.scoringSummary,
-    referenceFile: standard.referenceFile,
-    notes: standard.notes,
+    ruleSummary: displayed.scoringSummary,
+    referenceFile: displayed.referenceFile,
+    notes: displayed.notes,
     rawFactFields: facts,
     steps: [],
   };

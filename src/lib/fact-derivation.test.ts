@@ -253,3 +253,46 @@ describe('buildDerivation — overrideScore 提示', () => {
     assert.equal(d.steps.find((s) => s.kind === 'note'), undefined);
   });
 });
+
+describe('buildDerivation — 显示文案覆盖（只改文字，不动算分）', () => {
+  it('displayOverride 覆盖 ruleSummary / referenceFile / notes，steps 不受影响', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 's1', tierValue: '技师', score: 3 },
+    ];
+    const plain = buildDerivation('basic.skill-level', facts, { finalScore: 3 })!;
+    const overridden = buildDerivation(
+      'basic.skill-level',
+      facts,
+      { finalScore: 3 },
+      {
+        scoringSummary: '管理员修订后的说明',
+        referenceFile: '修订台账.xlsx',
+        notes: '新增备注',
+      },
+    )!;
+
+    // 文案字段被覆盖
+    assert.equal(overridden.ruleSummary, '管理员修订后的说明');
+    assert.equal(overridden.referenceFile, '修订台账.xlsx');
+    assert.equal(overridden.notes, '新增备注');
+    // ruleType 等结构字段不变
+    assert.equal(overridden.ruleType, plain.ruleType);
+    // 算分步骤与不传覆盖时完全一致
+    assert.deepEqual(overridden.steps.map((s) => s.label), plain.steps.map((s) => s.label));
+  });
+
+  it('未覆盖字段回退常量默认值', () => {
+    const facts: DerivationInputFact[] = [
+      { id: 's1', tierValue: '技师', score: 3 },
+    ];
+    const d = buildDerivation(
+      'basic.skill-level',
+      facts,
+      { finalScore: 3 },
+      { scoringSummary: '仅改说明' },
+    )!;
+    assert.equal(d.ruleSummary, '仅改说明');
+    // referenceFile 未覆盖 → 常量默认
+    assert.equal(d.referenceFile, '1.能级评价员工花名册.xlsx');
+  });
+});
