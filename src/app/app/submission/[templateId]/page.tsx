@@ -862,11 +862,6 @@ export default function SubmissionPage() {
     Number.isInteger(score * 10) ? score.toFixed(1) : score.toFixed(2);
 
   const renderFactRecord = (record: FactRecord) => {
-    const sourceLocation = [
-      record.source.file,
-      record.source.sheet ? `工作表：${record.source.sheet}` : '',
-      record.source.rowNo ? `第 ${record.source.rowNo} 行` : '',
-    ].filter(Boolean).join(' · ');
     return (
       <div className="min-w-0">
         <p className="font-medium text-slate-700">{record.title}</p>
@@ -884,9 +879,6 @@ export default function SubmissionPage() {
               </div>
             ))}
           </dl>
-        )}
-        {sourceLocation && (
-          <p className="mt-1 text-[10px] text-slate-400">来源：{sourceLocation}</p>
         )}
       </div>
     );
@@ -915,37 +907,10 @@ export default function SubmissionPage() {
                 ⚠ {s.label}
               </p>
             ))}
+            {/* 事实明细只在左侧「事实记录」列展示，此处不再重复 rawFactFields */}
             <div>
-              <p className="text-xs font-semibold text-slate-600">原始台账明细</p>
-              <div className="mt-1 space-y-0.5">
-                {fi.derivation.rawFactFields.length === 0 ? (
-                  <p className="text-xs text-slate-400">暂无导入事实</p>
-                ) : (
-                  fi.derivation.rawFactFields.map((rf) => (
-                    <div key={rf.id} className="border-b border-slate-200 py-2 last:border-b-0">
-                      {rf.record ? renderFactRecord(rf.record) : (
-                        <p className="text-xs text-slate-500">
-                          {rf.thirdLevelTitle && <span className="font-medium">{rf.thirdLevelTitle}</span>}
-                          {rf.defectLevel && ` · ${rf.defectLevel}`}
-                          {rf.defectRef && ` · ${rf.defectRef}`}
-                          {rf.role && ` · ${rf.role}`}
-                          {rf.tierValue && ` · 档位 ${rf.tierValue}`}
-                          {rf.eventDate && ` · ${String(rf.eventDate).slice(0, 10)}`}
-                          {' → '}<b>{rf.score} 分</b>
-                          {rf.sourceFile && <span className="text-slate-400"> · 来源：{rf.sourceFile}</span>}
-                        </p>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="border-t border-slate-200 pt-2">
               <p className="text-xs font-semibold text-slate-600">计分规则</p>
               <p className="mt-0.5 text-xs text-slate-500">{fi.derivation.ruleSummary}</p>
-              {fi.derivation.referenceFile && (
-                <p className="mt-0.5 text-xs text-slate-400">参考台账：{fi.derivation.referenceFile}</p>
-              )}
               {fi.derivation.notes && (
                 <p className="mt-0.5 text-xs text-amber-700">备注：{fi.derivation.notes}</p>
               )}
@@ -1203,7 +1168,7 @@ export default function SubmissionPage() {
       {appealCentric && groupedFactSections.length > 0 && (
         <div className="mt-5 space-y-5">
           <p className="text-xs text-slate-500">
-            按量化积分表层级展示：评价维度 → 评分项 → 完整基础事实与计算过程。
+            按量化积分表层级展示：评价维度 → 评分项 → 事实记录与积分过程。
           </p>
           {groupedFactSections.map((section) => (
             <section key={section.code} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1270,6 +1235,12 @@ export default function SubmissionPage() {
                               </>
                             )}
                           </p>
+                          {(fi.derivation?.ruleSummary ?? fi.ruleSummary) && (
+                            <p className="mt-1.5 text-xs leading-5 text-slate-600">
+                              <span className="font-medium text-slate-700">计分说明：</span>
+                              {fi.derivation?.ruleSummary ?? fi.ruleSummary}
+                            </p>
+                          )}
                           {disputed && (
                             <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
                               <p>

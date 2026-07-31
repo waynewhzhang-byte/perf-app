@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 import { getReviewProgress } from '@/lib/review-progress';
+import { resolveSubmissionDeclarationHeader } from '@/lib/submission-declaration-header';
 
 export async function GET(req: Request) {
   try {
@@ -21,38 +22,63 @@ export async function GET(req: Request) {
 
     // 详情模式：查看单个申报的完整报告
     if (submissionId) {
-      const submission = await prisma.submission.findUnique({
-        where: { id: submissionId },
-        include: {
-          user: {
-            select: {
-              id: true,
-              fullName: true,
-              contact: true,
-              employeeNo: true,
-              branch: { select: { id: true, name: true } },
-              department: { select: { id: true, name: true } },
-              position: { select: { id: true, name: true } },
+      const [submission, declarationLevels] = await Promise.all([
+        prisma.submission.findUnique({
+          where: { id: submissionId },
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                contact: true,
+                employeeNo: true,
+                hireDate: true,
+                profile: true,
+                branch: { select: { id: true, name: true } },
+                department: { select: { id: true, name: true } },
+                position: { select: { id: true, name: true } },
+              },
+            },
+            template: { select: { id: true, title: true, year: true } },
+            items: { include: { item: true, attachments: true } },
+            logs: {
+              orderBy: { createdAt: 'asc' },
             },
           },
-          template: { select: { id: true, title: true, year: true } },
-          items: { include: { item: true, attachments: true } },
-          logs: {
-            orderBy: { createdAt: 'asc' },
-          },
-        },
-      });
+        }),
+        prisma.declarationLevel.findMany({
+          select: { id: true, name: true },
+          orderBy: { sortOrder: 'asc' },
+        }),
+      ]);
 
       if (!submission) {
         return NextResponse.json({ error: '申报不存在' }, { status: 404 });
       }
+
+      const header = resolveSubmissionDeclarationHeader(
+        submission,
+        submission.user,
+        submission.template.year,
+        declarationLevels,
+      );
 
       // 查找对应的绩效档案
       const record = await prisma.performanceRecord.findUnique({
         where: { submissionId: submission.id },
       });
 
-      return NextResponse.json({ success: true, submission, record });
+      return NextResponse.json({
+        success: true,
+        submission: {
+          ...submission,
+          hireDate: header.hireDate,
+          workYears: header.workYears,
+          declarationLevelId: header.declarationLevelId,
+          declarationLevelName: header.declarationLevelName,
+        },
+        record,
+      });
     }
 
     // 列表模式：分页查询
@@ -78,33 +104,55 @@ export async function GET(req: Request) {
       };
     }
 
-    const submissions = await prisma.submission.findMany({
-      where,
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            contact: true,
-            employeeNo: true,
-            branch: { select: { id: true, name: true } },
-            department: { select: { id: true, name: true } },
+    const [submissions, declarationLevels] = await Promise.all([
+      prisma.submission.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              contact: true,
+              employeeNo: true,
+              hireDate: true,
+              profile: true,
+              branch: { select: { id: true, name: true } },
+              department: { select: { id: true, name: true } },
+            },
           },
+          template: { select: { id: true, title: true, year: true } },
+          _count: { select: { items: true, logs: true } },
         },
-        template: { select: { id: true, title: true, year: true } },
-        _count: { select: { items: true, logs: true } },
-      },
-      orderBy: { updatedAt: 'desc' },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      prisma.declarationLevel.findMany({
+        select: { id: true, name: true },
+        orderBy: { sortOrder: 'asc' },
+      }),
+    ]);
+
+    const enrichedSubmissions = submissions.map((submission) => {
+      const header = resolveSubmissionDeclarationHeader(
+        submission,
+        submission.user,
+        submission.template.year,
+        declarationLevels,
+      );
+      return {
+        ...submission,
+        workYears: header.workYears,
+        declarationLevelName: header.declarationLevelName,
+      };
     });
 
     // 汇总统计
     const stats = {
-      total: submissions.length,
-      draft: submissions.filter((s) => s.status === 'DRAFT').length,
-      submitted: submissions.filter((s) => s.status === 'SUBMITTED').length,
-      l1Approved: submissions.filter((s) => s.status === 'L1_APPROVED').length,
-      l2Approved: submissions.filter((s) => s.status === 'L2_APPROVED').length,
-      rejected: submissions.filter((s) => s.status === 'REJECTED').length,
+      total: enrichedSubmissions.length,
+      draft: enrichedSubmissions.filter((s) => s.status === 'DRAFT').length,
+      submitted: enrichedSubmissions.filter((s) => s.status === 'SUBMITTED').length,
+      l1Approved: enrichedSubmissions.filter((s) => s.status === 'L1_APPROVED').length,
+      l2Approved: enrichedSubmissions.filter((s) => s.status === 'L2_APPROVED').length,
+      rejected: enrichedSubmissions.filter((s) => s.status === 'REJECTED').length,
     };
 
     // 获取筛选字典
@@ -137,7 +185,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       success: true,
-      submissions,
+      submissions: enrichedSubmissions,
       stats,
       branches,
       departments,

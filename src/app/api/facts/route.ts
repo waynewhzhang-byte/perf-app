@@ -157,6 +157,12 @@ export async function GET(req: Request) {
           sourceFile: fact.sourceFile ?? undefined,
           record: basicRecord,
         } as DerivationInputFact] : [];
+        const derivation = buildDerivation(
+          code,
+          basicDerivationFacts,
+          { finalScore: sys.score },
+          displayOverrides.get(code),
+        );
         return {
           itemId: item.id,
           itemTitle: item.title,
@@ -167,7 +173,7 @@ export async function GET(req: Request) {
           maxScore: item.maxScore,
           factKind: 'basic' as const,
           source: 'FACT' as const,
-          ruleSummary: sys.ruleSummary,
+          ruleSummary: derivation?.ruleSummary ?? sys.ruleSummary,
           requiresConfirmation: true,
           facts: fact ? [
             {
@@ -182,7 +188,7 @@ export async function GET(req: Request) {
           ] : [],
           totalScore: sys.score,
           // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
-          derivation: buildDerivation(code, basicDerivationFacts, { finalScore: sys.score }, displayOverrides.get(code)) ?? undefined,
+          derivation: derivation ?? undefined,
         };
       }
 
@@ -204,6 +210,13 @@ export async function GET(req: Request) {
           sourceFile: f.sourceFile ?? undefined,
           record: recordByFactId.get(f.id),
         } satisfies DerivationInputFact));
+      const derivation = buildDerivation(
+        code,
+        perfDerivationFacts,
+        { finalScore: sys.score, ticketCohortMax },
+        displayOverrides.get(code),
+      );
+      const displayedDerivation = derivation ? withoutRawMetadata(derivation) : undefined;
       return {
         itemId: item.id,
         itemTitle: item.title,
@@ -214,7 +227,7 @@ export async function GET(req: Request) {
         maxScore: item.maxScore,
         factKind: 'performance' as const,
         source: 'FACT' as const,
-        ruleSummary: sys.ruleSummary,
+        ruleSummary: displayedDerivation?.ruleSummary ?? sys.ruleSummary,
         requiresConfirmation: true,
         facts: facts.map((f) => ({
           id: f.id,
@@ -231,15 +244,7 @@ export async function GET(req: Request) {
         })),
         totalScore: sys.score,
         // overrideScore 暂不接入（填报页展示当前事实推算；已存在 override 需额外查 SubmissionItem，留作后续接入点）
-        derivation: (() => {
-          const derivation = buildDerivation(
-            code,
-            perfDerivationFacts,
-            { finalScore: sys.score, ticketCohortMax },
-            displayOverrides.get(code),
-          );
-          return derivation ? withoutRawMetadata(derivation) : undefined;
-        })(),
+        derivation: displayedDerivation,
       };
     })
     .filter((row): row is NonNullable<typeof row> => row != null);

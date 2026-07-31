@@ -140,7 +140,6 @@ function ScoringItemCard({ item }: { item: ScoringGuideContent['sections'][numbe
       </div>
       <p className="mt-2 text-sm leading-6 text-slate-600">{item.scoringSummary}</p>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-        {item.referenceFile && <span>参考台账：{item.referenceFile}</span>}
         <span>业务责任：{item.ownerDepartment}</span>
       </div>
       {item.notes && (

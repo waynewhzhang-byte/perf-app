@@ -141,6 +141,27 @@ type ItemMeta = {
   scoreOptions: ScoreOptionLike[];
 };
 
+/**
+ * 表头字段关闭（系统从花名册自动推算）时，提交必须能解析入职时间与参评能级。
+ * 通过返回 null；失败返回用户可见文案。
+ */
+export function autoDeclarationHeaderSubmitError(input: {
+  submit: boolean;
+  hireDateEnabled: boolean;
+  declarationLevelEnabled: boolean;
+  parsedHireDate: Date | null;
+  declarationLevel: { id: string } | null;
+}): string | null {
+  if (!input.submit) return null;
+  if (!input.hireDateEnabled && !input.parsedHireDate) {
+    return '系统未能从员工花名册读取参加工作时间，请联系管理员补全档案后再申报';
+  }
+  if (!input.declarationLevelEnabled && input.parsedHireDate && !input.declarationLevel) {
+    return '系统未能根据工龄匹配参评能级，请联系管理员检查等级字典配置';
+  }
+  return null;
+}
+
 export async function upsertDeclaration(
   tx: DeclarationTx,
   cmd: DeclarationCommand,
@@ -266,6 +287,21 @@ export async function upsertDeclaration(
     if (hfEnabled('declarationSpecialty') && !declarationSpecialty) {
       throw new DeclarationError('请选择有效的申报专业');
     }
+    const autoHeaderErr = autoDeclarationHeaderSubmitError({
+      submit,
+      hireDateEnabled: hfEnabled('hireDate'),
+      declarationLevelEnabled: hfEnabled('declarationLevel'),
+      parsedHireDate,
+      declarationLevel,
+    });
+    if (autoHeaderErr) throw new DeclarationError(autoHeaderErr);
+  }
+
+  if (!hfEnabled('hireDate') && parsedHireDate && !user.hireDate) {
+    await tx.user.update({
+      where: { id: userId },
+      data: { hireDate: parsedHireDate },
+    });
   }
 
   const workYears = parsedHireDate

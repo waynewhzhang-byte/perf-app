@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DeclarationError,
+  autoDeclarationHeaderSubmitError,
   findUnrepairedRejectedItems,
   submissionEditBlockReason,
   systemFilledSubmitError,
@@ -82,6 +83,47 @@ describe('systemFilledSubmitError', () => {
         attachmentCount: 0,
       }),
       null,
+    );
+  });
+});
+
+describe('autoDeclarationHeaderSubmitError', () => {
+  it('草稿保存不校验自动表头', () => {
+    assert.equal(
+      autoDeclarationHeaderSubmitError({
+        submit: false,
+        hireDateEnabled: false,
+        declarationLevelEnabled: false,
+        parsedHireDate: null,
+        declarationLevel: null,
+      }),
+      null,
+    );
+  });
+
+  it('自动表头提交时缺少花名册入职时间则拒绝', () => {
+    assert.equal(
+      autoDeclarationHeaderSubmitError({
+        submit: true,
+        hireDateEnabled: false,
+        declarationLevelEnabled: false,
+        parsedHireDate: null,
+        declarationLevel: null,
+      }),
+      '系统未能从员工花名册读取参加工作时间，请联系管理员补全档案后再申报',
+    );
+  });
+
+  it('自动表头提交时无法匹配参评能级则拒绝', () => {
+    assert.equal(
+      autoDeclarationHeaderSubmitError({
+        submit: true,
+        hireDateEnabled: false,
+        declarationLevelEnabled: false,
+        parsedHireDate: new Date('1985-08-01T00:00:00.000Z'),
+        declarationLevel: null,
+      }),
+      '系统未能根据工龄匹配参评能级，请联系管理员检查等级字典配置',
     );
   });
 });
@@ -585,6 +627,65 @@ describe('upsertDeclaration', () => {
         err instanceof DeclarationError &&
         err.message.includes('工号') &&
         err.httpStatus === 400,
+    );
+  });
+
+  it('2026 自动表头：花名册无入职时间时拒绝提交', async () => {
+    const tx = {
+      formTemplate: {
+        findUnique: async () => ({
+          id: 'tpl-2026',
+          status: 'PUBLISHED',
+          year: 2026,
+          headerFields: [
+            { key: 'workArea', enabled: false, required: false },
+            { key: 'hireDate', enabled: false, required: false },
+            { key: 'declarationLevel', enabled: false, required: false },
+            { key: 'declarationSpecialty', enabled: true, required: true },
+          ],
+          sections: [{ items: [] }],
+        }),
+      },
+      user: {
+        findUnique: async () => ({
+          id: 'u1',
+          contact: '11403328',
+          branchId: 'b1',
+          hireDate: null,
+          profile: {},
+          employeeNo: '11403328',
+        }),
+      },
+      branch: { findUnique: async () => ({ id: 'b1', name: '晋北运维分部' }) },
+      declarationLevel: { findUnique: async () => null, findFirst: async () => null },
+      declarationSpecialty: { findUnique: async () => ({ id: 'sp1', name: '直流运检' }) },
+      autoReviewRule: { findMany: async () => [] },
+      submission: {
+        findUnique: async () => null,
+        create: async () => ({
+          id: 'sub-new',
+          status: 'DRAFT',
+          submittedAt: null,
+          branchId: 'b1',
+          workAreaName: null,
+        }),
+      },
+      submissionItem: { findMany: async () => [], upsert: async () => ({}) },
+      attachment: { findMany: async () => [] },
+    } as any;
+
+    await assert.rejects(
+      () => upsertDeclaration(tx, {
+        userId: 'u1',
+        templateId: 'tpl-2026',
+        items: [],
+        submit: true,
+        submitMode: 'APPEAL',
+        declarationSpecialtyId: 'sp1',
+      }),
+      (err: unknown) =>
+        err instanceof DeclarationError &&
+        err.message === '系统未能从员工花名册读取参加工作时间，请联系管理员补全档案后再申报',
     );
   });
 });
